@@ -1,5 +1,4 @@
-# Software para Sistemas Ubíquos — Atividade em Grupo 01
-
+# Software para Sistemas Ubíquos
 ## Análise inicial de um sistema ubíquo
 
 **Cenário escolhido:** Monitoramento e assistência a uma pessoa idosa
@@ -20,10 +19,14 @@ Idosos que vivem sozinhos ou com supervisão apenas parcial estão sujeitos a ri
 
 ## Estado atual do protótipo
 
-Já foi criado, instalado e testado em um aparelho Android um APK que extrai dados de sensores que **não exigem permissão especial** e os envia para um servidor na mesma rede local, em **lotes periódicos de 10 segundos** (intervalo editável). Os sensores dos quais já foram obtidos dados são:
+Já foi criado, instalado e testado em um aparelho Android um APK que extrai dados de sensores que **não exigem permissão especial** e os envia para um servidor na mesma rede local, em **lotes periódicos de 10 segundos** (intervalo editável). O APK mais recente está disponível em:
+
+**https://github.com/UFG-INF-SSU-2026/Flow/releases/latest**
+
+Os sensores dos quais já foram obtidos dados são:
 
 | Sensor | O que faz (resumo) |
-| --- | --- |
+|---|---|
 | **TCS3701 Light** | Mede a intensidade de luz ambiente (luminosidade). |
 | **TCS3701 Light CCT** | Mede a temperatura de cor da luz ambiente (luz "fria" ou "quente"). |
 | **LIS2DLC12 Accelerometer** | Mede aceleração do dispositivo nos três eixos; indica movimento. |
@@ -51,6 +54,8 @@ Ainda faltam dimensões importantes de contexto (localização dentro da casa, s
 - **Servidor local:** recebe os dados enviados pelo aplicativo, na mesma rede Wi-Fi.
 - **Comunicação:** dados enviados em **lotes periódicos a cada 10 segundos** (intervalo editável), dentro da mesma sub-rede, sem exposição à internet nesta fase — o que reduz superfície de ataque, mas ainda não resolve questões de persistência, escalabilidade e acesso remoto por cuidadores.
 
+> **Nota sobre produção:** o servidor local usado nesta fase de protótipo é uma solução temporária, pensada apenas para validar a viabilidade técnica dentro da mesma rede local. Em um cenário de produção, esse servidor local **seria substituído por um servidor central**, capaz de atender múltiplos idosos/residências, permitir acesso remoto dos cuidadores (fora da rede local) e resolver as questões de persistência e escalabilidade ainda não tratadas nesta fase.
+
 ### 4. Processamento e resposta
 
 A ideia central é que um **servidor central use os dados dos sensores para gerar algum tipo de informação ou ação**. Atualmente o processamento é centralizado no servidor local, que recebe os dados brutos, e já é possível esboçar respostas de valor a partir deles:
@@ -65,18 +70,20 @@ A única ação (atuação) já prevista pelo grupo é: **avisar o cuidador caso
 
 ### 5. Risco principal
 
-**Confiabilidade e completude dos dados**, com efeito direto sobre **privacidade**: como os sensores disponíveis nesta fase são apenas os que não exigem permissão especial, o sistema ainda **não capta diretamente sinais vitais ou localização**, o que limita a confiabilidade de qualquer inferência sobre queda ou emergência de saúde (falsos positivos/negativos). Ao mesmo tempo, dados de movimento e uso do dispositivo, mesmo indiretos, revelam rotina e hábitos do idoso — o que exige cuidado com armazenamento e acesso a esses dados, mesmo estando restritos à rede local por enquanto.
+O risco escolhido pelo grupo para ser priorizado é a **segurança dos dados**. Como o sistema lida com informações que revelam rotina, hábitos e possíveis condições de saúde do idoso, a segurança no transporte e armazenamento desses dados é tratada como prioridade em relação aos demais riscos identificados (confiabilidade/completude dos dados e consumo de energia/bateria).
 
-_Observação: o grupo ainda não definiu qual risco será priorizado na apresentação (confiabilidade, privacidade ou energia/bateria) — a decisão fica em aberto para discussão futura._
+Atualmente, o único mecanismo de segurança pensado para o projeto é a **criptografia do JSON enviado** do smartphone para o servidor local, a cada lote de 10 segundos. Esse é um modelo inicial e propositalmente simples: com a evolução do projeto, **outros mecanismos de segurança poderão ser adicionados** (por exemplo, autenticação entre dispositivo e servidor, controle de acesso aos dados armazenados, ou uso de um canal de comunicação autenticado), mas nada além da criptografia do JSON está garantido ou implementado nesta fase.
+
+Vale notar que, mesmo com a comunicação restrita à rede local (sem exposição à internet nesta fase), dados de movimento e uso do dispositivo, ainda que indiretos, revelam rotina e hábitos do idoso — o que reforça a necessidade de cuidado com o armazenamento e o acesso a esses dados.
 
 ---
 
-## Elementos já identificáveis (prévia da Parte 2)
+## Elementos já identificáveis (Parte 2)
 
 ### Sensores, atuadores e gateway
 
 | Elemento | Itens identificados | Papel no sistema |
-| --- | --- | --- |
+|---|---|---|
 | **Sensores** | TCS3701 Light / CCT, LIS2DLC12 Accelerometer, Device Orientation Wake Up, Orientation Sensor, GeoMagnetic Rotation Vector, Magnetometer (calibrado e não calibrado) | Percebem luminosidade, cor da luz, movimento e orientação, formando a base de contexto do sistema |
 | **Atuadores** | Aviso ao cuidador (única ação definida até o momento) | Notificar o cuidador quando o servidor identificar uma informação relevante nos dados coletados |
 | **Gateway** | O próprio smartphone Android | Agrega os dados dos sensores internos e os encaminha ao servidor local via Wi-Fi, em lotes a cada 10s, funcionando como ponto único de coleta e repasse |
@@ -84,7 +91,6 @@ _Observação: o grupo ainda não definiu qual risco será priorizado na apresen
 ### Classificação
 
 O sistema pode ser caracterizado, nesta fase, como:
-
 - **IoT (Internet das Coisas):** o smartphone atua como dispositivo conectado que envia dados continuamente a um servidor via rede.
 - **Aplicação ubíqua:** o sensoriamento é contínuo e não exige interação explícita do idoso, integrando-se de forma discreta à rotina.
 
@@ -94,6 +100,23 @@ Ainda **não** se caracteriza plenamente como **sistema ciber-físico**, pois fa
 
 - **Mudança de contexto:** transição dia/noite (variação de luminosidade e CCT) e transição atividade/imobilidade prolongada.
 - **Adaptação esperada:** ao anoitecer, o sistema poderá priorizar o monitoramento de CCT e sugerir ajuste de iluminação; ao detectar imobilidade fora do padrão (ex.: parado por muito tempo em horário normalmente ativo), poderá aumentar a frequência de amostragem do acelerômetro para confirmar se é um possível caso de queda antes de gerar qualquer alerta.
+
+### Fluxo do sistema
+
+O diagrama abaixo representa a modelagem do fluxo do sistema em produção, desde a coleta dos dados nos sensores do smartphone até o eventual aviso ao cuidador:
+
+```mermaid
+flowchart TD
+    A["Sensores do smartphone<br/>(Light/CCT, Acelerômetro,<br/>Orientação, Magnetômetro)"] --> B["App Android - Gateway"]
+    B --> C["Coleta e agregação de dados<br/>a cada 10s (intervalo editável)"]
+    C --> D["Criptografia do JSON"]
+    D --> E["Envio via Wi-Fi<br/>(rede local)"]
+    E --> F["Servidor Central"]
+    F --> G["Análise de dados"]
+    G --> H{"Situação merece<br/>urgência?"}
+    H -->|"Sim"| I["Notificação pop-up<br/>no celular do cuidador"]
+    H -->|"Não"| J["Dado apenas armazenado<br/>no aplicativo do cuidador<br/>(sem avisos, consulta posterior)"]
+```
 
 ---
 
