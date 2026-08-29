@@ -102,7 +102,7 @@ Atuação (notificação ao cuidador, se a condição for confirmada)
 **Regra escolhida:** detecção de **imobilidade prolongada** (indício de possível queda ou mal-estar).
 
 - **Tipo de janela:** deslizante (*sliding window*) por `device_id`.
-- **Duração:** 5 minutos.
+- **Duração:** 2 minutos.
 - **Frequência de avaliação:** a cada novo lote de `LeituraMovimento` recebido (lotes chegam a cada ~10s, conforme o protótipo atual).
 - **Estado mantido:** para cada `device_id`, um buffer com os valores de `acc_magnitude` (e seus `event_time`) dos últimos 5 minutos, mais o `seq_num` do último evento processado (para detectar duplicados/atraso) e o timestamp da última leitura recebida (para o item 12).
 
