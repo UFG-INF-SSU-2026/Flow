@@ -36,6 +36,19 @@ Os sensores dos quais já foram obtidos dados são:
 | **MXG4300S Magnetometer** | Mede o campo magnético calibrado; apoia o cálculo de orientação. |
 | **MXG4300S Magnetometer Uncalibrated** | Mede o campo magnético sem correção de calibração; mesmo uso de apoio à orientação. |
 
+### Terceiro sensor em validação: localização (GPS)
+
+Os dois sensores já incorporados (luz/CCT e movimento) cobrem duas das três dimensões de
+contexto que o grupo pretende usar — falta a terceira, localização, já citada como necessária
+desde a análise inicial (saber se o idoso está dentro ou fora de casa, para contextualizar a
+regra de imobilidade). Diferente dos sensores atuais, o GPS exige permissão especial de
+localização no Android, então antes de incorporá-lo ao app real, sua viabilidade está sendo
+validada em um protótipo separado (ESP32), simulando a leitura de localização (dentro/fora de
+casa) com uma entrada substituta — já que não há hardware de GPS disponível nesse ambiente de
+simulação. Essa validação inclui testar como a informação de zona (dentro/fora) deve persistir
+por um tempo mínimo antes de ser considerada confiável, evitando que uma leitura instável
+suspenda ou reative a regra de imobilidade de forma incorreta.
+
 ---
 
 ### 2. Contexto
@@ -126,7 +139,6 @@ flowchart TD
 
 Os sensores usados até agora foram escolhidos por não exigirem permissão especial no Android, o que permitiu validar rapidamente a viabilidade técnica do projeto. Para cobrir cenários mais críticos de assistência ao idoso, os seguintes caminhos estão sendo pensados (sem compromisso de implementação):
 
-- **GPS/localização**, para identificar em qual cômodo/área o idoso está;
 - **Microfone**, para detecção de sons de queda ou pedidos de ajuda;
 - **Contador de passos/giroscópio dedicado**, para refinar a detecção de atividade.
 
