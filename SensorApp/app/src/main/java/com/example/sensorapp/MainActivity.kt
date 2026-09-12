@@ -45,6 +45,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private val DEFAULT_SERVER_IP: String = "192.168.0.10"
     private val DEFAULT_SERVER_PORT: String = "5000"
 
+    /**
+     * Faixa fisica plausivel para o evento LeituraAmbiente (Marco 2).
+     * Leituras fora dessa faixa sao descartadas ANTES do envio (validacao no
+     * dispositivo, conforme decidido na Atividade 02), para nao gastar banda/
+     * bateria enviando ruido de sensor.
+     */
+    private val CCT_MIN_VALIDO: Float = 1000f
+    private val CCT_MAX_VALIDO: Float = 12000f
+
     // =========================================================================================
 
     private lateinit var binding: ActivityMainBinding
@@ -71,8 +80,18 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private data class SensorReading(
         val sensorName: String,
         val values: List<Float>,
-        val timestamp: Long
+        val timestamp: Long,        // timestamp interno do SensorEvent (relogio do sistema, nao horario de parede)
+        val wallClockMillis: Long   // System.currentTimeMillis() no instante da leitura, usado no event_time
     )
+
+    /**
+     * Contador incremental do evento LeituraAmbiente (Marco 2), conforme
+     * contrato definido na Atividade 02 (identificador = device_id + seq_num).
+     * So avanca quando um evento de ambiente valido e de fato incluido no
+     * envio. Reinicia em 0 se o app for reaberto (limitacao aceita nesta
+     * fase de protótipo - nao persistido em disco).
+     */
+    private var ambientSeqNum: Long = 0L
 
     private val deviceId: String by lazy {
         Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "desconhecido"
@@ -225,7 +244,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         latestReadings[event.sensor.type] = SensorReading(
             sensorName = event.sensor.name,
             values = event.values.toList(),
-            timestamp = event.timestamp
+            timestamp = event.timestamp,
+            wallClockMillis = System.currentTimeMillis()
         )
     }
 
@@ -245,8 +265,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             return
         }
 
+        // Cifra o JSON inteiro (Marco 2) antes de enviar. O servidor decifra
+        // o envelope e recupera o payload original (ver CryptoUtils.kt).
+        val (nonceB64, cipherB64) = CryptoUtils.encrypt(json.toString())
+        val envelope = JSONObject().apply {
+            put("nonce", nonceB64)
+            put("ciphertext", cipherB64)
+        }
+
         val mediaType = "application/json; charset=utf-8".toMediaType()
-        val body = json.toString().toRequestBody(mediaType)
+        val body = envelope.toString().toRequestBody(mediaType)
 
         val request = Request.Builder()
             .url(serverUrl)
@@ -297,7 +325,56 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
         root.put("sensores", sensoresJson)
 
+        // Fluxo priorizado do Marco 2: evento LeituraAmbiente (luminosidade + CCT).
+        // So inclui a chave se houver leitura valida e recente de ambos os sensores;
+        // caso contrario, a chave fica ausente e o servidor simplesmente ignora
+        // este ciclo para fins da regra de luz inadequada.
+        montarLeituraAmbiente()?.let { root.put("leitura_ambiente", it) }
+
         return root
+    }
+
+    /**
+     * Extrai o evento LeituraAmbiente (contrato definido na Atividade 02) a
+     * partir das ultimas leituras dos sensores de luz (Sensor.TYPE_LIGHT) e
+     * de temperatura de cor (sensor especifico do fabricante, identificado
+     * pelo nome contendo "CCT").
+     *
+     * Validacao de faixa fisica plausivel e feita AQUI, no dispositivo, antes
+     * do envio (responsabilidade definida na Atividade 02, item 10): evita
+     * gastar banda/bateria enviando ruido de sensor a cada 10s.
+     */
+    private fun montarLeituraAmbiente(): JSONObject? {
+        val leituraLuz = latestReadings[Sensor.TYPE_LIGHT] ?: return null
+        val leituraCct = latestReadings.values.firstOrNull {
+            it.sensorName.contains("CCT", ignoreCase = true)
+        } ?: return null
+
+        val luminosidade = leituraLuz.values.getOrNull(0) ?: return null
+        val cct = leituraCct.values.getOrNull(0) ?: return null
+
+        if (luminosidade < 0f) return null
+        if (cct < CCT_MIN_VALIDO || cct > CCT_MAX_VALIDO) return null
+
+        // event_time = instante da leitura no dispositivo (nao o de chegada ao servidor)
+        val eventTimeMillis = maxOf(leituraLuz.wallClockMillis, leituraCct.wallClockMillis)
+        val eventTimeIso = formatarIso8601(eventTimeMillis)
+
+        ambientSeqNum += 1
+
+        return JSONObject().apply {
+            put("device_id", deviceId)
+            put("event_time", eventTimeIso)
+            put("luminosidade", luminosidade.toDouble())
+            put("cct", cct.toDouble())
+            put("seq_num", ambientSeqNum)
+        }
+    }
+
+    /** Formata um timestamp em milissegundos como ISO 8601 com offset (ex.: 2026-09-11T22:00:20.000-03:00). */
+    private fun formatarIso8601(millis: Long): String {
+        val formato = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
+        return formato.format(Date(millis))
     }
 
     // ---------------------------------------------------------------------------------------
