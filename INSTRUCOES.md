@@ -105,6 +105,68 @@ roda o servidor.
 
 ---
 
+---
+
+## Marco 2 — o que mudou
+
+O fluxo priorizado nesta fase é **luz inadequada**: `LeituraAmbiente` (luminosidade + CCT) →
+regra de CCT (luz fria à noite) → alerta simulado.
+
+### Transporte cifrado (AES-256-GCM)
+
+O app agora cifra o JSON inteiro antes de enviar, e o servidor decifra ao receber. Não há
+handshake nem sessão — cada lote de 10s é cifrado e autenticado de forma independente.
+A chave é fixa e compartilhada (embutida em `CryptoUtils.kt` e em `crypto_utils.py`); isso é
+intencionalmente simples nesta fase (ver README, seção "Risco principal").
+
+Corpo enviado ao servidor agora é:
+
+```json
+{ "nonce": "<base64>", "ciphertext": "<base64>" }
+```
+
+O servidor decifra esse envelope e recupera o JSON original (mesmo formato de antes, mais a
+chave `leitura_ambiente`, descrita abaixo).
+
+### Novo campo `leitura_ambiente`
+
+Quando o app tem uma leitura válida de luz (`Sensor.TYPE_LIGHT`) e de CCT (sensor cujo nome
+contém "CCT"), inclui no JSON:
+
+```json
+"leitura_ambiente": {
+  "device_id": "...",
+  "event_time": "2026-09-11T22:00:20.123-03:00",
+  "luminosidade": 42.5,
+  "cct": 5200,
+  "seq_num": 3
+}
+```
+
+`seq_num` é um contador próprio desse evento (começa em 0 a cada reinício do app). O app já
+descarta localmente leituras fora da faixa física plausível (CCT fora de 1000–12000K) antes
+de enviar.
+
+### Regra de luz inadequada (servidor)
+
+Implementada em `SensorServer/regra_luz.py`. Resumo (constantes ajustáveis no topo do arquivo):
+
+- **Janela noturna:** 18h–06h (hora local do `event_time`).
+- **Luz "fria":** CCT > 4500K.
+- **Debounce:** precisa de 3 leituras consecutivas nessa condição para gerar o alerta (evita
+  alerta por 1 leitura isolada/ruído). O alerta não se repete a cada 10s enquanto a condição
+  persistir — só volta a poder alertar depois que a condição deixar de valer (novo episódio).
+- **Deduplicação:** por `device_id` + `seq_num` (idempotência, para reenvio após falha de rede).
+
+### Simulação do aviso ao cuidador
+
+Como ainda não existe app do cuidador, o "aviso" é simulado por um **arquivo JSON de alerta**,
+salvo em `SensorServer/dataUsers/`, com o prefixo `alerta_` (ex.:
+`alerta_<device_id>_<timestamp>.json`). Ele contém o motivo, os valores medidos e o horário do
+evento que confirmou a condição.
+
+---
+
 ## Estrutura de um JSON recebido pelo servidor (exemplo)
 
 ```json
