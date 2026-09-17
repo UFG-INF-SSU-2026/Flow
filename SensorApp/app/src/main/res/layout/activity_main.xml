@@ -27,7 +27,7 @@
         android:id="@+id/btnSocketRede"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Socket de Rede"
+        android:text="Configurações"
         android:layout_marginBottom="24dp" />
 
     <TextView

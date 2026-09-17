@@ -34,16 +34,30 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // Altere estes valores antes de gerar o APK, conforme necessario.
     // =========================================================================================
 
-    /** Intervalo, em milissegundos, entre cada envio de dados para o servidor. */
-    private val SEND_INTERVAL_MS: Long = 10_000L
+    /**
+     * Intervalo, em milissegundos, entre cada envio de dados para o servidor.
+     * Marco 3: passou de 10s para 1s, para casar com o ciclo de leitura do
+     * wokwi (tambem 1x/s) e permitir que o servidor agregue dados de app e
+     * wokwi na mesma janela de 1 segundo.
+     */
+    private val SEND_INTERVAL_MS: Long = 1_000L
 
     /**
      * IP e porta padrao do servidor, usados apenas na PRIMEIRA vez que o app abre
-     * (antes de o usuario configurar algo pelo botao "Socket de Rede").
+     * (antes de o usuario configurar algo pelo botao "Configurações").
      * Depois disso, o app passa a usar o valor salvo no proprio celular.
      */
     private val DEFAULT_SERVER_IP: String = "192.168.0.10"
     private val DEFAULT_SERVER_PORT: String = "5000"
+
+    /**
+     * ID padrao do usuario (idoso), usado apenas na PRIMEIRA vez que o app
+     * abre, antes de o usuario configurar o valor real pelo botao
+     * "Configurações". Precisa ser o MESMO numero inteiro configurado no
+     * wokwi correspondente (ver WokwiBridge/bridge.py, WOKWI_USER_ID), para
+     * que o servidor entenda que os dados vem da mesma pessoa.
+     */
+    private val DEFAULT_USER_ID: Int = 1
 
     /**
      * Faixa fisica plausivel para o evento LeituraAmbiente (Marco 2).
@@ -67,6 +81,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // IP e porta atualmente configurados (carregados do SharedPreferences em onCreate)
     private var serverIp: String = DEFAULT_SERVER_IP
     private var serverPort: String = DEFAULT_SERVER_PORT
+
+    // ID do usuario (idoso) atualmente configurado (carregado do SharedPreferences em onCreate).
+    // Enviado em TODO envio (app e wokwi) para que o servidor saiba que os dados
+    // pertencem a mesma pessoa.
+    private var userId: Int = DEFAULT_USER_ID
 
     private val serverUrl: String
         get() = "http://$serverIp:$serverPort/dados"
@@ -117,6 +136,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // Carrega o IP/porta salvos anteriormente (ou usa o padrao, na primeira vez)
         serverIp = prefs.getString("server_ip", DEFAULT_SERVER_IP) ?: DEFAULT_SERVER_IP
         serverPort = prefs.getString("server_port", DEFAULT_SERVER_PORT) ?: DEFAULT_SERVER_PORT
+        userId = prefs.getInt("user_id", DEFAULT_USER_ID)
         atualizarTextoServidor()
 
         binding.btnStartStop.setOnClickListener {
@@ -142,44 +162,55 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val dialogView = layoutInflater.inflate(R.layout.dialog_socket, null)
         val etIp = dialogView.findViewById<EditText>(R.id.etIp)
         val etPorta = dialogView.findViewById<EditText>(R.id.etPorta)
+        val etUserId = dialogView.findViewById<EditText>(R.id.etUserId)
 
         etIp.setText(serverIp)
         etPorta.setText(serverPort)
+        etUserId.setText(userId.toString())
 
         AlertDialog.Builder(this)
-            .setTitle("Socket de Rede")
+            .setTitle("Configurações")
             .setView(dialogView)
             .setPositiveButton("Salvar") { _, _ ->
                 val novoIp = etIp.text.toString().trim()
                 val novaPorta = etPorta.text.toString().trim()
+                val novoUserIdTexto = etUserId.text.toString().trim()
 
-                if (novoIp.isEmpty() || novaPorta.isEmpty()) {
-                    Toast.makeText(this, "Preencha IP e porta", Toast.LENGTH_SHORT).show()
+                if (novoIp.isEmpty() || novaPorta.isEmpty() || novoUserIdTexto.isEmpty()) {
+                    Toast.makeText(this, "Preencha IP, porta e ID do usuário", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
 
-                // Se o app estiver enviando dados no momento, para antes de trocar o endereco
+                val novoUserId = novoUserIdTexto.toIntOrNull()
+                if (novoUserId == null) {
+                    Toast.makeText(this, "ID do usuário precisa ser um número inteiro", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+
+                // Se o app estiver enviando dados no momento, para antes de trocar a configuracao
                 if (isRunning) {
                     pararEnvio()
                 }
 
                 serverIp = novoIp
                 serverPort = novaPorta
+                userId = novoUserId
 
                 prefs.edit()
                     .putString("server_ip", serverIp)
                     .putString("server_port", serverPort)
+                    .putInt("user_id", userId)
                     .apply()
 
                 atualizarTextoServidor()
-                Toast.makeText(this, "Servidor atualizado", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Configuração atualizada", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancelar", null)
             .show()
     }
 
     private fun atualizarTextoServidor() {
-        binding.tvServidor.text = "Servidor: $serverIp:$serverPort"
+        binding.tvServidor.text = "Servidor: $serverIp:$serverPort | ID: $userId"
     }
 
     // ---------------------------------------------------------------------------------------
@@ -305,6 +336,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private fun montarJson(): JSONObject {
         val root = JSONObject()
+        // Marco 3: identifica o usuario (idoso) dono deste envio, para o
+        // servidor conseguir juntar com os dados vindos do wokwi da mesma
+        // pessoa. "source" identifica de qual fonte este payload veio.
+        root.put("user_id", userId)
+        root.put("source", "app")
         root.put("device_id", deviceId)
         root.put("device_model", android.os.Build.MODEL)
         root.put("timestamp_envio", System.currentTimeMillis())

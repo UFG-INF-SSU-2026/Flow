@@ -30,6 +30,20 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="ex: 5000"
+        android:inputType="number"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ID do usuário (idoso)"
+        android:textSize="14sp" />
+
+    <EditText
+        android:id="@+id/etUserId"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="ex: 1 (mesmo ID configurado no wokwi)"
         android:inputType="number" />
 
 </LinearLayout>
