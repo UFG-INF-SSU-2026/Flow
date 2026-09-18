@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "author": "Deivison",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+
+    { "type": "wokwi-mpu6050", "id": "imu1", "top": -120, "left": -200, "attrs": { "label": "Acelerometro" } },
+
+    { "type": "wokwi-pushbutton", "id": "btnConfirm", "top": -150, "left": 300, "attrs": { "color": "green", "label": "Estou bem" } },
+    { "type": "wokwi-pushbutton", "id": "btnRearm",   "top":  -20, "left": 300, "attrs": { "color": "blue",  "label": "Rearme"    } },
+
+    { "type": "wokwi-resistor", "id": "r1", "top": -280, "left": 380, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": -180, "left": 380, "attrs": { "value": "220" } },
+
+    { "type": "wokwi-led", "id": "ledSuspeita", "top": -280, "left": 460, "attrs": { "color": "yellow", "label": "Suspeita" } },
+    { "type": "wokwi-led", "id": "ledAlerta",   "top": -180, "left": 460, "attrs": { "color": "red",    "label": "Alerta"   } }
+  ],
+  "connections": [
+    ["esp:TX0", "$serialMonitor:RX", "", []],
+    ["esp:RX0", "$serialMonitor:TX", "", []],
+
+    ["imu1:VCC", "esp:3V3",   "red",    []],
+    ["imu1:GND", "esp:GND.1", "black",  []],
+    ["imu1:SDA", "esp:D21",   "blue",   []],
+    ["imu1:SCL", "esp:D22",   "yellow", []],
+
+    ["btnConfirm:1.l", "esp:D25",   "green", []],
+    ["btnConfirm:2.l", "esp:GND.2", "black", []],
+
+    ["btnRearm:1.l", "esp:D26",   "blue",  []],
+    ["btnRearm:2.l", "esp:GND.2", "black", []],
+
+    ["esp:D27", "r1:1",          "orange", []],
+    ["r1:2",    "ledSuspeita:A", "orange", []],
+    ["ledSuspeita:C", "esp:GND.1", "black", []],
+
+    ["esp:D14", "r2:1",        "orange", []],
+    ["r2:2",    "ledAlerta:A", "orange", []],
+    ["ledAlerta:C", "esp:GND.1", "black", []]
+  ],
+  "dependencies": {},
+  "serialMonitor": { "display": "always" }
+}

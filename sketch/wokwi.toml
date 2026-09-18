@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = 'build/sketch.ino.bin'
+elf = 'build/sketch.ino.elf'
+
+# Expõe a porta serial do ESP32 simulado como servidor RFC2217 (serial-over-TCP)
+# em localhost:4000. Isso NÃO depende do Private IoT Gateway pago — funciona
+# com a licença gratuita/Community do Wokwi para VS Code.
+rfc2217ServerPort = 4000
