@@ -139,7 +139,15 @@ Após decifrado, o JSON emitido por `sketch.ino` e repassado por `bridge.py` (qu
 
 ### 4.3 Versão do contrato
 
-**Versão documentada nesta seção: v1.** O payload **não carrega** um campo `schemaVersion` embutido — o controle de versão hoje é feito apenas neste documento, não no dado em trânsito. Qualquer mudança de campo/formato deve atualizar esta seção e ser refletida em conjunto em `sketch.ino` (produtor), `bridge.py` (repassa sem alterar o corpo do evento) e `regra_imobilidade.py` (`EVENTOS_ESPERADOS`, `CAMPOS_OBRIGATORIOS`, validação de `value`). Adicionar um campo `schemaVersion` real ao payload é uma pendência conhecida (seção 9).
+**Versão atual: v1** (definida por este documento — a lista de campos da seção 4.2, o vocabulário `EVENTOS_ESPERADOS` e a faixa de `value` em `regra_imobilidade.py`). O requisito do marco é que a versão esteja **identificada**, não que esteja embutida no payload em trânsito — por isso a decisão deliberada aqui é manter o payload do wokwi enxuto (sem metadado de versionamento) e tratar a versão como propriedade do *código publicado no repositório*, e não do dado que trafega. Rastrear a versão pelo commit/tag do repositório é suficiente para esta escala do protótipo.
+
+**Política de versionamento (para quando o contrato crescer além de um único produtor/consumidor combinando código):**
+
+- **Mudança compatível** (adicionar um `state` novo ao enum de `imobilidade.decisao`, por exemplo) — não exige subir a versão; produtor e consumidor continuam entendendo o payload um do outro, e o consumidor mais antigo simplesmente rejeita o `state` novo até ser atualizado (comportamento já existente na cascata da seção 5.1).
+- **Mudança incompatível** (remover/renomear um campo, mudar o tipo de `value`, mudar a unidade de `eventTimeMs`) — é o gatilho para introduzir um campo `schemaVersion` no payload. Nesse ponto, produtor e consumidor deixam de poder assumir que estão sempre na mesma versão (por exemplo, se passarem a rodar em processos de deploy independentes, ou se um segundo tipo de dispositivo wokwi com firmware mais antigo continuar em campo), e a versão precisa viajar com o dado para o consumidor decidir como interpretá-lo — em vez de apenas rejeitar por não reconhecer os campos.
+- Quando isso acontecer, o campo entra como `schemaVersion` (inteiro, incremental), verificado como primeiro passo da cascata de validação em `regra_imobilidade.py`, e a tabela da seção 4.2 e o diagrama da seção 2 devem ser atualizados junto.
+
+Enquanto produtor e consumidor forem implantados juntos, a partir do mesmo commit — como é o caso hoje —, essa migração não é necessária: a versão documentada aqui já cumpre o requisito de "versão identificada".
 
 ---
 
@@ -237,6 +245,5 @@ Evento que falha em qualquer passo é descartado e logado no console do servidor
 
 ## 9. Pendências conhecidas (fora do escopo fechado deste marco)
 
-- **`schemaVersion` embutido no payload** — a versão do contrato hoje só é controlada neste documento (seção 4.3), não no dado em trânsito.
 - **Tabela de estado por usuário** (`estado_por_usuario[userId]`, agregando múltiplos dispositivos da mesma pessoa) — hoje o estado é por `deviceId`, não por `user_id`.
 - **Autenticação por dispositivo** — chave AES fixa e compartilhada entre todas as fontes, sem rotação nem pareamento por dispositivo.
