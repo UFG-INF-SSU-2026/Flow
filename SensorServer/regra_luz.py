@@ -4,9 +4,9 @@ Regra de negocio: luz inadequada a noite (Marco 2 - fluxo priorizado).
 Fluxo: LeituraAmbiente -> validacao -> deduplicacao -> regra de CCT -> alerta.
 
 Contrato do evento (definido na Atividade 02):
-    device_id, event_time (ISO 8601 com timezone), luminosidade (lux),
-    cct (Kelvin), seq_num (contador incremental por dispositivo, so para
-    esse tipo de evento).
+    schemaVersion, device_id, event_time (ISO 8601 com timezone),
+    luminosidade (lux), cct (Kelvin), seq_num (contador incremental por
+    dispositivo, so para esse tipo de evento).
 """
 
 from dataclasses import dataclass, field
@@ -21,6 +21,14 @@ CCT_LIMIAR_FRIO = 4500       # Kelvin - acima disso, luz e considerada "fria" (r
 HORA_INICIO_NOITE = 18       # 18h
 HORA_FIM_NOITE = 6           # 06h (janela noturna: 18:00-06:00)
 LEITURAS_CONSECUTIVAS_PARA_ALERTA = 3   # debounce: evita alertar por 1 leitura isolada
+
+# Versao do schema do payload LeituraAmbiente (mesma ideia aplicada ao
+# contrato do wokwi, ver docs/arquitetura.md secao 4.3). O app atual
+# (MainActivity.kt) sempre envia schemaVersion=2. Eventos sem o campo
+# (app mais antigo/nao atualizado) sao tratados como versao 1 - nao sao
+# rejeitados, apenas logados como desatualizados (ver validar_evento).
+SCHEMA_VERSION_ATUAL = 2
+SCHEMA_VERSION_PADRAO = 1  # assumida quando o campo nao vem no payload
 # ---------------------------------------------------------------------------
 
 
@@ -34,6 +42,7 @@ class EstadoDispositivo:
     ultimo_seq_num: int | None = None
     leituras_consecutivas_condicao: int = 0
     alerta_ativo: bool = False
+    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou SCHEMA_VERSION_PADRAO, se ausente)
 
 
 # Estado por dispositivo (em memoria; reinicia se o servidor reiniciar -
@@ -49,6 +58,17 @@ def _estado_do(device_id: str) -> EstadoDispositivo:
 
 def validar_evento(evento: dict) -> None:
     """Valida schema + faixa fisica plausivel. Levanta EventoInvalido se falhar."""
+    # 0. schemaVersion: identificacao/aviso, nao rejeita (mesma ideia do
+    #    wokwi, ver regra_imobilidade.validar_evento). App atual sempre
+    #    manda 2; se ausente (app mais antigo), assume-se SCHEMA_VERSION_PADRAO.
+    schema_version = evento.get("schemaVersion", SCHEMA_VERSION_PADRAO)
+    if schema_version < SCHEMA_VERSION_ATUAL:
+        print(
+            f"  [app] aviso: evento leitura_ambiente com schemaVersion={schema_version} "
+            f"desatualizado (atual={SCHEMA_VERSION_ATUAL}), "
+            f"device_id={evento.get('device_id')}"
+        )
+
     campos_obrigatorios = ["device_id", "event_time", "luminosidade", "cct", "seq_num"]
     for campo in campos_obrigatorios:
         if campo not in evento:

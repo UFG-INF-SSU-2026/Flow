@@ -68,6 +68,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private val CCT_MIN_VALIDO: Float = 1000f
     private val CCT_MAX_VALIDO: Float = 12000f
 
+    /**
+     * Versao do schema do payload LeituraAmbiente (mesma ideia aplicada ao
+     * contrato do wokwi, ver docs/arquitetura.md secao 4.3, e espelhada aqui
+     * no lado do app: SensorServer/regra_luz.py sabe interpretar esta versao
+     * e assume 1 quando o campo nao vem, sem rejeitar o evento por isso).
+     */
+    private val SCHEMA_VERSION_LEITURA_AMBIENTE: Int = 2
+
     // =========================================================================================
 
     private lateinit var binding: ActivityMainBinding
@@ -399,6 +407,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         ambientSeqNum += 1
 
         return JSONObject().apply {
+            put("schemaVersion", SCHEMA_VERSION_LEITURA_AMBIENTE)
             put("device_id", deviceId)
             put("event_time", eventTimeIso)
             put("luminosidade", luminosidade.toDouble())
