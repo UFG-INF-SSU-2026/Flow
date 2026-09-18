@@ -1,19 +1,61 @@
-# Instruções — Flow (SensorServer + SensorApp + Wokwi + WokwiBridge)
+# Flow Unificado — Marco 3 (integração ubíqua)
 
-Este guia mostra como colocar os quatro componentes do projeto para rodar
-juntos: o servidor, o app Android, a simulação Wokwi (detecção de
-imobilidade) e a ponte que liga a simulação ao servidor.
+Este projeto une o **Flow-main** (app Android + servidor) com a **branch**
+(simulação Wokwi + bridge), formando um único servidor central capaz de
+receber dados de **duas fontes diferentes** — o celular do idoso e um
+dispositivo wokwi — associando-os ao **mesmo usuário** quando pertencem à
+mesma pessoa.
 
-## Pré-requisitos
+## Estrutura
 
-- Python 3.10 ou superior, com `pip`.
-- Um celular Android para instalar o app.
-- VS Code com a extensão **Wokwi for VS Code** instalada, para rodar a
-  simulação em `Sketch/`.
-- Todos os componentes (servidor, celular e computador que roda a
-  simulação/bridge) na mesma rede local.
+```
+Flow-Unificado/
+├── SensorServer/     # servidor único (Flask) - recebe dados do app E do wokwi
+├── SensorApp/         # app Android (Kotlin) - envia dados do celular
+├── WokwiBridge/        # ponte Python entre a simulação Wokwi e o servidor
+├── Sketch/             # projeto Wokwi (ESP32 + MPU6050), simulado no VS Code
+└── INSTRUCOES.md       # este arquivo
+```
 
-## 1. Subir o servidor
+## O que mudou em relação aos projetos originais
+
+1. **Identificação de usuário (`user_id`)**: tanto o app quanto o wokwi agora
+   enviam um `user_id` inteiro. Dados de fontes diferentes com o **mesmo**
+   `user_id` são entendidos como pertencentes à mesma pessoa e salvos juntos.
+   - No app: configurável pelo botão **"Configurações"** (antigo "Socket de
+     Rede"), junto com IP e porta do servidor. Persistido no celular.
+   - No wokwi: configurável em `WokwiBridge/bridge.py`, constante
+     `WOKWI_USER_ID` (não precisa reiniciar a simulação para trocar, só o
+     bridge).
+2. **Frequência de envio = 1 segundo** nas duas fontes (antes o app enviava a
+   cada 10s). Isso permite ao servidor juntar leituras de app e wokwi na
+   mesma janela de tempo.
+3. **Criptografia também no wokwi**: o `bridge.py` agora cifra cada evento
+   (AES-256-GCM, mesma chave e mesmo formato `{"nonce":..., "ciphertext":...}`
+   usados pelo app) antes de enviar ao servidor, para manter compatibilidade
+   com o único endpoint `/dados`, que só aceita payloads cifrados.
+4. **Um arquivo `.jsonl` por usuário**: `SensorServer/dataUsers/usuario_<ID>.jsonl`.
+   A cada 1 segundo, o servidor grava uma linha combinando o que chegou de
+   cada fonte naquela janela:
+
+   ```json
+   {
+     "timestamp": "2026-09-17T22:48:03.061Z",
+     "user_id": 1,
+     "app": { ... dados do celular ... },
+     "wokwi": { ... dados do wokwi ... }
+   }
+   ```
+
+   Se só uma das fontes enviou dado naquela janela, a outra chave fica
+   `null`. Se nenhuma das duas enviou nada, nenhuma linha é gravada.
+5. O fluxo de alerta já existente (`regra_luz.py` — luz fria à noite) continua
+   funcionando normalmente para os dados do app, de forma independente da
+   agregação acima.
+
+## Como rodar
+
+### 1. Servidor (`SensorServer/`)
 
 ```bash
 cd SensorServer
@@ -21,88 +63,57 @@ pip install -r requirements.txt
 python server.py
 ```
 
-O servidor sobe em `0.0.0.0:5000`, aceitando conexões de qualquer
-dispositivo na mesma rede. Anote o IP do computador onde ele está rodando
-(`ipconfig` no Windows, `ifconfig` ou `ip a` no Linux/Mac) — vai ser usado
-tanto no app quanto no bridge.
+Escuta em `0.0.0.0:5000`. Descubra o IP do computador (`ipconfig` no Windows,
+`ifconfig`/`ip a` no Mac/Linux) — vai precisar dele no app e no bridge.
 
-O log do servidor mostra cada leitura recebida e, a cada segundo, a linha
-gravada em `dataUsers/usuario_<user_id>.jsonl` para cada usuário que teve
-alguma leitura nova.
+### 2. App Android (`SensorApp/`)
 
-## 2. Instalar e configurar o app Android
+Igual ao processo original (abrir no Android Studio, gerar APK — ver detalhes
+no `README.md` herdado do Flow-main). Depois de instalar:
 
-1. Baixe o APK na página de *releases* do repositório no GitHub e instale
-   no celular do idoso.
-2. Abra o app e toque em **Configurações**.
-3. Preencha:
-   - **Endereço IP do servidor** e **Porta** (o IP anotado no passo 1,
-     porta `5000`).
-   - **ID do usuário**: um número inteiro que identifica o idoso. Se este
-     mesmo idoso também estiver associado a um wokwi, use o mesmo número
-     configurado no bridge (passo 4).
-4. Toque em **Salvar** e depois em **Iniciar** para começar a enviar
-   leituras a cada segundo.
+1. Abra o app, toque em **"Configurações"**.
+2. Preencha o IP e a porta do servidor, e o **ID do usuário** (um número
+   inteiro — combine esse número com quem for configurar o wokwi da mesma
+   pessoa).
+3. Toque em **"Iniciar"**.
 
-## 3. Rodar a simulação Wokwi
+### 3. Simulação Wokwi (`Sketch/`)
 
-1. Abra a pasta `Sketch/` no VS Code (com a extensão Wokwi instalada).
-2. Pressione `F1` e execute **Wokwi: Start Simulator**.
-3. Deixe a aba do simulador visível — a extensão pausa a simulação quando
-   ela sai de foco/fica escondida.
+1. Abra a pasta `Sketch/` no VS Code com a extensão Wokwi instalada.
+2. Inicie a simulação (`F1` → `Wokwi: Start Simulator`), deixando a aba do
+   simulador visível.
 
-A simulação representa um dispositivo vestível (ESP32 + acelerômetro
-MPU6050) que detecta possível imobilidade do idoso, emitindo um evento de
-leitura a cada segundo e um evento de decisão sempre que o estado muda.
-
-## 4. Rodar a ponte (bridge)
+### 4. Bridge (`WokwiBridge/`)
 
 ```bash
 cd WokwiBridge
 pip install -r requirements.txt
 ```
 
-Antes de rodar, abra `bridge.py` e confira/ajuste as constantes no topo do
-arquivo:
+Antes de rodar, edite `bridge.py` e confirme/ajuste:
 
 ```python
-WOKWI_USER_ID = 1                                # mesmo ID configurado no app, se for o mesmo idoso
-SERVIDOR_URL = "http://<IP_DO_SERVIDOR>:5000/dados"
+WOKWI_USER_ID = 1          # mesmo ID configurado no app, se for o mesmo idoso
+SERVIDOR_URL = "http://localhost:5000/dados"   # IP:porta do servidor
 ```
 
-Depois, com a simulação já rodando (passo 3):
+Depois:
 
 ```bash
 python bridge.py
 ```
 
-O bridge conecta na porta serial exposta pela simulação, lê cada evento,
-anexa `WOKWI_USER_ID`, cifra e envia ao servidor. A saída do terminal
-mostra cada evento capturado e a resposta do servidor.
+O bridge vai ler os eventos da simulação, cifrá-los e enviá-los ao servidor.
 
-## 5. Conferir os dados recebidos
+## Testando a agregação por usuário
 
-Com o servidor, o app e o bridge rodando (usando o mesmo `user_id` no app
-e no bridge, se representarem o mesmo idoso), verifique o arquivo gerado:
+Com o servidor, o app (ou um POST simulado) e o bridge rodando com o **mesmo
+`user_id`**, confira o arquivo gerado:
 
 ```bash
 cat SensorServer/dataUsers/usuario_1.jsonl
 ```
 
-Cada linha representa uma janela de 1 segundo, com a leitura mais recente
-de cada fonte naquele intervalo — ou `null` na fonte que não enviou nada
-naquele segundo.
-
-Se a leitura de luminosidade do app disparar a regra de alerta, um arquivo
-adicional aparece na mesma pasta:
-
-```
-dataUsers/alerta_<device_id>_<timestamp>.json
-```
-
-## 6. Encerrando
-
-- No app: toque em **Parar**.
-- No bridge e no servidor: `Ctrl+C` no terminal onde cada um está rodando.
-- Na simulação: pare a simulação pelo VS Code (`F1` → `Wokwi: Stop
-  Simulator` ou feche a aba).
+Cada linha deve trazer, a cada segundo, os dados mais recentes de `app` e de
+`wokwi` daquele usuário (ou `null` na fonte que não enviou nada naquele
+segundo).
