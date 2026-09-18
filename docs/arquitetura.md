@@ -144,11 +144,28 @@ Atuação (aviso ao cuidador), se a condição for confirmada
 
 Regras de negócio já identificadas: **luz inadequada à noite** (CCT frio no período noturno, com debounce) e **imobilidade prolongada** (baixa variância de aceleração sustentada por uma janela mínima). Novas regras seguem o mesmo pipeline.
 
-### 6.1 Agregação por janela (implementação concreta, `server.py`)
+### 6.1 Decisão: fila curta no servidor para correlacionar eventos de produtores diferentes do mesmo usuário
+
+**Contexto:** um mesmo usuário pode ter mais de um produtor simultâneo — celular e um dispositivo dedicado/wearable (seção 2) —, cada um enviando de forma independente e assíncrona, sem nenhuma sincronização de relógio entre eles. Sem um mecanismo de correlação, dois eventos que na prática descrevem o mesmo instante da vida do idoso (ex.: o celular captando a luz do quarto e o wearable captando ausência de movimento) ficariam gravados como linhas soltas e desconexas — o cuidador (ou uma regra futura que precise de contexto combinado entre fontes) teria que correlacionar isso manualmente, por aproximação de horário.
+
+**Decisão:** o servidor mantém, por `user_id`, uma **fila curta em memória** com a leitura mais recente de cada fonte (`app`/`wokwi`), e resolve essa fila periodicamente, num intervalo curto (hoje 1 segundo), consolidando as fontes daquele usuário numa única linha — mesmo que os eventos não tenham chegado no exato mesmo milissegundo. Essa janela funciona como uma tolerância deliberada para que eventos de dispositivos diferentes do mesmo usuário "ressoem" juntos (sejam tratados como pertencentes ao mesmo instante), sem exigir que os produtores enviem de forma sincronizada.
+
+**Alternativas consideradas:**
+
+| Alternativa | Por que foi descartada |
+| --- | --- |
+| Sem correlação — gravar cada evento isolado, sem juntar por usuário | Perde-se o contexto cruzado entre fontes do mesmo idoso; qualquer análise ou regra que dependa de mais de um sensor teria que reconstruir a correlação depois, fora do servidor. |
+| Correlação por timestamp exato (join estrito entre fontes) | Eventos de produtores diferentes quase nunca chegam no mesmo instante exato (latência de rede, ciclos de leitura levemente distintos); um join estrito descartaria quase todos os pares, tornando a correlação inútil na prática. |
+| Fila/janela longa (minutos), com correlação por proximidade temporal mais permissiva | Atrasa demais a disponibilidade do dado consolidado e complica a lógica de resolução; não combina com o objetivo de decisões quase em tempo real (regras de alerta da seção 6.2/6.3 não podem esperar minutos). |
+| **Fila curta em memória, resolvida em janela fixa curta (escolhida)** | É o "menor mecanismo que resolve o problema": correlaciona fontes assíncronas dentro de uma tolerância pequena e previsível, sem a complexidade de um join temporal genérico, e sem exigir que os produtores sincronizem relógio ou horário de envio entre si. |
+
+**Trade-off aceito:** se uma fonte atrasar além da janela, ela "perde" aquela consolidação e só aparece na resolução seguinte, sozinha (a chave da outra fonte fica ausente/nula naquela linha) — aceitável pelo mesmo critério da seção 7 (o evento é telemetria, não um comando que exige entrega garantida): a próxima consolidação, mais recente, é o que importa, não recuperar retroativamente um pareamento perdido.
+
+#### 6.1.1 Implementação concreta desta decisão (`server.py`)
 
 Como as duas fontes (app e wokwi) enviam de forma assíncrona e independente, a cada ~1 segundo, o servidor **não grava um arquivo por requisição**. Em vez disso:
 
-1. Cada payload decifrado que chega é guardado em um **buffer em memória**, indexado por `user_id`, sobrescrevendo a leitura mais recente daquela fonte (`app`/`wokwi`) dentro da janela atual — protegido por `threading.Lock` porque a thread de flush roda em paralelo com as requisições HTTP.
+1. Cada payload decifrado que chega é guardado na fila/buffer em memória descrita acima, indexado por `user_id`, sobrescrevendo a leitura mais recente daquela fonte (`app`/`wokwi`) dentro da janela atual — protegido por `threading.Lock` porque a thread de flush roda em paralelo com as requisições HTTP.
 2. Uma **thread de fundo** dispara a cada `JANELA_AGREGACAO_S` (1 segundo) e, para cada usuário que recebeu qualquer dado desde o último disparo, grava **uma linha** em `dataUsers/usuario_<user_id>.jsonl`:
 
    ```json
@@ -256,6 +273,7 @@ Esta seção resume, decisão por decisão, o que já está implementado no cód
 | --- | --- |
 | Topologia em estrela, um único servidor central (seção 3) | **Implementado.** `SensorApp` e `sketch.ino`+`WokwiBridge` falam HTTP direto com `SensorServer/server.py`. |
 | Múltiplos produtores identificados pelo mesmo `user_id` (seção 2) | **Implementado.** `user_id=1` configurado tanto no app (tela "Configurações") quanto no bridge (`WOKWI_USER_ID`); o servidor agrega os dois em `dataUsers/usuario_1.jsonl`. |
+| Fila curta no servidor para correlacionar eventos de fontes diferentes do mesmo usuário (seção 6.1) | **Implementado.** Janela fixa de 1s (`JANELA_AGREGACAO_S`) resolve o buffer por `user_id` em uma linha consolidada por fonte. |
 | Contrato mínimo comum (`schema_version`/`user_id`/`source`) + contrato livre por fonte (seção 4) | **Implementado**, com dois contratos concretos em produção: `leitura_ambiente` (app) e `imobilidade.*` (wokwi). |
 | Versionamento de schema tolerante (seção 4.3) | **Implementado** nos dois lados (produtor sempre envia `schemaVersion=2`; servidor aceita ausência como versão 1, sem rejeitar). |
 | HTTP como mecanismo de transporte (seção 5) | **Implementado.** Endpoint único `POST /dados`; demais rotas são debug/health. |
