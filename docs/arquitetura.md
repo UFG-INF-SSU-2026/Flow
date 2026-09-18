@@ -1,250 +1,179 @@
-# Arquitetura da Integração — Marco 2
+# Arquitetura Geral — Flow
 
 **Disciplina:** Software para Sistemas Ubíquos
-**Cenário do projeto:** Monitoramento e assistência a uma pessoa idosa (ver `README.md` para a análise completa do sistema)
+**Cenário do projeto:** Monitoramento e assistência a uma pessoa idosa (ver `README.md` para a análise inicial completa)
 
-Este documento registra as decisões de arquitetura, o contrato e o comportamento do consumidor para a fronteira de integração validada neste marco, para consulta e apresentação a partir do próprio repositório — não é um relatório discursivo.
-
----
-
-## 1. Escopo e fronteira
-
-O objetivo do marco não é integrar o projeto inteiro, e sim validar **uma fronteira real** entre dois componentes: um produtor que emite eventos identificáveis e um consumidor que os recebe, valida e produz efeito observável.
-
-**Fronteira escolhida:** Wokwi (ESP32 simulado + MPU6050, decisão de imobilidade) → `WokwiBridge/bridge.py` → `SensorServer/server.py` (consumidor).
-
-A integração com o app Android (evento `leitura_ambiente`) fica **fora do escopo** deste documento, por decisão do grupo. No código, o mesmo servidor já recebe as duas fontes (o dispatcher por `source` em `server.py` trata `"app"` e `"wokwi"`), mas a fronteira demonstrada e detalhada aqui é apenas a do wokwi.
+Este documento descreve a arquitetura **geral** do sistema Flow — a visão de componentes, contrato e decisões que valem independentemente de qual protótipo específico está em campo num dado momento.
 
 ---
 
-## 2. Diagrama de arquitetura
+## 1. Cenário e atores
 
-### Produtor
+- **Usuário primário:** a pessoa idosa monitorada — uso passivo, sem necessidade de interação direta.
+- **Usuário secundário:** cuidadores e/ou familiares, que recebem informações e alertas.
+- **Situação de uso:** ambiente residencial. Um ou mais dispositivos permanecem junto ao idoso ou no ambiente, coletando dados continuamente.
 
-```mermaid
-flowchart LR
-    A["MPU6050<br/>(acelerômetro)"] --> B["sketch.ino<br/>máquina de estados:<br/>NORMAL → AGUARDANDO_CONFIRMACAO → ALERTA_CONFIRMADO"]
-    B -->|"Serial.println (JSON)<br/>1x/s heartbeat +<br/>em cada transição"| C["Porta serial exposta via<br/>RFC2217 (localhost:4000)"]
-
-```
-
-### Comunicação
-
-```mermaid
-flowchart LR
-    C --> D["bridge.py<br/>lê a serial, anexa<br/>user_id + source"]
-    D -->|"AES-256-GCM<br/>(crypto_utils.encrypt_payload)"| E["POST /dados<br/>{nonce, ciphertext}"]
-```
-
-### Consumidor
-
-```mermaid
-flowchart LR
-    E --> F["decrypt_payload<br/>(crypto_utils.py)"]
-    F --> G["Roteamento por source<br/>(app | wokwi)"]
-    G --> H["regra_imobilidade.validar_evento<br/>(cascata eventType→state→value)"]
-    H -->|inválido| H1["descarta + loga no console<br/>(HTTP 200, falha de conteúdo<br/>não é falha de transporte)"]
-    H -->|válido| I["regra_imobilidade.eh_duplicado<br/>(dedup por deviceId+sequence)"]
-    I -->|duplicado| I1["descarta + loga"]
-    I -->|novo| J["regra_imobilidade.processar_evento<br/>atualiza estado persistente"]
-    J --> K["Buffer de agregação (1s)<br/>→ dataUsers/usuario_&lt;id&gt;.jsonl"]
-    J -->|"state == ALERTA_IMOBILIDADE<br/>e alerta_ativo == False"| L["dataUsers/alerta_imobilidade_<br/>&lt;device_id&gt;_&lt;timestamp&gt;.json"]
-    J --> M["GET /estado/&lt;device_id&gt;<br/>(tabela de estado em memória)"]
-```
-
-**Efeitos observáveis do consumidor** (item 4 do roteiro da apresentação): log (`dataUsers/usuario_<id>.jsonl`), mudança de estado (`GET /estado/<device_id>`) e atuação (`dataUsers/alerta_imobilidade_<device_id>_<timestamp>.json`).
+O sistema se caracteriza como **IoT** (dispositivos conectados enviando dados continuamente a um servidor) e como **aplicação ubíqua** (sensoriamento contínuo, sem interação explícita do idoso). Passa a se aproximar de um **sistema ciber-físico** a partir do momento em que a atuação (aviso ao cuidador, e futuramente outras ações) fecha o loop de percepção → decisão → efeito no mundo físico.
 
 ---
 
-## 3. Decisões de arquitetura
+## 2. Visão geral dos componentes
 
-### 3.1 Produtor: quem emite o primeiro evento
+| Elemento | Papel | Exemplos já identificados |
+| --- | --- | --- |
+| **Sensores** | Percebem o ambiente e o comportamento do idoso | Luz/CCT, acelerômetro, orientação, magnetômetro; futuramente localização e sinais vitais |
+| **Produtor / gateway** | Concentra um ou mais sensores, monta o evento e o envia à rede | Smartphone Android (app); dispositivo dedicado (ESP32 ou similar) por sensor não coberto pelo celular (ex.: localização) |
+| **Servidor central** | Recebe, valida, agrega e decide | Um único ponto lógico de consumo, com visão consolidada por pessoa monitorada |
+| **Atuadores** | Produzem efeito observável a partir de uma decisão | Aviso ao cuidador (única ação definida até o momento); histórico consultável |
 
-O Wokwi (ESP32 simulado com MPU6050), via `sketch/sketch.ino`. Deriva do protótipo do Marco 1, reaproveitando: histerese de dois limiares (`LIMIAR_BAIXO`/`LIMIAR_ALTO`), persistência temporal (`T_PERSISTENCIA_MS`, `T_CONFIRMACAO_MS`), debounce nos botões, falha explícita (`LEITURA_INVALIDA`, `LEITURA_FORA_DE_FAIXA`) e logs estruturados via `Serial.println`.
+Cada pessoa monitorada pode ter **mais de um produtor simultâneo** (por exemplo, o celular para luz/movimento e um dispositivo dedicado para localização), todos identificados pelo mesmo `user_id` para que o servidor os trate como a mesma pessoa.
 
-Emite dois tipos de evento:
+---
 
-- **`imobilidade.leitura`** — heartbeat, 1x/s, reporta o estado atual da máquina e a magnitude lida.
-- **`imobilidade.decisao`** — apenas em transições de estado (`SUSPEITA_IMOBILIDADE`, `CONFIRMADO_OK`, `MOVIMENTO_RETOMADO`, `ALERTA_IMOBILIDADE`, `REARMADO_MANUAL`, `LEITURA_INVALIDA`, `LEITURA_FORA_DE_FAIXA`).
-Identificação única: `sequence` incremental por `deviceId`, compartilhado entre os dois tipos de evento (um único contador, não um por `eventType`).
+## 3. Topologia: estrela
 
-### 3.2 Consumidor: quem consome e produz efeito observável
+```mermaid
+flowchart LR
+    P1["Produtor 1<br/>(App Android —<br/>luz/CCT, movimento)"] -->|HTTP| S["Servidor Central"]
+    P2["Produtor 2<br/>(dispositivo dedicado —<br/>ex.: localização)"] -->|HTTP| S
+    P3["Produtor N<br/>(sensor futuro —<br/>ex.: pulseira)"] -->|HTTP| S
+    S --> C["Cuidador<br/>(consulta/alerta)"]
+```
 
-O servidor Flask único (`SensorServer/server.py`) recebe via `bridge.py`. Confere a identificação do evento (`user_id` + `source`), valida os eventos do wokwi em cascata (`SensorServer/regra_imobilidade.py`), mantém uma tabela de estado persistente por `deviceId`, agrega a leitura mais recente de cada fonte numa janela de 1 segundo (log combinado por usuário) e gera um artefato de alerta quando a decisão confirma imobilidade. Detalhes na seção 5.
+Todos os produtores falam diretamente com o servidor central, por HTTP, sem nó intermediário. Essa é a decisão de topologia enquanto valer a premissa da seção 6: **um único consumidor lógico**, volume baixo por produtor, e nenhuma necessidade de um produtor consumir dados de outro produtor. A seção 9 avalia quando essa premissa deixa de valer e uma topologia em árvore passaria a compensar o custo extra.
 
-### 3.3 Contrato mínimo e versionamento
+---
 
-Existe um envelope de **transporte** comum e cifrado (`{nonce, ciphertext}`, AES-256-GCM), igual para as duas fontes. Dentro do texto decifrado **não há** um envelope de aplicação unificado entre as fontes: `app` e `wokwi` mandam JSONs com formatos próprios, compartilhando apenas dois campos de roteamento — `user_id` (inteiro) e `source` (`"app"` ou `"wokwi"`). Ver seção 4 para o contrato completo do wokwi e a versão documentada.
+## 4. Modelo de evento e contrato mínimo entre fontes
 
-### 3.4 Mecanismo de comunicação
+Todo produtor envia eventos dentro de um **envelope de transporte comum**, cifrado:
 
-HTTP, endpoint único (`POST /dados`), compartilhado pelas duas fontes, com um dispatcher interno por `source` (app vs. wokwi) e, dentro de `wokwi`, uma segunda cascata por `eventType`/`state` (seção 5.1).
+```json
+{ "nonce": "<base64>", "ciphertext": "<base64>" }
+```
 
-**Por que HTTP e não MQTT/gRPC/Kafka:**
+Dentro do texto decifrado, dois campos de **roteamento** são obrigatórios e compartilhados por qualquer fonte:
+
+| Campo | Tipo | Papel |
+| --- | --- | --- |
+| `schema_version` | inteiro | identifica a versão do schema usado pelo produtor |
+| `user_id` | inteiro | Identifica a pessoa monitorada — permite ao servidor agregar dados de produtores diferentes como pertencentes ao mesmo idoso |
+| `source` | string | Identifica de qual produtor o evento vem (ex.: `"app"`, `"wokwi"`, e futuramente outros) |
+
+Fora desses três campos, **não existe um schema de aplicação unificado** entre fontes diferentes — cada produtor define seu próprio contrato (nome dos campos, unidades, identificador de evento). Isso é uma decisão deliberada: forçar um schema único entre um celular Android e um dispositivo dedicado de sensor acoplaria produtores que evoluem em ritmos e por equipes diferentes. O que o servidor exige de qualquer fonte nova é:
+
+1. Um identificador de evento (nome do tipo de evento).
+2. Um identificador de origem física (`device_id`) e um contador de sequência (`seq_num`/`sequence`) por dispositivo, para deduplicação/idempotência.
+3. Um instante de leitura gerado na origem (tempo do evento, não tempo de chegada).
+
+---
+
+## 5. Mecanismo de comunicação: por que HTTP
 
 | Alternativa | Por que foi descartada |
 | --- | --- |
-| **MQTT** | Pede um broker publicador/assinante — útil quando há múltiplos consumidores independentes do mesmo evento. Aqui há um único consumidor (o servidor), então pub/sub não paga a infraestrutura extra (broker a manter, tópicos a versionar) sem ganho real neste estágio. |
-| **gRPC** | Exige schema Protobuf compilado e gera acoplamento de build entre produtor e consumidor (o firmware ESP32 não tem, nem precisa de, um stack gRPC). O ganho de gRPC — streaming bidirecional eficiente, contratos fortemente tipados — não se justifica para um POST periódico e pequeno. |
-| **Kafka** | Pensado para alto volume, múltiplos consumidores e retenção/replay de longo prazo — exige cluster de brokers. Aqui o volume é baixo e não há requisito de replay; seria infraestrutura desproporcional ao problema atual. |
-| **HTTP (escolhido)** | É o "menor mecanismo que atende ao requisito": o produtor manda um evento pequeno por vez, sem sessão contínua nem handshake; o consumidor é único; a ação é explícita (ingestão de evento, não uma consulta). AES-GCM já cobre integridade/confidencialidade por mensagem, sem precisar de TLS/sessão — combina bem com um protocolo sem estado como HTTP. |
+| **MQTT** | Pede um broker publicador/assinante — útil quando há múltiplos consumidores independentes do mesmo evento. Enquanto houver um único consumidor lógico (o servidor central), pub/sub não paga a infraestrutura extra (broker a manter, tópicos a versionar) sem ganho real. |
+| **gRPC** | Exige schema Protobuf compilado e gera acoplamento de build entre produtor e consumidor — desproporcional para um POST periódico e pequeno partindo de firmware embarcado. |
+| **Kafka** | Pensado para alto volume, múltiplos consumidores e retenção/replay de longo prazo, exigindo cluster de brokers. O volume por produtor aqui é baixo e não há requisito de replay. |
+| **HTTP (escolhido)** | É o "menor mecanismo que atende ao requisito": evento pequeno, sem sessão contínua nem handshake; consumidor único; ação explícita (ingestão de evento). AES-GCM cobre integridade/confidencialidade por mensagem sem precisar de TLS/sessão — combina bem com um protocolo sem estado. |
 
-**Por que a resiliência é por substituição, e não por reenvio:** o evento carrega o estado físico observado de uma pessoa num instante — é telemetria de saúde, não um comando com efeito irreversível que exige entrega garantida (ver distinção telemetria × comando, seção 7). Reenviar um evento sobre um estado que já pode ter mudado não ajuda: na melhor hipótese é redundante — a leitura mais recente já reflete a situação atual assim que a conectividade volta —; na pior, um `ALERTA_IMOBILIDADE` entregue com atraso relevante pode confirmar, para o cuidador, um episódio que a própria pessoa já resolveu, gerando um alarme obsoleto exatamente no tipo de informação em que atraso vira informação errada. Por isso o sistema garante, em vez de reenviar eventos antigos, que a leitura mais recente sempre prevalece quando a conectividade volta. A condição de falha tratada nesta fronteira é a indisponibilidade da simulação, não a indisponibilidade do servidor: `bridge.py` reconecta automaticamente a porta serial a cada 3 segundos enquanto a simulação estiver fora do ar, e essa reconexão é o mecanismo observável e exercitável ao vivo (item 5 do roteiro de apresentação).
-
-**Perguntas-guia respondidas:**
+**Perguntas-guia:**
 
 | Pergunta-guia | Resposta |
 | --- | --- |
-| Múltiplos consumidores? | Não — um único servidor consome. Pub/sub (MQTT) descartado por falta de necessidade. |
-| Consulta ou ação explícita? | Ação explícita (ingestão de evento) → API baseada em recurso (HTTP), confirmado. |
-| Precisa operar sem rede? | Sim, para a fonte de dados: `bridge.py` reconecta automaticamente a porta serial RFC2217 quando a simulação cai — é o retry exercitado ao vivo. Para o destino, a resiliência é por substituição, não por reenvio: uma falha de `POST` descarta o evento, e a leitura seguinte, mais recente, é o que prevalece (ver justificativa acima). |
-| Comando produz consequência? | Sim, nos dois lados. O firmware evita reemitir o mesmo alerta enquanto a condição de imobilidade persistir (variável `alerta_ativo` em `sketch.ino`). O servidor, ao receber `imobilidade.decisao` com `state = ALERTA_IMOBILIDADE`, gera um artefato de alerta e mantém seu próprio flag `alerta_ativo` por `deviceId` — não confia cegamente no produtor para isso, mesmo que o firmware já se comporte assim. |
+| Múltiplos consumidores? | Não — um único servidor central consome. |
+| Consulta ou ação explícita? | Ação explícita (ingestão de evento) → API baseada em recurso (HTTP). |
+| Precisa operar sem rede? | Sim, do lado do produtor: cada gateway deve reconectar automaticamente à sua fonte de dados quando ela cai. Do lado do destino, a resiliência é por **substituição**, não por reenvio (seção 6). |
+| Comando produz consequência? | Sim, dos dois lados — tanto o produtor quanto o servidor evitam reemitir/reprocessar o mesmo alerta enquanto a condição persistir; o servidor não confia cegamente no produtor para isso. |
 
-### 3.5 Responsabilidades da equipe
-
-| Pessoa | Responsabilidade |
-| --- | --- |
-| Deivison | A construção e execução do simulador wokwi |
-| Mateus | O funcionamento da bridge entre o wokwi (produtor) e o servidor (consumidor) |
-| Leonardo | A construção e execução do servidor |
+Essa decisão vale enquanto a premissa "um único consumidor, volume baixo" se sustentar. A seção 9 avalia o cenário em que ela deixa de valer.
 
 ---
 
-## 4. Contrato / Payload
+## 6. Processamento e resposta
 
-### 4.1 Envelope de transporte (comum às duas fontes)
+Pipeline geral, independente da fonte:
 
-```json
-{ "nonce": "<base64, 12 bytes>", "ciphertext": "<base64>" }
+```
+Evento bruto
+    ↓
+Validação (schema + faixa física plausível)
+    ↓
+Deduplicação (device_id + sequência)
+    ↓
+Atualização de estado (por dispositivo e/ou por pessoa)
+    ↓
+Regra de decisão (ex.: luz inadequada à noite; imobilidade prolongada)
+    ↓
+Atuação (aviso ao cuidador), se a condição for confirmada
 ```
 
-Cifrado com AES-256-GCM, chave simétrica pré-compartilhada (`SensorServer/crypto_utils.py`, idêntico a `WokwiBridge/crypto_utils.py`). GCM fornece integridade (tag de autenticação) além de confidencialidade — dispensa mecanismo adicional de assinatura para detectar adulteração em trânsito.
+**Distribuição de responsabilidades** entre dispositivo e nuvem:
 
-### 4.2 Payload de aplicação — wokwi
-
-Após decifrado, o JSON emitido por `sketch.ino` e repassado por `bridge.py` (que apenas anexa `user_id` e `source`):
-
-| Campo | Tipo | Descrição |
+| Responsabilidade | Local | Critério |
 | --- | --- | --- |
-| `schemaVersion` | inteiro | Versão do schema deste payload. Produtor atual (`sketch.ino`) sempre envia `2`. Verificado como primeiro passo da cascata de validação (seção 5.1); se ausente, o consumidor assume `1` (produtor desatualizado) e apenas loga um aviso — não rejeita o evento |
-| `eventType` | string | `"imobilidade.leitura"` (heartbeat) ou `"imobilidade.decisao"` (transição de estado) |
-| `deviceId` | string | Identificador fixo do dispositivo (`"esp32-decisao-imobilidade-01"`) |
-| `entityId` | string | Identificador da pessoa monitorada (`"idoso-simulado-01"`) |
-| `eventTimeMs` | inteiro | Relógio interno do ESP32 (`millis()` desde o boot) — **não é timestamp absoluto** |
-| `sequence` | inteiro | Contador incremental único por `deviceId`, compartilhado entre os dois `eventType` |
-| `value` | número | Magnitude da aceleração (m/s²); `-1.0` é o sentinela de `LEITURA_INVALIDA` |
-| `unit` | string | `"m/s2"` |
-| `state` | string | Ver enum por `eventType` na seção 5.1 |
-| `user_id` | inteiro | Anexado por `bridge.py` — identifica a pessoa dona do dispositivo, para agregação com o app |
-| `source` | string | Anexado por `bridge.py` — sempre `"wokwi"` neste fluxo |
+| Captura bruta e geração do tempo do evento | Dispositivo | O tempo que importa é o vivido pelo idoso, não o de chegada ao servidor |
+| Descarte de leituras claramente inválidas (faixa física) | Dispositivo, antes do envio | Reduz tráfego e consumo de energia — recurso sensível em dispositivo que precisa durar o dia todo |
+| Deduplicação, estado da janela, decisão da regra | Servidor central | Visão global e disponibilidade — o cuidador precisa acessar o status fora da rede local, e futuramente um mesmo cuidador pode acompanhar mais de uma pessoa; a decisão não pode depender do app permanecer em primeiro plano no dispositivo do idoso |
+| Disparo da notificação e histórico/auditoria | Servidor central | Ponto único com visão consolidada |
 
-### 4.3 Versão do contrato
-
-**Versão atual: v2**, identificada tanto pelo código publicado no repositório (lista de campos da seção 4.2, vocabulário `EVENTOS_ESPERADOS` e faixa de `value` em `regra_imobilidade.py`) quanto, agora, pelo próprio payload em trânsito: `sketch.ino` envia `schemaVersion: 2` em todo evento emitido (heartbeat, decisão e `sistema.erro`), como primeiro campo do JSON.
-
-**Compatibilidade com produtores mais antigos (sem `schemaVersion`):** o consumidor (`regra_imobilidade.validar_evento`) trata a ausência do campo como `schemaVersion = 1` — não rejeita o evento por isso, apenas registra um aviso no console do servidor (`schemaVersion=1 desatualizado`). O último `schemaVersion` recebido por dispositivo também fica disponível em `GET /estado/<device_id>` (`ultimo_schema_version`), como evidência observável de qual versão de produtor está em campo.
-
-**Política de versionamento (para quando o contrato crescer além do estado atual):**
-
-- **Mudança compatível** (adicionar um `state` novo ao enum de `imobilidade.decisao`, por exemplo) — não exige subir a versão; produtor e consumidor continuam entendendo o payload um do outro, e o consumidor mais antigo simplesmente rejeita o `state` novo até ser atualizado (comportamento já existente na cascata da seção 5.1).
-- **Mudança incompatível** (remover/renomear um campo, mudar o tipo de `value`, mudar a unidade de `eventTimeMs`) — é o gatilho para incrementar `SCHEMA_VERSION_ATUAL` em `regra_imobilidade.py` e `SCHEMA_VERSION` em `sketch.ino`, e para decidir se a versão antiga deve passar a ser rejeitada (hoje é apenas avisada) — nesse ponto, a tabela da seção 4.2 e o diagrama da seção 2 devem ser atualizados junto.
+Regras de negócio já identificadas: **luz inadequada à noite** (CCT frio no período noturno, com debounce) e **imobilidade prolongada** (baixa variância de aceleração sustentada por uma janela mínima). Novas regras seguem o mesmo pipeline.
 
 ---
 
-## 5. Consumidor: validação, estado e efeito observável
+## 7. Resiliência e falhas
 
-### 5.1 Validação em cascata (`SensorServer/regra_imobilidade.py`, chamada por `server._processar_evento_wokwi`)
+O evento carrega o estado físico observado de uma pessoa num instante — é **telemetria**, não um comando com efeito irreversível que exige entrega garantida. Por isso:
 
-Antes de qualquer validação específica, `server.py` já exige `source ∈ {"app", "wokwi"}` e `user_id` inteiro (HTTP 400 fora disso). Para eventos do wokwi, a cascata roda em cima disso:
-
-0. **`schemaVersion` identificado** — não é um passo de rejeição: se ausente, assume-se `1` (produtor desatualizado); se menor que `SCHEMA_VERSION_ATUAL` (`2`), o servidor loga um aviso no console, mas o evento segue para os próximos passos normalmente.
-1. **Campos obrigatórios presentes** (`eventType`, `deviceId`, `entityId`, `eventTimeMs`, `sequence`, `value`, `unit`, `state`).
-2. **`eventType` no vocabulário conhecido:** `{"imobilidade.leitura", "imobilidade.decisao"}`.
-3. **`state` no enum esperado daquele `eventType`:**
-   - `imobilidade.leitura` → `{NORMAL, AGUARDANDO_CONFIRMACAO, ALERTA_CONFIRMADO}`
-   - `imobilidade.decisao` → `{LEITURA_INVALIDA, LEITURA_FORA_DE_FAIXA, SUSPEITA_IMOBILIDADE, CONFIRMADO_OK, MOVIMENTO_RETOMADO, ALERTA_IMOBILIDADE, REARMADO_MANUAL}`
-4. **`value` dentro da faixa física plausível (0–30 m/s²)**, com duas exceções deliberadas e coerentes com o firmware: `LEITURA_INVALIDA` exige o sentinela `-1.0` (leitura falhou, não há magnitude real); `LEITURA_FORA_DE_FAIXA` exige `value > 30` (é o próprio evento que existe para reportar a anomalia — validar contra 0–30 rejeitaria o aviso).
-5. **`sequence` maior que o último conhecido para aquele `deviceId`** (`eh_duplicado` — dedup/idempotência; `sequence` é global por dispositivo, não por `eventType`).
-Evento que falha nos passos 1–5 é descartado e logado no console do servidor. A requisição HTTP ainda responde `200` — falha de conteúdo do evento não é tratada como falha de transporte.
-
-### 5.2 Onde vive o estado e quem decide o quê
-
-| Responsabilidade | Local | Observação |
-| --- | --- | --- |
-| Decisão de imobilidade (histerese, persistência, confirmação) | Produtor (`sketch.ino`) | O servidor não reimplementa a lógica de decisão — apenas reage ao `state` que chega |
-| Validação de schema/vocabulário/faixa/dedup | Consumidor (`regra_imobilidade.validar_evento` / `eh_duplicado`) | Roda a cada evento, antes de qualquer persistência |
-| Estado por dispositivo (`estado_atual`, `ultima_decisao`, `alerta_ativo`, `ultimo_sequence`, `ultimo_schema_version`) | Consumidor, em memória (`regra_imobilidade._estados: dict[deviceId, EstadoDispositivo]`) | Persiste **entre** janelas de agregação (não é limpo a cada flush de 1s); reinicia se o processo do servidor cair — aceito nesta fase de protótipo |
-| Buffer de agregação app+wokwi (janela de 1s) | Consumidor, em memória (`server._buffer`) | Limpo a cada flush; não guarda histórico |
-| Geração da atuação (alerta) | Consumidor (`server._processar_evento_wokwi`) | Só grava um novo arquivo se `alerta_ativo` estiver `False` para aquele `deviceId` |
-
-### 5.3 Efeito observável (item 4 do roteiro)
-
-- **Log:** `dataUsers/usuario_<user_id>.jsonl` — uma linha por janela de 1s, combinando a leitura mais recente de `app` e `wokwi` (fonte sem dado na janela fica `null`).
-- **Mudança de estado:** `GET /estado/<device_id>` retorna a tabela de estado persistente (`estado_atual`, `ultima_decisao`, `alerta_ativo`, `ultimo_sequence`, `ultima_atualizacao`, `ultimo_schema_version`) — independente do log, não é limpa a cada 1s.
-- **Atuação:** ao chegar `imobilidade.decisao` com `state = ALERTA_IMOBILIDADE` (e nenhum alerta já ativo para aquele `deviceId`), o servidor grava `dataUsers/alerta_imobilidade_<device_id>_<timestamp>.json`. `alerta_ativo` só volta a `False` quando chega `CONFIRMADO_OK`, `MOVIMENTO_RETOMADO` ou `REARMADO_MANUAL`.
+- **Do produtor para o servidor:** se uma requisição falha, o evento é descartado, não reenviado. A leitura seguinte, mais recente, é o que prevalece — reenviar um estado que já pode ter mudado não ajuda: no melhor caso é redundante, no pior caso confirma para o cuidador um episódio que a pessoa já resolveu (alarme obsoleto).
+- **Da fonte de dados para o produtor:** aqui sim há retry real — o gateway deve reconectar automaticamente à sua fonte (sensor/serial/etc.) enquanto ela estiver indisponível, porque essa é uma falha de disponibilidade da coleta, não do conteúdo do dado.
+- **Dispositivo silencioso** (nenhum evento chega por um período): não deve ser interpretado como confirmação de imobilidade (não há dados novos sustentando a regra) — em vez disso, gera um alerta de prioridade diferente ("sem comunicação com o dispositivo há X minutos"), e o estado da janela é marcado como obsoleto até dados frescos voltarem.
+- **Entrada inválida** (schema/vocabulário desconhecido): descartada e logada; não é tratada como falha de transporte — a requisição ainda responde com sucesso no nível HTTP.
+- **Entrada repetida:** descartada silenciosamente via deduplicação por `device_id` + sequência (idempotência).
 
 ---
 
-## 6. Comportamento esperado diante de falha e repetição
+## 8. Segurança
 
-| Cenário | Comportamento | Onde no código |
-| --- | --- | --- |
-| **Entrada muda** (`eventType`/`state` fora do vocabulário conhecido) | Evento rejeitado e descartado; log no console do servidor; HTTP responde `200` (não é falha de transporte) | `regra_imobilidade.validar_evento` |
-| **Entrada falha** — servidor cai | `bridge.py` captura a exceção de conexão recusada, loga no console e segue lendo a próxima linha da serial — **não há reenvio** do evento perdido | `bridge.enviar_para_servidor` |
-| **Entrada falha** — simulação Wokwi cai | `bridge.py` perde a conexão serial, entra em loop de reconexão a cada `RECONECTAR_A_CADA_S` (3s) até a simulação voltar — **retry real** | `bridge.conectar_serial` |
-| **Entrada repete** (`sequence` já processado para aquele `deviceId`) | Evento descartado silenciosamente como duplicado (idempotência) | `regra_imobilidade.eh_duplicado` |
-| **Autorização/identidade** | Não há autenticação por dispositivo — a chave AES é fixa e compartilhada entre todas as fontes (decisão de simplicidade documentada em `crypto_utils.py`); qualquer cliente com a chave pode enviar dados como qualquer `user_id`/`deviceId` | `SensorServer/crypto_utils.py`, `WokwiBridge/crypto_utils.py` |
+O único mecanismo de segurança garantido hoje é a **cifragem do payload** (AES-256-GCM) entre produtor e servidor, que cobre confidencialidade e integridade por mensagem. Isso é tratado como o mínimo aceitável mesmo em produção: dados de movimento, luz e uso do dispositivo revelam rotina, hábitos e possíveis condições de saúde do idoso, então segurança no transporte e no armazenamento é o risco priorizado pelo grupo em relação a confiabilidade/completude dos dados e consumo de energia.
 
----
+Numa arquitetura de produção — atendendo múltiplas pessoas monitoradas e múltiplos produtores por pessoa — isso implica, no mínimo:
 
-## 7. Configuração necessária para rodar
+- **Autenticação por dispositivo/produtor**, não uma chave única compartilhada por todo o sistema.
+- **Controle de acesso** aos dados armazenados por pessoa monitorada (o cuidador de uma pessoa não deve acessar dados de outra).
+- Um canal de comunicação autenticado entre produtor e servidor, além da cifragem do conteúdo.
 
-| Componente | Configuração | Onde |
-| --- | --- | --- |
-| `SensorServer/server.py` | Porta HTTP (`PORT = 5000`), pasta de dados (`DATA_DIR = "dataUsers"`), janela de agregação (`JANELA_AGREGACAO_S = 1.0`) | Constantes no topo do arquivo |
-| `SensorServer` / `WokwiBridge` | Chave AES-256 compartilhada (`SHARED_KEY_B64`) — precisa ser **idêntica** nos dois lados | `crypto_utils.py` (duplicado nos dois componentes) |
-| `WokwiBridge/bridge.py` | URL da porta serial RFC2217 (`RFC2217_URL = "rfc2217://localhost:4000"`), URL do servidor (`SERVIDOR_URL`), `user_id` do wokwi (`WOKWI_USER_ID`) | Constantes no topo do arquivo |
-| `sketch/wokwi.toml` | Porta RFC2217 exposta pela simulação (`rfc2217ServerPort = 4000`) | Arquivo de configuração do Wokwi |
-| Dependências Python (servidor) | `Flask`, `cryptography` (ver `SensorServer/requirements.txt`) | `pip install -r SensorServer/requirements.txt` |
-| Dependências Python (bridge) | `pyserial`, `requests`, `cryptography` (ver `WokwiBridge/requirements.txt`) | `pip install -r WokwiBridge/requirements.txt` |
+O estado atual dessas três frentes — e por que a versão em campo hoje ainda não as implementa — está em `mudancas_arquitetura_prototipo.md`.
 
 ---
 
-## 8. Como executar
+## 9. Alternativa avaliada: topologia em árvore (produtor → intermediário HTTP, intermediário → principal MQTT)
 
-1. **Servidor:**
+Cenário avaliado: em vez da estrela da seção 3, os nós produtores falam HTTP com um **nó intermediário** (um hub por residência/pessoa, agregando os produtores daquela pessoa), e os intermediários falam **MQTT** com o nó principal.
 
-   ```bash
-   cd SensorServer
-   pip install -r requirements.txt
-   python server.py
-   ```
+**Onde isso ganha da estrela atual:**
 
-   Escuta em `0.0.0.0:5000`.
+- **Fan-in do lado do principal.** Hoje há uma única pessoa monitorada; numa produção com muitas residências, cada uma potencialmente com vários produtores, MQTT dá ao nó principal uma única forma de assinar N tópicos (um por residência/pessoa) em vez de aceitar N×M conexões HTTP diretas. Sessões persistentes e QoS resolvem parte do "múltiplos produtores, um consumidor" que hoje justifica descartar MQTT — a justificativa da seção 5 ("um único consumidor, não paga a infraestrutura") deixa de valer quando o volume de residências cresce.
+- **Detecção de nó fora do ar de graça.** O mecanismo *last will and testament* do MQTT notifica o principal quando um intermediário cai, sem precisar reimplementar o polling de "dispositivo silencioso" da seção 7 residência por residência.
+- **Buffer local de fato.** O intermediário pode reter localmente os eventos das fontes daquela residência enquanto o principal estiver inacessível e escoá-los via MQTT (QoS 1/2) quando a conexão voltar — hoje essa resiliência simplesmente não existe entre produtor e servidor (a seção 7 descarta por decisão, não por limitação técnica, mas um buffer local seria uma opção adicional real).
+- **Decisão local rápida.** Uma decisão de baixa latência (por exemplo, um aviso sonoro local) pode ser tomada no intermediário sem esperar o round-trip até o principal — hoje toda decisão depende do servidor central.
 
-2. **Simulação Wokwi:** abrir a pasta `sketch/` no VS Code com a extensão Wokwi instalada, iniciar (`F1` → `Wokwi: Start Simulator`), manter a aba do simulador visível.
+**Onde isso perde para a estrela atual:**
 
-3. **Bridge:**
+- **Componente novo por residência.** Um nó a mais para implantar, manter e proteger por pessoa monitorada — para o cenário de uma única pessoa monitorada (o estágio atual do projeto), isso é custo puro sem ganho, porque não há "vários produtores de várias residências" para agregar ainda.
+- **Broker MQTT como infraestrutura nova.** É exatamente o argumento já usado na seção 5 para descartar MQTT na estrela: broker a manter, tópicos a versionar. Numa árvore, esse custo se paga pelo nó principal, mas ele não desaparece — só se justifica quando o número de intermediários for grande o bastante.
+- **Duas superfícies de segurança em vez de uma.** HTTP+AES-GCM entre produtor e intermediário, e o modelo de autenticação/TLS do MQTT entre intermediário e principal — dois contratos e dois mecanismos de versionamento a manter em vez de um.
+- **Ponto único de falha por residência.** Hoje, se o intermediário caísse, ele levaria consigo todos os produtores daquela pessoa, que antes falavam direto com o principal — uma perda de disponibilidade que não existe na estrela atual, em troca de reduzir carga no principal.
 
-   ```bash
-   cd WokwiBridge
-   pip install -r requirements.txt
-   python bridge.py
-   ```
-
-   Confirmar antes `WOKWI_USER_ID` e `SERVIDOR_URL` em `bridge.py`.
-
-4. **Verificar a integração:**
-
-   ```bash
-   cat SensorServer/dataUsers/usuario_<WOKWI_USER_ID>.jsonl   # log por janela de 1s
-   curl http://localhost:5000/estado/esp32-decisao-imobilidade-01   # estado persistente
-   ls SensorServer/dataUsers/alerta_imobilidade_*.json         # atuação, se houve ALERTA_IMOBILIDADE
-   ```
+**Conclusão:** a árvore com HTTP/MQTT compensa quando o sistema deixa de ter "um consumidor, um produtor por vez" e passa a ter **muitas residências, cada uma com vários produtores** — exatamente o estágio de produção descrito na seção 1 (múltiplos idosos, múltiplos cuidadores). Na escala atual do protótipo (uma pessoa monitorada, poucos produtores, mesma rede local do servidor), o argumento que já descarta MQTT na estrela (seção 5) continua valendo, e a árvore adicionaria um nó e um protocolo novos sem um ganho correspondente. É uma evolução coerente para a "fase de crescimento" do projeto (seção 10), não para o estágio atual.
 
 ---
 
-## 9. Pendências conhecidas (fora do escopo fechado deste marco)
+## 10. Fase de crescimento
 
-- **Tabela de estado por usuário** (`estado_por_usuario[userId]`, agregando múltiplos dispositivos da mesma pessoa) — hoje o estado é por `deviceId`, não por `user_id`.
-- **Autenticação por dispositivo** — chave AES fixa e compartilhada entre todas as fontes, sem rotação nem pareamento por dispositivo.
+Ideias observadas como caminhos futuros possíveis — nenhuma implementada nem com viabilidade averiguada:
+
+- **Microfone**, para detecção de sons de queda ou pedidos de ajuda.
+- **Contador de passos/giroscópio dedicado**, para refinar a detecção de atividade.
+- **Localização** (dentro/fora de casa), para contextualizar a regra de imobilidade — terceira dimensão de contexto já identificada, exige permissão especial no Android e por isso está sendo validada separadamente antes de entrar no app real.
+- **Pulseira com sensores de frequência cardíaca/oximetria** — dados mockados, já que o grupo não viabiliza compra de hardware real para o trabalho.
