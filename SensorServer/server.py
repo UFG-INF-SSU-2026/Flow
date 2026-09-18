@@ -55,6 +55,7 @@ from flask import Flask, request, jsonify
 
 from crypto_utils import decrypt_payload, DecryptionError
 from regra_luz import validar_evento, eh_duplicado, avaliar_regra, EventoInvalido
+import regra_imobilidade
 
 # ---------------------------------------------------------------------------
 # CONFIGURACOES (edite aqui se precisar)
@@ -164,6 +165,31 @@ def _processar_leitura_ambiente(payload: dict, device_id: str) -> None:
         print(f"  >>> ALERTA gerado: {filename} -> {resultado_regra['mensagem']}")
 
 
+def _processar_evento_wokwi(payload: dict, device_id: str) -> None:
+    """Fecha a pendencia do relatorio (secao 'Consumidor'): cascata de
+    validacao por eventType + tabela de estado persistente + atuacao para
+    imobilidade.decisao com state=ALERTA_IMOBILIDADE. Espelha o fluxo
+    priorizado de _processar_leitura_ambiente, mas para eventos do wokwi."""
+    try:
+        regra_imobilidade.validar_evento(payload)
+    except regra_imobilidade.EventoInvalido as e:
+        print(f"  [wokwi] evento descartado (invalido): {e}")
+        return
+
+    if regra_imobilidade.eh_duplicado(payload):
+        print(f"  [wokwi] evento descartado (duplicado/atrasado, sequence={payload.get('sequence')})")
+        return
+
+    alerta = regra_imobilidade.processar_evento(payload)
+    if alerta is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"alerta_imobilidade_{device_id}_{timestamp}.json"
+        filepath = os.path.join(DATA_DIR, filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(alerta, f, ensure_ascii=False, indent=2)
+        print(f"  >>> ALERTA gerado: {filename} -> {alerta['mensagem']}")
+
+
 @app.route("/dados", methods=["POST"])
 def receber_dados():
     envelope = request.get_json(silent=True)
@@ -212,8 +238,11 @@ def receber_dados():
     _registrar_no_buffer(user_id, source, dados_fonte)
 
     # 4. Fluxo priorizado (independente do buffer): regra de luz inadequada
+    #    (app) ou validacao/estado/atuacao de imobilidade (wokwi)
     if source == "app":
         _processar_leitura_ambiente(payload, device_id)
+    elif source == "wokwi":
+        _processar_evento_wokwi(payload, device_id)
 
     return jsonify({
         "status": "ok",
@@ -226,6 +255,17 @@ def receber_dados():
 def listar_dados():
     """Debug: lista os ultimos registros ja gravados (pos-flush)."""
     return jsonify(_registros_recentes)
+
+
+@app.route("/estado/<device_id>", methods=["GET"])
+def obter_estado_imobilidade(device_id):
+    """Debug/demo: expoe a tabela de estado persistente (nao o buffer de
+    1s) de um dispositivo wokwi - evidencia observavel de 'mudanca de
+    estado', separada do log em dataUsers/usuario_<id>.jsonl."""
+    estado = regra_imobilidade.obter_estado(device_id)
+    if estado is None:
+        return jsonify({"status": "erro", "mensagem": f"device_id desconhecido: {device_id}"}), 404
+    return jsonify(estado)
 
 
 @app.route("/health", methods=["GET"])
