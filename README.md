@@ -1,6 +1,5 @@
-> **Nota (Marco 3):** este README descreve a análise original do projeto (Flow-main). O servidor, o app e o fluxo de dados evoluíram desde então para incorporar também o wokwi (ver `INSTRUCOES.md` na raiz deste projeto unificado para o que mudou e como rodar).
-
 # Software para Sistemas Ubíquos
+
 ## Análise inicial de um sistema ubíquo
 
 **Cenário escolhido:** Monitoramento e assistência a uma pessoa idosa
@@ -21,14 +20,12 @@ Idosos que vivem sozinhos ou com supervisão apenas parcial estão sujeitos a ri
 
 ## Estado atual do protótipo
 
-Já foi criado, instalado e testado em um aparelho Android um APK que extrai dados de sensores que **não exigem permissão especial** e os envia para um servidor na mesma rede local, em **lotes periódicos de 10 segundos** (intervalo editável). O APK mais recente está disponível em:
-
-**https://github.com/UFG-INF-SSU-2026/Flow/releases/latest**
+Já foi criado, instalado e testado em um aparelho Android um APK que extrai dados de sensores que **não exigem permissão especial** e os envia para um servidor na mesma rede local, em **lotes periódicos de 10 segundos** (intervalo editável). O APK mais recente está disponível [aqui](**https://github.com/UFG-INF-SSU-2026/Flow/releases/latest**).
 
 Os sensores dos quais já foram obtidos dados são:
 
 | Sensor | O que faz (resumo) |
-|---|---|
+| --- | --- |
 | **TCS3701 Light** | Mede a intensidade de luz ambiente (luminosidade). |
 | **TCS3701 Light CCT** | Mede a temperatura de cor da luz ambiente (luz "fria" ou "quente"). |
 | **LIS2DLC12 Accelerometer** | Mede aceleração do dispositivo nos três eixos; indica movimento. |
@@ -98,7 +95,7 @@ Vale notar que, mesmo com a comunicação restrita à rede local (sem exposiçã
 ### Sensores, atuadores e gateway
 
 | Elemento | Itens identificados | Papel no sistema |
-|---|---|---|
+| --- | --- | --- |
 | **Sensores** | TCS3701 Light / CCT, LIS2DLC12 Accelerometer, Device Orientation Wake Up, Orientation Sensor, GeoMagnetic Rotation Vector, Magnetometer (calibrado e não calibrado) | Percebem luminosidade, cor da luz, movimento e orientação, formando a base de contexto do sistema |
 | **Atuadores** | Aviso ao cuidador (única ação definida até o momento) | Notificar o cuidador quando o servidor identificar uma informação relevante nos dados coletados |
 | **Gateway** | O próprio smartphone Android | Agrega os dados dos sensores internos e os encaminha ao servidor local via Wi-Fi, em lotes a cada 10s, funcionando como ponto único de coleta e repasse |
@@ -106,6 +103,7 @@ Vale notar que, mesmo com a comunicação restrita à rede local (sem exposiçã
 ### Classificação
 
 O sistema pode ser caracterizado, nesta fase, como:
+
 - **IoT (Internet das Coisas):** o smartphone atua como dispositivo conectado que envia dados continuamente a um servidor via rede.
 - **Aplicação ubíqua:** o sensoriamento é contínuo e não exige interação explícita do idoso, integrando-se de forma discreta à rotina.
 

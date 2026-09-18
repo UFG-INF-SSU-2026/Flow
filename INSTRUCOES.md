@@ -8,7 +8,7 @@ mesma pessoa.
 
 ## Estrutura
 
-```
+```adress
 Flow-Unificado/
 ├── SensorServer/     # servidor único (Flask) - recebe dados do app E do wokwi
 ├── SensorApp/         # app Android (Kotlin) - envia dados do celular
