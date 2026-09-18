@@ -1,145 +1,153 @@
-# Software para Sistemas Ubíquos
-## Análise inicial de um sistema ubíquo
+# Flow — Monitoramento Ubíquo de Idosos
 
-**Cenário escolhido:** Monitoramento e assistência a uma pessoa idosa
+O Flow é um sistema de monitoramento de pessoas idosas. Sensores próximos ao
+idoso produzem dados que são recebidos e processados por um servidor central
+e, quando necessário, geram um alerta simulando a notificação do cuidador.
 
----
+O sistema tem duas fontes de dados independentes, que podem pertencer à
+mesma pessoa monitorada:
 
-## Parte 1 - Compreensão do problema
+- **App Android** (`SensorApp/`), instalado no celular do idoso, que
+  coleta leituras dos sensores do próprio aparelho (incluindo luminosidade
+  ambiente).
+- **Wokwi** (`Sketch/`), a simulação de um ESP32 com acelerômetro MPU6050
+  que detecta imobilidade do idoso, encaminhada ao servidor por uma ponte
+  Python (`WokwiBridge/`).
 
-### 1. Problema e usuários
+Ambas as fontes enviam dados **a cada 1 segundo** para um **único servidor**
+(`SensorServer/`), que os associa por usuário e os armazena.
 
-Idosos que vivem sozinhos ou com supervisão apenas parcial estão sujeitos a riscos que muitas vezes passam despercebidos no dia a dia: quedas, longos períodos de imobilidade, alterações na rotina e exposição à luz em horários inadequados, o que pode prejudicar o sono e o bem-estar geral. O sistema pretende **perceber discretamente sinais do ambiente e do comportamento do idoso**, apoiando tanto a autonomia da pessoa quanto a tranquilidade de quem cuida dela.
+## Arquitetura
 
-- **Usuário primário:** a pessoa idosa monitorada (uso passivo, sem necessidade de interação direta).
-- **Usuário secundário:** cuidadores e/ou familiares, que recebem informações e, futuramente, alertas.
-- **Situação de uso:** ambiente residencial, com um smartphone Android atuando como coletor de dados, permanecendo fixo ou próximo ao idoso durante o dia.
-
----
-
-## Estado atual do protótipo
-
-Já foi criado, instalado e testado em um aparelho Android um APK que extrai dados de sensores que **não exigem permissão especial** e os envia para um servidor na mesma rede local, em **lotes periódicos de 10 segundos** (intervalo editável). O APK mais recente está disponível em:
-
-**https://github.com/UFG-INF-SSU-2026/Flow/releases/latest**
-
-Os sensores dos quais já foram obtidos dados são:
-
-| Sensor | O que faz (resumo) |
-|---|---|
-| **TCS3701 Light** | Mede a intensidade de luz ambiente (luminosidade). |
-| **TCS3701 Light CCT** | Mede a temperatura de cor da luz ambiente (luz "fria" ou "quente"). |
-| **LIS2DLC12 Accelerometer** | Mede aceleração do dispositivo nos três eixos; indica movimento. |
-| **Device Orientation Wake Up** | Detecta mudanças de orientação que "acordam" o sensor; indica manuseio do aparelho. |
-| **Samsung GeoMagnetic Rotation Vector Sensor** | Combina acelerômetro e magnetômetro para calcular orientação absoluta do dispositivo. |
-| **Samsung Orientation Sensor** | Fornece a orientação do dispositivo (ângulos de rotação). |
-| **MXG4300S Magnetometer** | Mede o campo magnético calibrado; apoia o cálculo de orientação. |
-| **MXG4300S Magnetometer Uncalibrated** | Mede o campo magnético sem correção de calibração; mesmo uso de apoio à orientação. |
-
-### Terceiro sensor em validação: localização (GPS)
-
-Os dois sensores já incorporados (luz/CCT e movimento) cobrem duas das três dimensões de
-contexto que o grupo pretende usar — falta a terceira, localização, já citada como necessária
-desde a análise inicial (saber se o idoso está dentro ou fora de casa, para contextualizar a
-regra de imobilidade). Diferente dos sensores atuais, o GPS exige permissão especial de
-localização no Android, então antes de incorporá-lo ao app real, sua viabilidade está sendo
-validada em um protótipo separado (ESP32), simulando a leitura de localização (dentro/fora de
-casa) com uma entrada substituta — já que não há hardware de GPS disponível nesse ambiente de
-simulação. Essa validação inclui testar como a informação de zona (dentro/fora) deve persistir
-por um tempo mínimo antes de ser considerada confiável, evitando que uma leitura instável
-suspenda ou reative a regra de imobilidade de forma incorreta.
-
----
-
-### 2. Contexto
-
-Já é possível perceber, com o protótipo atual, três dimensões de contexto:
-
-- **Ambiente:** luminosidade e temperatura de cor da luz (CCT) do cômodo.
-- **Usuário (indireto):** padrões de movimento e orientação, que servem como indício de atividade, imobilidade ou possíveis quedas.
-- **Sistema:** orientação e posição do próprio dispositivo, usada como referência para interpretar os dados dos demais sensores.
-
-Ainda faltam dimensões importantes de contexto (localização dentro da casa, sinais vitais, som ambiente), discutidas mais abaixo, na seção "Fase de crescimento do projeto".
-
-### 3. Dispositivos e comunicação
-
-- **Smartphone Android:** concentra os sensores internos e realiza a coleta contínua dos dados.
-- **Servidor local:** recebe os dados enviados pelo aplicativo, na mesma rede Wi-Fi.
-- **Comunicação:** dados enviados em **lotes periódicos a cada 10 segundos** (intervalo editável), dentro da mesma sub-rede, sem exposição à internet nesta fase — o que reduz superfície de ataque, mas ainda não resolve questões de persistência, escalabilidade e acesso remoto por cuidadores.
-
-> **Nota sobre produção:** o servidor local usado nesta fase de protótipo é uma solução temporária, pensada apenas para validar a viabilidade técnica dentro da mesma rede local. Em um cenário de produção, esse servidor local **seria substituído por um servidor central**, capaz de atender múltiplos idosos/residências, permitir acesso remoto dos cuidadores (fora da rede local) e resolver as questões de persistência e escalabilidade ainda não tratadas nesta fase.
-
-### 4. Processamento e resposta
-
-A ideia central é que um **servidor central use os dados dos sensores para gerar algum tipo de informação ou ação**. Atualmente o processamento é centralizado no servidor local, que recebe os dados brutos, e já é possível esboçar respostas de valor a partir deles:
-
-- **Recomendação sobre iluminação noturna**, a partir do sensor **TCS3701 Light / CCT**: ao medir a temperatura de cor da luz do quarto no início da noite, o sistema pode identificar se o ambiente está com luz "fria" (alta CCT, rica em luz azul), o que **inibe a produção de melatonina** e prejudica o sono do idoso.
-- **Indício de atividade/queda**, a partir do acelerômetro **LIS2DLC12** e dos sensores de orientação (**Device Orientation Wake Up**, **Orientation Sensor**, **Rotation Vector**): variações bruscas seguidas de imobilidade prolongada e mudança de orientação (por exemplo, o dispositivo passando de vertical para horizontal de forma abrupta) são indícios indiretos de queda ou de longos períodos parado no mesmo lugar.
-- **Contexto de uso do dispositivo**, a partir do **Device Orientation Wake Up**: indica quando o aparelho é manuseado, o que pode servir como proxy de interação/atividade do idoso com o ambiente.
-
-A única ação (atuação) já prevista pelo grupo é: **avisar o cuidador caso alguma informação obtida pelo sistema mereça ser informada** (por exemplo, um possível indício de queda ou uma condição de luz inadequada à noite). Outras ações poderão ser adicionadas futuramente, mas essa é a única definida até o momento.
-
-> **Conclusão de viabilidade:** mesmo restrito a sensores sem permissão especial, o protótipo já demonstra viabilidade técnica — os dados coletados (especialmente luz/CCT e movimento) sustentam recomendações e indícios relevantes para o cuidado do idoso, validando a ideia antes de investir em sensores mais sensíveis.
-
-### 5. Risco principal
-
-O risco escolhido pelo grupo para ser priorizado é a **segurança dos dados**. Como o sistema lida com informações que revelam rotina, hábitos e possíveis condições de saúde do idoso, a segurança no transporte e armazenamento desses dados é tratada como prioridade em relação aos demais riscos identificados (confiabilidade/completude dos dados e consumo de energia/bateria).
-
-Atualmente, o único mecanismo de segurança pensado para o projeto é a **criptografia do JSON enviado** do smartphone para o servidor local, a cada lote de 10 segundos. Esse é um modelo inicial e propositalmente simples: com a evolução do projeto, **outros mecanismos de segurança poderão ser adicionados** (por exemplo, autenticação entre dispositivo e servidor, controle de acesso aos dados armazenados, ou uso de um canal de comunicação autenticado), mas nada além da criptografia do JSON está garantido ou implementado nesta fase.
-
-Vale notar que, mesmo com a comunicação restrita à rede local (sem exposição à internet nesta fase), dados de movimento e uso do dispositivo, ainda que indiretos, revelam rotina e hábitos do idoso — o que reforça a necessidade de cuidado com o armazenamento e o acesso a esses dados.
-
----
-
-## Elementos já identificáveis (Parte 2)
-
-### Sensores, atuadores e gateway
-
-| Elemento | Itens identificados | Papel no sistema |
-|---|---|---|
-| **Sensores** | TCS3701 Light / CCT, LIS2DLC12 Accelerometer, Device Orientation Wake Up, Orientation Sensor, GeoMagnetic Rotation Vector, Magnetometer (calibrado e não calibrado) | Percebem luminosidade, cor da luz, movimento e orientação, formando a base de contexto do sistema |
-| **Atuadores** | Aviso ao cuidador (única ação definida até o momento) | Notificar o cuidador quando o servidor identificar uma informação relevante nos dados coletados |
-| **Gateway** | O próprio smartphone Android | Agrega os dados dos sensores internos e os encaminha ao servidor local via Wi-Fi, em lotes a cada 10s, funcionando como ponto único de coleta e repasse |
-
-### Classificação
-
-O sistema pode ser caracterizado, nesta fase, como:
-- **IoT (Internet das Coisas):** o smartphone atua como dispositivo conectado que envia dados continuamente a um servidor via rede.
-- **Aplicação ubíqua:** o sensoriamento é contínuo e não exige interação explícita do idoso, integrando-se de forma discreta à rotina.
-
-Ainda **não** se caracteriza plenamente como **sistema ciber-físico**, pois falta a etapa de atuação sobre o mundo físico (loop de controle fechado) — isso deve mudar quando o aviso ao cuidador (ou outros atuadores) for de fato implementado.
-
-### Contexto e adaptação
-
-- **Mudança de contexto:** transição dia/noite (variação de luminosidade e CCT) e transição atividade/imobilidade prolongada.
-- **Adaptação esperada:** ao anoitecer, o sistema poderá priorizar o monitoramento de CCT e sugerir ajuste de iluminação; ao detectar imobilidade fora do padrão (ex.: parado por muito tempo em horário normalmente ativo), poderá aumentar a frequência de amostragem do acelerômetro para confirmar se é um possível caso de queda antes de gerar qualquer alerta.
-
-### Fluxo do sistema
-
-O diagrama abaixo representa a modelagem do fluxo do sistema em produção, desde a coleta dos dados nos sensores do smartphone até o eventual aviso ao cuidador:
-
-```mermaid
-flowchart TD
-    A["Sensores do smartphone<br/>(Light/CCT, Acelerômetro,<br/>Orientação, Magnetômetro)"] --> B["App Android - Gateway"]
-    B --> C["Coleta e agregação de dados<br/>a cada 10s (intervalo editável)"]
-    C --> D["Criptografia do JSON"]
-    D --> E["Envio via Wi-Fi<br/>(rede local)"]
-    E --> F["Servidor Central"]
-    F --> G["Análise de dados"]
-    G --> H{"Situação merece<br/>urgência?"}
-    H -->|"Sim"| I["Notificação pop-up<br/>no celular do cuidador"]
-    H -->|"Não"| J["Dado apenas armazenado<br/>no aplicativo do cuidador<br/>(sem avisos, consulta posterior)"]
+```
+ App Android  ──┐
+ (SensorApp)    │  HTTP POST /dados (envelope cifrado)
+                ├──────────────────────────────────►  SensorServer
+ Wokwi ESP32    │  HTTP POST /dados (envelope cifrado)   (Flask)
+ (Sketch) ──► WokwiBridge ──┘
+   simulação      (bridge.py)
 ```
 
----
+- O **Sketch** roda dentro da extensão Wokwi do VS Code e simula um
+  dispositivo vestível com acelerômetro (MPU6050) que decide, por
+  histerese de dois limiares, se o idoso está em estado normal ou em
+  possível imobilidade.
+- O **WokwiBridge** lê a saída serial dessa simulação (via RFC2217, recurso
+  de depuração da extensão Wokwi), cifra cada evento e o envia por HTTP ao
+  servidor — o Wokwi simulado não fala HTTP diretamente, por isso a ponte é
+  necessária.
+- O **SensorServer** é o único ponto de recepção: tanto o app quanto o
+  bridge enviam para o mesmo endpoint `POST /dados`.
 
-## Fase de crescimento do projeto
+## Identificação de usuário
 
-**Importante: tudo o que está listado nesta seção são apenas ideias.** Nada aqui foi implementado, nem teve sua viabilidade averiguada — são apenas cenários que o grupo conseguiu observar como possíveis caminhos futuros. O fato de terem sido pensados **não significa que serão implementados**.
+Cada envio, de qualquer uma das duas fontes, carrega um `user_id` (número
+inteiro). Dados de fontes diferentes com o mesmo `user_id` são entendidos
+como pertencentes à mesma pessoa e são associados no armazenamento.
 
-Os sensores usados até agora foram escolhidos por não exigirem permissão especial no Android, o que permitiu validar rapidamente a viabilidade técnica do projeto. Para cobrir cenários mais críticos de assistência ao idoso, os seguintes caminhos estão sendo pensados (sem compromisso de implementação):
+- No **app**, o `user_id` é configurado pela tela **Configurações**, junto
+  com o IP e a porta do servidor, e fica salvo no celular.
+- No **wokwi**, o `user_id` é a constante `WOKWI_USER_ID`, definida no topo
+  de `WokwiBridge/bridge.py`.
 
-- **Microfone**, para detecção de sons de queda ou pedidos de ajuda;
-- **Contador de passos/giroscópio dedicado**, para refinar a detecção de atividade.
+Para que os dados das duas fontes sejam entendidos como do mesmo idoso, os
+dois valores precisam ser configurados com o **mesmo número**.
 
-Além disso, está sendo pensada a possibilidade de incorporar dados de uma **pulseira que o idoso usaria** (ex.: sensores de frequência cardíaca, oximetria, etc.). Como o grupo **não viabiliza, em hipótese alguma, a compra de sensores/dispositivos** para a realização do trabalho, todos os dados vindos dessa pulseira seriam **mockados (gerados aleatoriamente) dentro de um limite pré-estabelecido**, apenas para simular esse cenário e permitir explorar a ideia sem depender de hardware real.
+## Transporte e criptografia
+
+Toda mensagem enviada ao servidor — de qualquer fonte — é cifrada com
+AES-256-GCM usando uma chave compartilhada fixa (`crypto_utils.py` no
+servidor e no bridge; `CryptoUtils.kt` no app) e transportada como:
+
+```json
+{ "nonce": "...", "ciphertext": "..." }
+```
+
+O servidor decifra esse envelope da mesma forma para as duas fontes. O
+conteúdo decifrado, porém, não segue um schema único entre elas — cada
+fonte envia sua própria estrutura de JSON, compartilhando apenas dois
+campos de roteamento:
+
+- `user_id` (inteiro): identifica o idoso dono do dado.
+- `source` (`"app"` ou `"wokwi"`): identifica de qual fonte o dado veio.
+
+**Payload do app** inclui, além de `user_id` e `source`: `device_id`,
+`device_model`, `timestamp_envio`, `sensores` (mapa com as leituras dos
+sensores do celular) e, quando disponível, `leitura_ambiente` (evento
+estruturado de luminosidade usado na regra de alerta).
+
+**Payload do wokwi** (montado pelo bridge a partir do que o sketch imprime
+na serial) inclui, além de `user_id` e `source`: `eventType`
+(`imobilidade.leitura`, emitido a cada segundo, ou `imobilidade.decisao`,
+emitido só em transições de estado), `deviceId`, `entityId`, `eventTimeMs`
+(relógio interno do ESP32 simulado, não um horário absoluto), `sequence`,
+`value`, `unit` e `state`.
+
+## Armazenamento
+
+O servidor mantém, em memória, a leitura mais recente de cada fonte para
+cada `user_id`. A cada 1 segundo, uma linha é gravada em
+`SensorServer/dataUsers/usuario_<user_id>.jsonl`, combinando o que chegou
+de cada fonte naquela janela:
+
+```json
+{
+  "timestamp": "2026-09-17T22:48:03.061334+00:00",
+  "user_id": 1,
+  "app": { "device_id": "...", "sensores": { "...": "..." } },
+  "wokwi": { "eventType": "imobilidade.leitura", "value": 0.12, "state": "NORMAL" }
+}
+```
+
+Se, numa determinada janela de 1 segundo, apenas uma das fontes enviou
+dado, a chave da outra fica `null`. Se nenhuma das duas enviou nada naquele
+segundo, nenhuma linha é gravada.
+
+## Regra de alerta
+
+Os dados de `leitura_ambiente` do app passam por uma regra de luz
+inadequada (`regra_luz.py`): quando a condição de alerta é atingida, o
+servidor grava um arquivo `alerta_<device_id>_<timestamp>.json` em
+`dataUsers/`, simulando a notificação ao cuidador. Esse fluxo é
+independente da agregação por janela de 1s descrita acima e roda assim que
+o payload do app chega.
+
+Os eventos `imobilidade.decisao` vindos do wokwi são recebidos, validados
+no envelope (fonte e usuário) e armazenados normalmente dentro da chave
+`"wokwi"` do jsonl do usuário, junto com os demais eventos daquela fonte.
+
+## Estrutura do projeto
+
+```
+Flow-Unificado/
+├── SensorServer/      # servidor Flask único (recebe app + wokwi)
+│   ├── server.py
+│   ├── crypto_utils.py
+│   ├── regra_luz.py
+│   ├── requirements.txt
+│   └── dataUsers/      # arquivos .jsonl por usuário e alertas gerados
+├── SensorApp/          # app Android (Kotlin)
+├── WokwiBridge/         # ponte entre a simulação Wokwi e o servidor
+│   ├── bridge.py
+│   ├── crypto_utils.py
+│   └── requirements.txt
+├── Sketch/              # simulação Wokwi (ESP32 + MPU6050, detecção de imobilidade)
+│   ├── sketch.ino
+│   ├── diagram.json
+│   └── wokwi.toml
+└── INSTRUCOES.md
+```
+
+## App Android
+
+O APK já compilado está disponível na página de *releases* do repositório
+no GitHub do projeto.
+
+## Endpoints do servidor
+
+| Método | Rota      | Descrição                                                              |
+|--------|-----------|-------------------------------------------------------------------------|
+| POST   | `/dados`  | Recebe o envelope cifrado de uma das duas fontes (app ou wokwi).        |
+| GET    | `/dados`  | Lista, em memória, os últimos registros já agregados (uso de depuração).|
+| GET    | `/health` | Verificação simples de que o servidor está no ar.                       |
+| GET    | `/`       | Status geral do servidor.                                               |
