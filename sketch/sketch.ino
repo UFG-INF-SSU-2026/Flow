@@ -36,6 +36,9 @@ const int MPU_ADDR = 0x68;
 const char* DEVICE_ID = "esp32-decisao-imobilidade-01";
 const char* ENTITY_ID = "idoso-simulado-01";
 
+// ---- Versao do schema do payload (docs/arquitetura.md, secao 4.3) ----
+const int SCHEMA_VERSION = 2;
+
 // ---- Histerese em m/s² ----
 // Repouso no Wokwi: sliders zerados → magnitude ≈ 0 m/s²
 // Para simular imobilidade: deixe todos os sliders em zero
@@ -107,6 +110,7 @@ float calcMagnitude() {
 void emitirEvento(const char* eventType, const char* estadoTexto, float value) {
   sequence++;
   Serial.print("{");
+  Serial.print("\"schemaVersion\":"); Serial.print(SCHEMA_VERSION); Serial.print(",");
   Serial.print("\"eventType\":\""); Serial.print(eventType); Serial.print("\",");
   Serial.print("\"deviceId\":\""); Serial.print(DEVICE_ID); Serial.print("\",");
   Serial.print("\"entityId\":\""); Serial.print(ENTITY_ID); Serial.print("\",");
@@ -150,7 +154,8 @@ void setup() {
   int err = Wire.endTransmission();
 
   if (err != 0) {
-    Serial.print("{\"eventType\":\"sistema.erro\",\"state\":\"MPU_NAO_ENCONTRADO\",\"code\":");
+    Serial.print("{\"schemaVersion\":"); Serial.print(SCHEMA_VERSION);
+    Serial.print(",\"eventType\":\"sistema.erro\",\"state\":\"MPU_NAO_ENCONTRADO\",\"code\":");
     Serial.print(err);
     Serial.println("}");
     while (1) delay(100);

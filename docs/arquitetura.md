@@ -126,6 +126,7 @@ Após decifrado, o JSON emitido por `sketch.ino` e repassado por `bridge.py` (qu
 
 | Campo | Tipo | Descrição |
 | --- | --- | --- |
+| `schemaVersion` | inteiro | Versão do schema deste payload. Produtor atual (`sketch.ino`) sempre envia `2`. Verificado como primeiro passo da cascata de validação (seção 5.1); se ausente, o consumidor assume `1` (produtor desatualizado) e apenas loga um aviso — não rejeita o evento |
 | `eventType` | string | `"imobilidade.leitura"` (heartbeat) ou `"imobilidade.decisao"` (transição de estado) |
 | `deviceId` | string | Identificador fixo do dispositivo (`"esp32-decisao-imobilidade-01"`) |
 | `entityId` | string | Identificador da pessoa monitorada (`"idoso-simulado-01"`) |
@@ -139,15 +140,14 @@ Após decifrado, o JSON emitido por `sketch.ino` e repassado por `bridge.py` (qu
 
 ### 4.3 Versão do contrato
 
-**Versão atual: v1** (definida por este documento — a lista de campos da seção 4.2, o vocabulário `EVENTOS_ESPERADOS` e a faixa de `value` em `regra_imobilidade.py`). O requisito do marco é que a versão esteja **identificada**, não que esteja embutida no payload em trânsito — por isso a decisão deliberada aqui é manter o payload do wokwi enxuto (sem metadado de versionamento) e tratar a versão como propriedade do *código publicado no repositório*, e não do dado que trafega. Rastrear a versão pelo commit/tag do repositório é suficiente para esta escala do protótipo.
+**Versão atual: v2**, identificada tanto pelo código publicado no repositório (lista de campos da seção 4.2, vocabulário `EVENTOS_ESPERADOS` e faixa de `value` em `regra_imobilidade.py`) quanto, agora, pelo próprio payload em trânsito: `sketch.ino` envia `schemaVersion: 2` em todo evento emitido (heartbeat, decisão e `sistema.erro`), como primeiro campo do JSON.
 
-**Política de versionamento (para quando o contrato crescer além de um único produtor/consumidor combinando código):**
+**Compatibilidade com produtores mais antigos (sem `schemaVersion`):** o consumidor (`regra_imobilidade.validar_evento`) trata a ausência do campo como `schemaVersion = 1` — não rejeita o evento por isso, apenas registra um aviso no console do servidor (`schemaVersion=1 desatualizado`). O último `schemaVersion` recebido por dispositivo também fica disponível em `GET /estado/<device_id>` (`ultimo_schema_version`), como evidência observável de qual versão de produtor está em campo.
+
+**Política de versionamento (para quando o contrato crescer além do estado atual):**
 
 - **Mudança compatível** (adicionar um `state` novo ao enum de `imobilidade.decisao`, por exemplo) — não exige subir a versão; produtor e consumidor continuam entendendo o payload um do outro, e o consumidor mais antigo simplesmente rejeita o `state` novo até ser atualizado (comportamento já existente na cascata da seção 5.1).
-- **Mudança incompatível** (remover/renomear um campo, mudar o tipo de `value`, mudar a unidade de `eventTimeMs`) — é o gatilho para introduzir um campo `schemaVersion` no payload. Nesse ponto, produtor e consumidor deixam de poder assumir que estão sempre na mesma versão (por exemplo, se passarem a rodar em processos de deploy independentes, ou se um segundo tipo de dispositivo wokwi com firmware mais antigo continuar em campo), e a versão precisa viajar com o dado para o consumidor decidir como interpretá-lo — em vez de apenas rejeitar por não reconhecer os campos.
-- Quando isso acontecer, o campo entra como `schemaVersion` (inteiro, incremental), verificado como primeiro passo da cascata de validação em `regra_imobilidade.py`, e a tabela da seção 4.2 e o diagrama da seção 2 devem ser atualizados junto.
-
-Enquanto produtor e consumidor forem implantados juntos, a partir do mesmo commit — como é o caso hoje —, essa migração não é necessária: a versão documentada aqui já cumpre o requisito de "versão identificada".
+- **Mudança incompatível** (remover/renomear um campo, mudar o tipo de `value`, mudar a unidade de `eventTimeMs`) — é o gatilho para incrementar `SCHEMA_VERSION_ATUAL` em `regra_imobilidade.py` e `SCHEMA_VERSION` em `sketch.ino`, e para decidir se a versão antiga deve passar a ser rejeitada (hoje é apenas avisada) — nesse ponto, a tabela da seção 4.2 e o diagrama da seção 2 devem ser atualizados junto.
 
 ---
 
@@ -157,6 +157,7 @@ Enquanto produtor e consumidor forem implantados juntos, a partir do mesmo commi
 
 Antes de qualquer validação específica, `server.py` já exige `source ∈ {"app", "wokwi"}` e `user_id` inteiro (HTTP 400 fora disso). Para eventos do wokwi, a cascata roda em cima disso:
 
+0. **`schemaVersion` identificado** — não é um passo de rejeição: se ausente, assume-se `1` (produtor desatualizado); se menor que `SCHEMA_VERSION_ATUAL` (`2`), o servidor loga um aviso no console, mas o evento segue para os próximos passos normalmente.
 1. **Campos obrigatórios presentes** (`eventType`, `deviceId`, `entityId`, `eventTimeMs`, `sequence`, `value`, `unit`, `state`).
 2. **`eventType` no vocabulário conhecido:** `{"imobilidade.leitura", "imobilidade.decisao"}`.
 3. **`state` no enum esperado daquele `eventType`:**
@@ -164,7 +165,7 @@ Antes de qualquer validação específica, `server.py` já exige `source ∈ {"a
    - `imobilidade.decisao` → `{LEITURA_INVALIDA, LEITURA_FORA_DE_FAIXA, SUSPEITA_IMOBILIDADE, CONFIRMADO_OK, MOVIMENTO_RETOMADO, ALERTA_IMOBILIDADE, REARMADO_MANUAL}`
 4. **`value` dentro da faixa física plausível (0–30 m/s²)**, com duas exceções deliberadas e coerentes com o firmware: `LEITURA_INVALIDA` exige o sentinela `-1.0` (leitura falhou, não há magnitude real); `LEITURA_FORA_DE_FAIXA` exige `value > 30` (é o próprio evento que existe para reportar a anomalia — validar contra 0–30 rejeitaria o aviso).
 5. **`sequence` maior que o último conhecido para aquele `deviceId`** (`eh_duplicado` — dedup/idempotência; `sequence` é global por dispositivo, não por `eventType`).
-Evento que falha em qualquer passo é descartado e logado no console do servidor. A requisição HTTP ainda responde `200` — falha de conteúdo do evento não é tratada como falha de transporte.
+Evento que falha nos passos 1–5 é descartado e logado no console do servidor. A requisição HTTP ainda responde `200` — falha de conteúdo do evento não é tratada como falha de transporte.
 
 ### 5.2 Onde vive o estado e quem decide o quê
 
@@ -172,14 +173,14 @@ Evento que falha em qualquer passo é descartado e logado no console do servidor
 | --- | --- | --- |
 | Decisão de imobilidade (histerese, persistência, confirmação) | Produtor (`sketch.ino`) | O servidor não reimplementa a lógica de decisão — apenas reage ao `state` que chega |
 | Validação de schema/vocabulário/faixa/dedup | Consumidor (`regra_imobilidade.validar_evento` / `eh_duplicado`) | Roda a cada evento, antes de qualquer persistência |
-| Estado por dispositivo (`estado_atual`, `ultima_decisao`, `alerta_ativo`, `ultimo_sequence`) | Consumidor, em memória (`regra_imobilidade._estados: dict[deviceId, EstadoDispositivo]`) | Persiste **entre** janelas de agregação (não é limpo a cada flush de 1s); reinicia se o processo do servidor cair — aceito nesta fase de protótipo |
+| Estado por dispositivo (`estado_atual`, `ultima_decisao`, `alerta_ativo`, `ultimo_sequence`, `ultimo_schema_version`) | Consumidor, em memória (`regra_imobilidade._estados: dict[deviceId, EstadoDispositivo]`) | Persiste **entre** janelas de agregação (não é limpo a cada flush de 1s); reinicia se o processo do servidor cair — aceito nesta fase de protótipo |
 | Buffer de agregação app+wokwi (janela de 1s) | Consumidor, em memória (`server._buffer`) | Limpo a cada flush; não guarda histórico |
 | Geração da atuação (alerta) | Consumidor (`server._processar_evento_wokwi`) | Só grava um novo arquivo se `alerta_ativo` estiver `False` para aquele `deviceId` |
 
 ### 5.3 Efeito observável (item 4 do roteiro)
 
 - **Log:** `dataUsers/usuario_<user_id>.jsonl` — uma linha por janela de 1s, combinando a leitura mais recente de `app` e `wokwi` (fonte sem dado na janela fica `null`).
-- **Mudança de estado:** `GET /estado/<device_id>` retorna a tabela de estado persistente (`estado_atual`, `ultima_decisao`, `alerta_ativo`, `ultimo_sequence`, `ultima_atualizacao`) — independente do log, não é limpa a cada 1s.
+- **Mudança de estado:** `GET /estado/<device_id>` retorna a tabela de estado persistente (`estado_atual`, `ultima_decisao`, `alerta_ativo`, `ultimo_sequence`, `ultima_atualizacao`, `ultimo_schema_version`) — independente do log, não é limpa a cada 1s.
 - **Atuação:** ao chegar `imobilidade.decisao` com `state = ALERTA_IMOBILIDADE` (e nenhum alerta já ativo para aquele `deviceId`), o servidor grava `dataUsers/alerta_imobilidade_<device_id>_<timestamp>.json`. `alerta_ativo` só volta a `False` quando chega `CONFIRMADO_OK`, `MOVIMENTO_RETOMADO` ou `REARMADO_MANUAL`.
 
 ---
