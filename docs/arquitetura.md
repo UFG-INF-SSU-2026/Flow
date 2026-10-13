@@ -177,7 +177,7 @@ RBAC com escopo por pessoa, **negando por padrão**.
 Dois estágios de verificação:
 
 1. **Papel e permissão**, antes de decifrar o corpo (decorador `exige(permissao, fonte=...)`): token válido, papel com a permissão, fonte do token igual à exigida. Falha → `401` ou `403`.
-2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids` e `source` deve ser a `fonte` do token. Falha → `403`. Existe porque o `user_id` está dentro do envelope cifrado.
+2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids` e `source` deve ser a `fonte` do token. Falha → `403`. Payload **sem** `source` não é `403`: o servidor registra o erro no terminal e ignora os dados (`200`, como em 7). Existe porque o `user_id` está dentro do envelope cifrado.
 
 Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do token; o cliente não escolhe de quem recebe.
 
@@ -219,6 +219,7 @@ Fora disso **não há schema de aplicação unificado**: cada produtor define se
 | Retorno | App ou firmware | `POST /eventos` | `push.ack` (`ATIVADO`, `REJEITADO`) e `confirmacao.resposta` (`ESTOU_BEM`, `SEM_RESPOSTA`), com o `messageId` a que respondem. |
 | Push | Servidor | SSE | `queda.confirmacao_solicitada` (`timeoutMs`, `motivo`) e `queda.confirmacao_encerrada` (`resultado`). |
 | Comando serial | Ponte (servidor → firmware) | Serial local, texto, sem `schemaVersion` | `CMD;BUZZER_ON;<messageId>;<timeoutMs>` e `CMD;BUZZER_OFF;<messageId>;<motivo>`. |
+| Diagnóstico do firmware | Firmware via bridge | `POST /dados` | `sistema.erro`, com o código da falha (hoje `MPU_NAO_ENCONTRADO`, quando o MPU6050 não é detectado). Fica fora do vocabulário que o servidor processa: é descartado e logado, sem alerta e sem resposta de erro (`200`). |
 | Autenticação | App e bridge | `POST /auth/*` | Seção 4.2. |
 
 Detalhe campo a campo em `docs/schemas.md`.
@@ -450,6 +451,7 @@ Os dois dispositivos concretos são o **app Android** (11.1) e o **dispositivo W
 - MPU6050 em **±8 g** (`ACCEL_CONFIG = 0x10`, 4096 LSB/g), teto plausível 160 m/s²; amostragem a cada ~50 ms para o `valueMax` do ciclo de 1 s.
 - Lê comandos da serial sem bloquear: `CMD;BUZZER_ON;<messageId>;<timeoutMs>` e `CMD;BUZZER_OFF;<messageId>;<motivo>`.
 - **Buzzer** (pino D13, `tone`/`noTone`): liga com timeout válido (`0 < t ≤ BUZZER_MAX_MS`), responde `push.ack`. O botão "Estou bem" o desliga e emite `confirmacao.resposta ESTOU_BEM`; o fim do tempo emite `SEM_RESPOSTA`.
+- **Diagnóstico:** se não encontra o MPU6050, emite `sistema.erro` (`MPU_NAO_ENCONTRADO`); o evento segue pela ponte até `/dados` e o servidor o descarta e loga (6.2).
 - **Teto de segurança** `BUZZER_MAX_MS` (30 s): independente do servidor, impede que o buzzer fique ligado se o bridge ou o servidor falharem.
 - O botão "Estou bem" tem o mesmo significado na máquina de imobilidade do Marco 2 e no pedido do servidor: um clique vale para os dois, com efeitos independentes. O "Rearme" continua sendo o único que rearma a máquina local.
 
@@ -483,6 +485,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | Credencial errada repetida | Bloqueio temporário; negação em `auditoria.jsonl`. |
 | Dispositivo silencioso *(abstrato)* | Política registrada (alerta de "sem comunicação"), ainda sem rotina que a dispare; os dados para calculá-la existem (`null` no `.jsonl`, `ultima_atualizacao` na tabela de estado). |
 | Entrada inválida ou repetida | Descartada e logada; resposta `200`. |
+| MPU6050 não encontrado *(firmware)* | O firmware emite `sistema.erro` (`MPU_NAO_ENCONTRADO`); o servidor o descarta e loga, sem alerta ao cuidador. |
 
 ---
 
