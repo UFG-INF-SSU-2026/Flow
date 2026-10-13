@@ -2,10 +2,9 @@
 
 Este projeto une um app Android, uma simulação Wokwi (ESP32 + acelerômetro + buzzer), uma ponte (bridge) e um servidor central. O servidor recebe telemetria das duas fontes, associa-as à **mesma pessoa** pela conta autenticada, analisa o acelerômetro e, se concluir que o idoso provavelmente caiu, **empurra (push) um pedido de confirmação** de volta aos dispositivos.
 
-
 ## Estrutura
 
-```
+```dir
 Flow/
 ├── SensorServer/       # servidor central (Flask): autenticação, autorização, análise e push
 ├── SensorApp/          # app Android (Kotlin): telemetria + recebe o pedido de confirmação
