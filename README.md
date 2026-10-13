@@ -20,7 +20,16 @@ Idosos que vivem sozinhos ou com supervisão apenas parcial estão sujeitos a ri
 
 ## Estado atual do protótipo
 
-Já foi criado, instalado e testado em um aparelho Android um APK que extrai dados de sensores que **não exigem permissão especial** e os envia para um servidor na mesma rede local, em **lotes periódicos de 10 segundos** (intervalo editável). O APK mais recente está disponível [aqui](**https://github.com/UFG-INF-SSU-2026/Flow/releases/latest**).
+O protótipo tem um APK que extrai dados de sensores que **não exigem permissão especial** e os envia para um servidor na mesma rede local, **a cada 1 segundo** (intervalo editável), e uma simulação Wokwi (ESP32 + acelerômetro) ligada ao mesmo servidor por uma ponte. O APK mais recente está disponível [aqui](https://github.com/UFG-INF-SSU-2026/Flow/releases/latest).
+
+O projeto evolui por marcos, cada um registrado em `docs/`:
+
+| Marco | O que entregou | Documento |
+| --- | --- | --- |
+| 2 | Ciclo produtor → consumidor: dispositivo (app/wokwi) → gateway → servidor, com regras de decisão | `docs/arquitetura.md` |
+| 3 | **Autenticação, autorização e envio de mensagens do servidor** (servidor analisa → envia ao dispositivo) | `docs/marco3-autenticacao-autorizacao-push.md` |
+
+Os formatos de dados (versão 3) estão em `docs/schemas.md` e o passo a passo para rodar tudo está em `INSTRUCOES.md`. Este README descreve o sistema no estado do Marco 3.
 
 Os sensores dos quais já foram obtidos dados são:
 
@@ -62,9 +71,12 @@ Ainda faltam dimensões importantes de contexto (localização dentro da casa, s
 
 ### 3. Dispositivos e comunicação
 
-- **Smartphone Android:** concentra os sensores internos e realiza a coleta contínua dos dados.
-- **Servidor local:** recebe os dados enviados pelo aplicativo, na mesma rede Wi-Fi.
-- **Comunicação:** dados enviados em **lotes periódicos a cada 10 segundos** (intervalo editável), dentro da mesma sub-rede, sem exposição à internet nesta fase — o que reduz superfície de ataque, mas ainda não resolve questões de persistência, escalabilidade e acesso remoto por cuidadores.
+- **Smartphone Android:** concentra os sensores internos, realiza a coleta contínua e, desde o Marco 3, também **recebe do servidor** o pedido de confirmação quando uma queda é suspeitada.
+- **ESP32 simulado (Wokwi) + WokwiBridge:** segundo produtor de dados (acelerômetro MPU6050), com um **buzzer** e um botão "Estou bem". O ESP32 só fala serial; a ponte (bridge) faz a comunicação de rede por ele, nos dois sentidos.
+- **Servidor local:** recebe os dados, autentica e autoriza quem os envia, analisa o acelerômetro e envia mensagens de volta aos dispositivos, na mesma rede Wi-Fi.
+- **Comunicação de ida (dispositivo → servidor):** HTTP, a cada 1 segundo (intervalo editável), dentro da mesma sub-rede, sem exposição à internet nesta fase.
+- **Comunicação de volta (servidor → dispositivo):** push por **SSE**. O dispositivo abre a conexão com o servidor e o servidor empurra as mensagens por ela, então nenhum dispositivo precisa abrir porta para receber. No celular o canal só existe enquanto o app está aberto em primeiro plano (limitação assumida, ver `docs/marco3-autenticacao-autorizacao-push.md`).
+- **Persistência, escalabilidade e acesso remoto por cuidadores** continuam fora do alcance desta fase.
 
 > **Nota sobre produção:** o servidor local usado nesta fase de protótipo é uma solução temporária, pensada apenas para validar a viabilidade técnica dentro da mesma rede local. Em um cenário de produção, esse servidor local **seria substituído por um servidor central**, capaz de atender múltiplos idosos/residências, permitir acesso remoto dos cuidadores (fora da rede local) e resolver as questões de persistência e escalabilidade ainda não tratadas nesta fase.
 
@@ -76,7 +88,12 @@ A ideia central é que um **servidor central use os dados dos sensores para gera
 - **Indício de atividade/queda**, a partir do acelerômetro **LIS2DLC12** e dos sensores de orientação (**Device Orientation Wake Up**, **Orientation Sensor**, **Rotation Vector**): variações bruscas seguidas de imobilidade prolongada e mudança de orientação (por exemplo, o dispositivo passando de vertical para horizontal de forma abrupta) são indícios indiretos de queda ou de longos períodos parado no mesmo lugar.
 - **Contexto de uso do dispositivo**, a partir do **Device Orientation Wake Up**: indica quando o aparelho é manuseado, o que pode servir como proxy de interação/atividade do idoso com o ambiente.
 
-A única ação (atuação) já prevista pelo grupo é: **avisar o cuidador caso alguma informação obtida pelo sistema mereça ser informada** (por exemplo, um possível indício de queda ou uma condição de luz inadequada à noite). Outras ações poderão ser adicionadas futuramente, mas essa é a única definida até o momento.
+As ações (atuações) previstas pelo grupo são:
+
+- **Pedir confirmação ao idoso (Marco 3, foco no acelerômetro):** se o servidor concluir que o idoso provavelmente caiu (impacto seguido de imobilidade, ou imobilidade prolongada), ele envia uma mensagem solicitando confirmação. No **Wokwi**, isso aciona um buzzer, silenciado pelo botão "Estou bem"; no **celular**, toca um alerta sonoro e aparece o botão "Estou bem". O botão tem **tempo limite de 5 segundos** (configurável em um único ponto do servidor). A resposta do idoso, ou a falta dela, é **recebida e armazenada pelo servidor**; o que fazer com ela depois ainda não foi decidido.
+- **Avisar o cuidador** caso alguma informação obtida pelo sistema mereça ser informada (por exemplo, um possível indício de queda ou uma condição de luz inadequada à noite). Hoje isso é a gravação de um arquivo de alerta no servidor; ainda não existe um app do cuidador.
+
+Outras ações poderão ser adicionadas futuramente.
 
 > **Conclusão de viabilidade:** mesmo restrito a sensores sem permissão especial, o protótipo já demonstra viabilidade técnica — os dados coletados (especialmente luz/CCT e movimento) sustentam recomendações e indícios relevantes para o cuidado do idoso, validando a ideia antes de investir em sensores mais sensíveis.
 
@@ -84,7 +101,13 @@ A única ação (atuação) já prevista pelo grupo é: **avisar o cuidador caso
 
 O risco escolhido pelo grupo para ser priorizado é a **segurança dos dados**. Como o sistema lida com informações que revelam rotina, hábitos e possíveis condições de saúde do idoso, a segurança no transporte e armazenamento desses dados é tratada como prioridade em relação aos demais riscos identificados (confiabilidade/completude dos dados e consumo de energia/bateria).
 
-Atualmente, o único mecanismo de segurança pensado para o projeto é a **criptografia do JSON enviado** do smartphone para o servidor local, a cada lote de 10 segundos. Esse é um modelo inicial e propositalmente simples: com a evolução do projeto, **outros mecanismos de segurança poderão ser adicionados** (por exemplo, autenticação entre dispositivo e servidor, controle de acesso aos dados armazenados, ou uso de um canal de comunicação autenticado), mas nada além da criptografia do JSON está garantido ou implementado nesta fase.
+O projeto combina três mecanismos de segurança:
+
+- **Criptografia** (AES-256-GCM) de cada mensagem trocada com o servidor, nos dois sentidos, inclusive o push.
+- **Autenticação (Marco 3):** todo dispositivo entra com uma conta (login com senha, token de curta duração e renovação), em vez de apenas conhecer a chave de criptografia.
+- **Autorização (Marco 3):** cada conta tem um papel (hoje `idoso` e `dispositivo`; `cuidador` já reservado) e só envia ou recebe dados da **pessoa monitorada a que está vinculada**. O servidor confere a identidade pelo token, não pelo que o dispositivo declara. Rotas de depuração que expunham dados de todos exigem conta administrativa.
+
+Limitações assumidas: a chave de criptografia continua **compartilhada e fixa**, e o transporte continua HTTP sem TLS. Isso significa que quem captura o tráfego da rede local ainda consegue ler o token. Chave por dispositivo e TLS ficam como evolução (`docs/marco3-autenticacao-autorizacao-push.md`, seção 13).
 
 Vale notar que, mesmo com a comunicação restrita à rede local (sem exposição à internet nesta fase), dados de movimento e uso do dispositivo, ainda que indiretos, revelam rotina e hábitos do idoso — o que reforça a necessidade de cuidado com o armazenamento e o acesso a esses dados.
 
@@ -96,9 +119,9 @@ Vale notar que, mesmo com a comunicação restrita à rede local (sem exposiçã
 
 | Elemento | Itens identificados | Papel no sistema |
 | --- | --- | --- |
-| **Sensores** | TCS3701 Light / CCT, LIS2DLC12 Accelerometer, Device Orientation Wake Up, Orientation Sensor, GeoMagnetic Rotation Vector, Magnetometer (calibrado e não calibrado) | Percebem luminosidade, cor da luz, movimento e orientação, formando a base de contexto do sistema |
-| **Atuadores** | Aviso ao cuidador (única ação definida até o momento) | Notificar o cuidador quando o servidor identificar uma informação relevante nos dados coletados |
-| **Gateway** | O próprio smartphone Android | Agrega os dados dos sensores internos e os encaminha ao servidor local via Wi-Fi, em lotes a cada 10s, funcionando como ponto único de coleta e repasse |
+| **Sensores** | TCS3701 Light / CCT, LIS2DLC12 Accelerometer, Device Orientation Wake Up, Orientation Sensor, GeoMagnetic Rotation Vector, Magnetometer (calibrado e não calibrado); no Wokwi, acelerômetro MPU6050 | Percebem luminosidade, cor da luz, movimento e orientação, formando a base de contexto do sistema |
+| **Atuadores** | Alerta sonoro + botão "Estou bem" no app; buzzer + botão "Estou bem" + LEDs no Wokwi; aviso ao cuidador | Pedir confirmação ao idoso quando uma queda é suspeitada; notificar o cuidador quando o servidor identificar uma informação relevante |
+| **Gateway** | O smartphone Android (para os sensores do celular) e o `WokwiBridge` (para o ESP32 simulado) | Encaminham os dados ao servidor local via Wi-Fi, a cada 1s, e recebem as mensagens que o servidor envia de volta |
 
 ### Classificação
 
@@ -107,7 +130,7 @@ O sistema pode ser caracterizado, nesta fase, como:
 - **IoT (Internet das Coisas):** o smartphone atua como dispositivo conectado que envia dados continuamente a um servidor via rede.
 - **Aplicação ubíqua:** o sensoriamento é contínuo e não exige interação explícita do idoso, integrando-se de forma discreta à rotina.
 
-Ainda **não** se caracteriza plenamente como **sistema ciber-físico**, pois falta a etapa de atuação sobre o mundo físico (loop de controle fechado) — isso deve mudar quando o aviso ao cuidador (ou outros atuadores) for de fato implementado.
+Com o Marco 3, o sistema passa a **fechar o laço de percepção → decisão → atuação**: o servidor analisa o movimento e aciona um alerta sonoro (buzzer ou celular) para o idoso, que responde pelo botão. Isso o aproxima de um **sistema ciber-físico**. O aviso ao cuidador ainda não tem canal real de notificação.
 
 ### Contexto e adaptação
 
@@ -116,20 +139,26 @@ Ainda **não** se caracteriza plenamente como **sistema ciber-físico**, pois fa
 
 ### Fluxo do sistema
 
-O diagrama abaixo representa a modelagem do fluxo do sistema em produção, desde a coleta dos dados nos sensores do smartphone até o eventual aviso ao cuidador:
+O diagrama abaixo representa a modelagem do fluxo do sistema em produção, desde a coleta dos dados nos sensores até a confirmação do idoso e o eventual aviso ao cuidador:
 
 ```mermaid
 flowchart TD
-    A["Sensores do smartphone<br/>(Light/CCT, Acelerômetro,<br/>Orientação, Magnetômetro)"] --> B["App Android - Gateway"]
-    B --> C["Coleta e agregação de dados<br/>a cada 10s (intervalo editável)"]
-    C --> D["Criptografia do JSON"]
+    A["Sensores do smartphone<br/>(Light/CCT, Acelerômetro,<br/>Orientação, Magnetômetro)<br/>e acelerômetro do ESP32"] --> B["Gateway<br/>(App Android / WokwiBridge)"]
+    B --> C["Coleta e agregação de dados<br/>a cada 1s (intervalo editável)"]
+    C --> D["Criptografia do JSON<br/>+ token de autenticação"]
     D --> E["Envio via Wi-Fi<br/>(rede local)"]
-    E --> F["Servidor Central"]
+    E --> F["Servidor Central<br/>(autentica e autoriza)"]
     F --> G["Análise de dados"]
-    G --> H{"Situação merece<br/>urgência?"}
-    H -->|"Sim"| I["Notificação pop-up<br/>no celular do cuidador"]
-    H -->|"Não"| J["Dado apenas armazenado<br/>no aplicativo do cuidador<br/>(sem avisos, consulta posterior)"]
+    G --> H{"Queda provável?"}
+    H -->|"Sim"| I["Push ao dispositivo:<br/>pedido de confirmação"]
+    I --> J["Alerta sonoro + botão 'Estou bem'<br/>(app ou buzzer, prazo de 5s)"]
+    J --> K["Resposta do idoso<br/>armazenada no servidor"]
+    H -->|"Não"| L["Dado apenas armazenado<br/>(sem avisos, consulta posterior)"]
+    G --> M{"Situação merece<br/>urgência para o cuidador?"}
+    M -->|"Sim"| N["Aviso ao cuidador<br/>(visão de produto)"]
 ```
+
+O trecho **Servidor → push → alerta no dispositivo → resposta armazenada** é novo no Marco 3. O trecho do aviso ao cuidador é visão de produto: hoje o servidor apenas grava um arquivo de alerta.
 
 ---
 
