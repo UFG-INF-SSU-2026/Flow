@@ -12,24 +12,14 @@ Contrato do evento (definido na Atividade 02):
 from dataclasses import dataclass, field
 from datetime import datetime
 
-# ---------------------------------------------------------------------------
-# CONFIGURACOES DA REGRA (ajuste aqui se necessario)
-# ---------------------------------------------------------------------------
-CCT_MIN_VALIDO = 1000        # Kelvin - abaixo disso, leitura e descartada (fora de faixa)
-CCT_MAX_VALIDO = 12000       # Kelvin - acima disso, leitura e descartada (fora de faixa)
-CCT_LIMIAR_FRIO = 4500       # Kelvin - acima disso, luz e considerada "fria" (rica em azul)
-HORA_INICIO_NOITE = 18       # 18h
-HORA_FIM_NOITE = 6           # 06h (janela noturna: 18:00-06:00)
-LEITURAS_CONSECUTIVAS_PARA_ALERTA = 3   # debounce: evita alertar por 1 leitura isolada
+import const   # CCT_*, HORA_*, LEITURAS_CONSECUTIVAS_PARA_ALERTA, SCHEMA_VERSION_* (ver const.py)
 
 # Versao do schema do payload LeituraAmbiente (mesma ideia aplicada ao
 # contrato do wokwi, ver docs/arquitetura.md secao 4.3). O app atual
-# (MainActivity.kt) sempre envia schemaVersion=2. Eventos sem o campo
-# (app mais antigo/nao atualizado) sao tratados como versao 1 - nao sao
-# rejeitados, apenas logados como desatualizados (ver validar_evento).
-SCHEMA_VERSION_ATUAL = 2
-SCHEMA_VERSION_PADRAO = 1  # assumida quando o campo nao vem no payload
-# ---------------------------------------------------------------------------
+# (MainActivity.kt) sempre envia schemaVersion=3 (const.SCHEMA_VERSION_ATUAL).
+# Eventos sem o campo (app mais antigo/nao atualizado) sao tratados como
+# versao 1 (const.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
+# como desatualizados (ver validar_evento).
 
 
 class EventoInvalido(Exception):
@@ -42,7 +32,7 @@ class EstadoDispositivo:
     ultimo_seq_num: int | None = None
     leituras_consecutivas_condicao: int = 0
     alerta_ativo: bool = False
-    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou SCHEMA_VERSION_PADRAO, se ausente)
+    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const.SCHEMA_VERSION_PADRAO, se ausente)
 
 
 # Estado por dispositivo (em memoria; reinicia se o servidor reiniciar -
@@ -60,12 +50,12 @@ def validar_evento(evento: dict) -> None:
     """Valida schema + faixa fisica plausivel. Levanta EventoInvalido se falhar."""
     # 0. schemaVersion: identificacao/aviso, nao rejeita (mesma ideia do
     #    wokwi, ver regra_imobilidade.validar_evento). App atual sempre
-    #    manda 2; se ausente (app mais antigo), assume-se SCHEMA_VERSION_PADRAO.
-    schema_version = evento.get("schemaVersion", SCHEMA_VERSION_PADRAO)
-    if schema_version < SCHEMA_VERSION_ATUAL:
+    #    manda 3; se ausente (app mais antigo), assume-se SCHEMA_VERSION_PADRAO.
+    schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
+    if schema_version < const.SCHEMA_VERSION_ATUAL:
         print(
             f"  [app] aviso: evento leitura_ambiente com schemaVersion={schema_version} "
-            f"desatualizado (atual={SCHEMA_VERSION_ATUAL}), "
+            f"desatualizado (atual={const.SCHEMA_VERSION_ATUAL}), "
             f"device_id={evento.get('device_id')}"
         )
 
@@ -80,7 +70,7 @@ def validar_evento(evento: dict) -> None:
     if not isinstance(luminosidade, (int, float)) or luminosidade < 0:
         raise EventoInvalido(f"luminosidade fora de faixa: {luminosidade}")
 
-    if not isinstance(cct, (int, float)) or not (CCT_MIN_VALIDO <= cct <= CCT_MAX_VALIDO):
+    if not isinstance(cct, (int, float)) or not (const.CCT_MIN_VALIDO <= cct <= const.CCT_MAX_VALIDO):
         raise EventoInvalido(f"cct fora de faixa: {cct}")
 
     try:
@@ -101,7 +91,7 @@ def eh_duplicado(evento: dict) -> bool:
 
 def _eh_noite(event_time: datetime) -> bool:
     hora = event_time.hour
-    return hora >= HORA_INICIO_NOITE or hora < HORA_FIM_NOITE
+    return hora >= const.HORA_INICIO_NOITE or hora < const.HORA_FIM_NOITE
 
 
 def avaliar_regra(evento: dict) -> dict | None:
@@ -116,7 +106,7 @@ def avaliar_regra(evento: dict) -> dict | None:
     estado = _estado_do(device_id)
     event_time = datetime.fromisoformat(evento["event_time"])
 
-    condicao_presente = _eh_noite(event_time) and evento["cct"] > CCT_LIMIAR_FRIO
+    condicao_presente = _eh_noite(event_time) and evento["cct"] > const.CCT_LIMIAR_FRIO
 
     if not condicao_presente:
         # condicao nao se sustenta -> reseta contador e permite novo episodio no futuro
@@ -130,7 +120,7 @@ def avaliar_regra(evento: dict) -> dict | None:
         # ja alertamos para este episodio, nao repete a cada 10s
         return None
 
-    if estado.leituras_consecutivas_condicao >= LEITURAS_CONSECUTIVAS_PARA_ALERTA:
+    if estado.leituras_consecutivas_condicao >= const.LEITURAS_CONSECUTIVAS_PARA_ALERTA:
         estado.alerta_ativo = True
         return {
             "tipo": "alerta_luz_inadequada",
@@ -141,7 +131,7 @@ def avaliar_regra(evento: dict) -> dict | None:
             "seq_num": evento["seq_num"],
             "mensagem": (
                 f"Luz fria (CCT={evento['cct']}K) detectada durante a noite "
-                f"({LEITURAS_CONSECUTIVAS_PARA_ALERTA} leituras consecutivas). "
+                f"({const.LEITURAS_CONSECUTIVAS_PARA_ALERTA} leituras consecutivas). "
                 "Pode inibir a producao de melatonina do idoso."
             ),
         }

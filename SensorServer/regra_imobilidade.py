@@ -18,18 +18,13 @@ lado a lado na verificacao oral.
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-# ---------------------------------------------------------------------------
-# CONFIGURACOES DA REGRA
-# ---------------------------------------------------------------------------
-VALUE_MIN_PLAUSIVEL = 0.0     # m/s2 - piso fisico plausivel para uma leitura real
-VALUE_MAX_PLAUSIVEL = 30.0    # m/s2 - teto fisico plausivel (mesmo limite do firmware)
+import const   # ACEL_MIN/MAX_PLAUSIVEL, SCHEMA_VERSION_ATUAL/PADRAO (ver const.py)
 
 # Versao do schema do payload wokwi (docs/arquitetura.md, secao 4.3).
-# O produtor atual (sketch.ino) sempre envia schemaVersion=2. Eventos sem o
-# campo (produtor mais antigo/nao atualizado) sao tratados como versao 1 -
-# nao sao rejeitados, apenas logados como desatualizados (ver validar_evento).
-SCHEMA_VERSION_ATUAL = 2
-SCHEMA_VERSION_PADRAO = 1  # assumida quando o campo nao vem no payload
+# O produtor atual (sketch.ino) sempre envia schemaVersion=3 (const.SCHEMA_VERSION_ATUAL).
+# Eventos sem o campo (produtor mais antigo/nao atualizado) sao tratados como
+# versao 1 (const.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
+# como desatualizados (ver validar_evento).
 
 # Vocabulario conhecido: para cada eventType, quais valores de "state" sao
 # aceitos. Vem direto da maquina de estados de sketch.ino (nomeEstado() +
@@ -72,7 +67,7 @@ class EstadoDispositivo:
     ultima_decisao: str | None = None       # ultimo state de imobilidade.decisao
     alerta_ativo: bool = False              # evita reemitir arquivo de alerta para o mesmo episodio
     ultima_atualizacao: str | None = None   # ISO 8601, para saber ha quanto tempo o device fala com o servidor
-    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou SCHEMA_VERSION_PADRAO, se ausente)
+    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const.SCHEMA_VERSION_PADRAO, se ausente)
 
 
 # Estado por dispositivo (em memoria; reinicia se o servidor reiniciar,
@@ -96,12 +91,12 @@ def validar_evento(evento: dict) -> None:
         0. schemaVersion (apenas identificacao/aviso, nao rejeita)
         1. eventType pertence ao vocabulario conhecido
         2. state pertence ao enum esperado daquele eventType
-        3. value dentro da faixa fisica plausivel (0-30 m/s2)
+        3. value dentro da faixa fisica plausivel (0-160 m/s2)
 
     A faixa fisica (passo 3) e verificada de forma coerente com o que o
     proprio firmware envia: LEITURA_INVALIDA usa o sentinela -1.0 (leitura
     falhou, nao ha magnitude) e LEITURA_FORA_DE_FAIXA reporta magnitude
-    real acima do teto (>30) - validar esses dois contra 0-30 rejeitaria
+    real acima do teto (>160) - validar esses dois contra 0-160 rejeitaria
     exatamente os eventos que existem para *avisar* sobre a anomalia.
     Levanta EventoInvalido se qualquer passo falhar.
     """
@@ -110,11 +105,11 @@ def validar_evento(evento: dict) -> None:
     #    antigo), assume-se SCHEMA_VERSION_PADRAO (1). Uma versao desatualizada
     #    nao invalida o evento - so gera um aviso explicito no console, para
     #    dar visibilidade de que ha um produtor fora da versao atual em campo.
-    schema_version = evento.get("schemaVersion", SCHEMA_VERSION_PADRAO)
-    if schema_version < SCHEMA_VERSION_ATUAL:
+    schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
+    if schema_version < const.SCHEMA_VERSION_ATUAL:
         print(
             f"  [wokwi] aviso: evento com schemaVersion={schema_version} "
-            f"desatualizado (atual={SCHEMA_VERSION_ATUAL}), "
+            f"desatualizado (atual={const.SCHEMA_VERSION_ATUAL}), "
             f"deviceId={evento.get('deviceId')}"
         )
 
@@ -140,6 +135,12 @@ def validar_evento(evento: dict) -> None:
     if not isinstance(value, (int, float)):
         raise EventoInvalido(f"value nao numerico: {value!r}")
 
+    # sequence precisa ser inteiro: eh_duplicado compara com o ultimo (seq <= ultimo). Um valor nao numerico
+    # aceito aqui seria gravado como referencia e faria TODO evento seguinte do dispositivo falhar (R-06).
+    sequence = evento["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int):
+        raise EventoInvalido(f"sequence nao inteiro: {sequence!r}")
+
     # 3. faixa fisica plausivel, com as duas excecoes explicitas do firmware
     if state == "LEITURA_INVALIDA":
         if value != -1.0:
@@ -147,15 +148,15 @@ def validar_evento(evento: dict) -> None:
                 f"LEITURA_INVALIDA deveria vir com o sentinela -1.0, veio {value}"
             )
     elif state == "LEITURA_FORA_DE_FAIXA":
-        if value <= VALUE_MAX_PLAUSIVEL:
+        if value <= const.ACEL_MAX_PLAUSIVEL:
             raise EventoInvalido(
-                f"LEITURA_FORA_DE_FAIXA deveria vir com value > {VALUE_MAX_PLAUSIVEL}, veio {value}"
+                f"LEITURA_FORA_DE_FAIXA deveria vir com value > {const.ACEL_MAX_PLAUSIVEL}, veio {value}"
             )
     else:
-        if not (VALUE_MIN_PLAUSIVEL <= value <= VALUE_MAX_PLAUSIVEL):
+        if not (const.ACEL_MIN_PLAUSIVEL <= value <= const.ACEL_MAX_PLAUSIVEL):
             raise EventoInvalido(
                 f"value fora da faixa fisica plausivel "
-                f"({VALUE_MIN_PLAUSIVEL}-{VALUE_MAX_PLAUSIVEL}): {value}"
+                f"({const.ACEL_MIN_PLAUSIVEL}-{const.ACEL_MAX_PLAUSIVEL}): {value}"
             )
 
 
@@ -187,7 +188,7 @@ def processar_evento(evento: dict) -> dict | None:
     device_id = str(evento["deviceId"])
     estado = _estado_do(device_id)
     estado.ultima_atualizacao = _agora_iso()
-    estado.ultimo_schema_version = evento.get("schemaVersion", SCHEMA_VERSION_PADRAO)
+    estado.ultimo_schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
 
     event_type = evento["eventType"]
     state = evento["state"]
