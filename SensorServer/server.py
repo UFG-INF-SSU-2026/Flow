@@ -135,7 +135,7 @@ def _gravar_usuario(user_id: int, fontes: dict) -> None:
 
 def _flush_iteracao() -> None:
     """Uma passada do flush: esvazia o buffer e grava uma linha por usuario.
-    Cada usuario tem a sua propria protecao (R-05): a falha de um nao impede a gravacao dos outros.
+    Cada usuario tem a sua propria protecao: a falha de um nao impede a gravacao dos outros.
     A linha do usuario que falhou se perde (o buffer ja foi esvaziado); o erro fica no log."""
     with _buffer_lock:
         _buffer_local_copy = {uid: dict(v) for uid, v in _buffer.items()}
@@ -155,7 +155,7 @@ def _flush_loop() -> None:
         time.sleep(const.JANELA_AGREGACAO_S)
         try:
             _flush_iteracao()
-        except Exception as e:  # noqa: BLE001  (R-05: a thread nunca pode morrer em silencio)
+        except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
             print(f"  [flush] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
@@ -187,7 +187,7 @@ def _processar_leitura_ambiente(payload: dict, device_id: str) -> None:
 
 
 def _falha_fluxo_legado(nome: str, e: Exception) -> None:
-    """Falha inesperada num fluxo legado (payload malformado ou bug): so loga. A resposta segue 200 (R-06)."""
+    """Falha inesperada num fluxo legado (payload malformado ou bug): so loga. A resposta segue 200."""
     print(f"  [{nome}] falha no fluxo legado (ignorada): {type(e).__name__}: {str(e)[:200]}")
 
 
@@ -266,7 +266,7 @@ def _avaliar_queda(user_id: int, source: str, payload: dict, alerta_imobilidade:
 
 def _vigia_iteracao() -> None:
     """Uma passada do vigia: encerra os episodios vencidos e despacha o encerramento de cada um.
-    Cada encerramento tem a sua propria protecao (R-05): a falha de um nao impede os seguintes.
+    Cada encerramento tem a sua propria protecao: a falha de um nao impede os seguintes.
     O episodio ja esta marcado como encerrado em regra_queda antes do despacho; se o despacho falhar,
     so o aviso ao dispositivo se perde e o erro fica no log."""
     for enc in regra_queda.vigiar():
@@ -282,7 +282,7 @@ def _vigia_loop() -> None:
         time.sleep(const.INTERVALO_VIGIA_S)
         try:
             _vigia_iteracao()
-        except Exception as e:  # noqa: BLE001  (R-05: a thread nunca pode morrer em silencio)
+        except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
             print(f"  [vigia] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
@@ -295,14 +295,14 @@ def _decifrar_corpo():
         corpo = json.loads(decrypt_payload(envelope["nonce"], envelope["ciphertext"]))
     except (DecryptionError, json.JSONDecodeError) as e:
         return jsonify({"status": "erro", "mensagem": f"Falha ao decifrar/parsear: {e}"}), 400
-    if not isinstance(corpo, dict):   # lista, numero, texto, null: 400 em vez de AttributeError (R-09)
+    if not isinstance(corpo, dict):   # lista, numero, texto, null: 400 em vez de AttributeError
         return jsonify({"status": "erro", "mensagem": "Corpo decifrado invalido: esperado um objeto JSON"}), 400
     return corpo
 
 
 def _ler_user_id(valor) -> int | None:
     """user_id aceito: inteiro (nao booleano) ou string de digitos. Qualquer outra coisa -> None (400).
-    Evita que True vire 1 e que 1.9 vire 1 silenciosamente (R-09)."""
+    Evita que True vire 1 e que 1.9 vire 1 silenciosamente."""
     if isinstance(valor, bool):
         return None
     if isinstance(valor, int):
@@ -454,7 +454,7 @@ def receber_dados():
     # nivel superior do registro gravado: user_id/timestamp)
     dados_fonte = {k: v for k, v in payload.items() if k not in ("source", "user_id")}
 
-    # versao verificada acompanha o payload (uso da fusao por versao, R-07). Feito DEPOIS de montar
+    # versao verificada acompanha o payload (uso da fusao por versao). Feito DEPOIS de montar
     # dados_fonte, para nao alterar o registro gravado no jsonl.
     payload["schemaVersion"] = versao
 
@@ -471,14 +471,14 @@ def receber_dados():
     alerta_imobilidade = None
     alimenta_queda = True   # 9.1: validar -> deduplicar -> avaliar. Invalido ou duplicado nao chega a regra_queda
     if source == "app":
-        # A analise de queda NAO depende do fluxo legado do app (R-06): se ele falhar, loga e segue.
+        # A analise de queda NAO depende do fluxo legado do app: se ele falhar, loga e segue.
         try:
             _processar_leitura_ambiente(payload, device_id)
         except Exception as e:
             _falha_fluxo_legado("leitura_ambiente", e)
         alimenta_queda = not regra_queda.eh_duplicado_app(user_id, device_id, payload)
     elif source == "wokwi":
-        # Para o wokwi a queda depende so do estado ACEITO (R-03): excecao no fluxo legado = nao aceito.
+        # Para o wokwi a queda depende so do estado ACEITO: excecao no fluxo legado = nao aceito.
         try:
             resultado = _processar_evento_wokwi(payload, device_id)
         except Exception as e:

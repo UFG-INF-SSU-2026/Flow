@@ -136,7 +136,7 @@ def validar_evento(evento: dict) -> None:
         raise EventoInvalido(f"value nao numerico: {value!r}")
 
     # sequence precisa ser inteiro: eh_duplicado compara com o ultimo (seq <= ultimo). Um valor nao numerico
-    # aceito aqui seria gravado como referencia e faria TODO evento seguinte do dispositivo falhar (R-06).
+    # aceito aqui seria gravado como referencia e faria TODO evento seguinte do dispositivo falhar.
     sequence = evento["sequence"]
     if isinstance(sequence, bool) or not isinstance(sequence, int):
         raise EventoInvalido(f"sequence nao inteiro: {sequence!r}")

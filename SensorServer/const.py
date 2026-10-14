@@ -85,7 +85,7 @@ SCRYPT_N = 2 ** 14
 SCRYPT_R = 8
 SCRYPT_P = 1
 
-# Tamanho maximo (caracteres) de device_id aceito no login (auth.device_id_valido, R-09).
+# Tamanho maximo (caracteres) de device_id aceito no login (auth.device_id_valido).
 # device_id vira chave do hub SSE; acima disso o login responde 400.
 MAX_DEVICE_ID_LEN = 64
 
@@ -95,7 +95,7 @@ MAX_DEVICE_ID_LEN = 64
 
 # Tamanho (bytes) a partir do qual auditoria.jsonl e rotacionado para
 # auditoria.1.jsonl. Evita encher o disco com negacoes repetidas.
-# [ainda nao usada: R-11a]
+# [ainda nao usada]
 AUDITORIA_MAX_BYTES = 5 * 1024 * 1024
 
 # ===========================================================================
@@ -152,12 +152,12 @@ T_POS_IMPACTO_S = 3
 
 # Depois de um impacto, se passar mais que isto (s) sem leitura aproveitavel,
 # o impacto e descartado e a maquina volta a OBSERVANDO. A calibrar.
-# [ainda nao usada: R-07]
+# [ainda nao usada]
 INTERVALO_MAX_ENTRE_LEITURAS_S = 3
 
 # Idade maxima (s) da ultima leitura de uma fonte para participar da fusao de
 # fontes. Deve ser menor ou igual a INTERVALO_MAX_ENTRE_LEITURAS_S.
-# [ainda nao usada: R-07]
+# [ainda nao usada]
 JANELA_FUSAO_S = 2.0
 
 # Intervalo minimo (s) entre episodios do mesmo usuario, contado a partir do
@@ -166,7 +166,7 @@ COOLDOWN_S = 60
 
 # No maximo um log de "leitura desatualizada" por (usuario, fonte, versao)
 # neste intervalo (s), para nao inundar o console.
-# [ainda nao usada: R-07]
+# [ainda nao usada]
 LOG_DESATUALIZADA_INTERVALO_S = 60
 
 # Regressao (s) de timestamp_envio do app acima da qual se assume reajuste de
@@ -176,7 +176,7 @@ TOLERANCIA_RELOGIO_S = 60
 
 # Tempo (s) que o mapa messageId -> episodio guarda entradas, para classificar
 # respostas tardias.
-# [ainda nao usada: R-08]
+# [ainda nao usada]
 RETENCAO_MENSAGENS_S = 3600
 
 # Valores de 'motivo' na mensagem e no registro do episodio.
@@ -204,7 +204,7 @@ TAMANHO_ANEL = 20
 
 # Capacidade da fila de cada conexao SSE. Fila cheia: a conexao e fechada para
 # forcar reconexao com Last-Event-ID.
-# [ainda nao usada: R-10a]
+# [ainda nao usada]
 TAMANHO_FILA_CONEXAO = 16
 
 # ===========================================================================

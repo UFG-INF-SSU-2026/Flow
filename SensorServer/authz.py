@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from flask import g, jsonify, request
 
 import auth
-import const   # DATA_DIR (e, no R-11a, AUDITORIA_MAX_BYTES)
+import const   # DATA_DIR (e AUDITORIA_MAX_BYTES)
 
 POLITICA: dict[str, set[str]] = {
     "idoso":       {"dados:enviar", "eventos:enviar", "push:receber"},

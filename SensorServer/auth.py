@@ -174,7 +174,7 @@ def _registrar_falha(ident: str, agora: float) -> None:
 
 
 def device_id_valido(device_id) -> bool:
-    """None (sem dispositivo) ou string de ate const.MAX_DEVICE_ID_LEN caracteres. device_id vira chave do hub SSE (R-09)."""
+    """None (sem dispositivo) ou string de ate const.MAX_DEVICE_ID_LEN caracteres. device_id vira chave do hub SSE."""
     return device_id is None or (isinstance(device_id, str) and len(device_id) <= const.MAX_DEVICE_ID_LEN)
 
 
