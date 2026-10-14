@@ -50,18 +50,19 @@ Módulos do servidor:
 
 | Arquivo | Responsabilidade |
 | --- | --- |
-| `server.py` | Orquestração: rotas, pipeline de ingestão, buffer de agregação, despacho dos pedidos de confirmação. |
+| `server.py` | Orquestração: rotas, pipeline de ingestão, buffer de agregação, threads de flush e vigia, despacho dos pedidos de confirmação. |
+| `const.py` | **Constantes e parâmetros ajustáveis** (porta, caminhos, validade de tokens, versão do contrato, limiares, timeouts, retenções). Definição única de cada valor. Ver 14. |
 | `auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens. Não conhece Flask. |
 | `authz.py` | **Autorização:** papel → permissões, escopo por pessoa, auditoria. |
 | `mensagens.py` | Mensagens de push (criação, validade) e validação dos eventos de retorno. Sem I/O de rede. |
-| `sse_hub.py` | Mecanismo comum de push por SSE: conexões, filas, keepalive, replay. |
+| `sse_hub.py` | Mecanismo comum de push por SSE: conexões, fila limitada por conexão, keepalive, replay. |
 | `canal_app.py` | **Servidor → app.** Rota `GET /push/app` e envio ao alvo `app`. |
 | `canal_wokwi.py` | **Servidor → Wokwi.** Rota `GET /push/wokwi` e envio ao alvo `wokwi`. |
-| `regra_queda.py` | Análise do acelerômetro, episódios de confirmação, timeout, armazenamento da resposta. |
+| `regra_queda.py` | Análise do acelerômetro (fusão das fontes por usuário), episódios de confirmação, timeout, mapa `messageId` → episódio, armazenamento da resposta. |
 | `regra_luz.py`, `regra_imobilidade.py` | Regras de negócio (luz inadequada à noite; imobilidade prolongada). |
 | `crypto_utils.py` | Envelope AES-256-GCM. |
 
-Dependências: `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais nem `regra_imobilidade` (devolve uma decisão, `server.py` despacha); `auth` não conhece Flask.
+Dependências: `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; é `server.py` que cria a mensagem e a despacha); `auth` não conhece Flask. `const.py` é um módulo folha: não importa nada do projeto, e os demais fazem `import const` e leem `const.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
 
 ### 2.3 Elementos abstratos (visão do sistema)
 
@@ -93,6 +94,7 @@ flowchart LR
     subgraph SRV["SensorServer"]
         AUTH["auth.py"]
         AUTHZ["authz.py"]
+        SRVP["server.py (orquestra)"]
         RQ["regra_queda.py"]
         MSG["mensagens.py"]
         CA["canal_app.py"]
@@ -104,7 +106,9 @@ flowchart LR
 
     APP -->|"POST /auth/login, /dados, /eventos"| AUTH
     BR  -->|"POST /auth/login, /dados, /eventos"| AUTH
-    AUTH --> AUTHZ --> RQ --> MSG
+    AUTH --> AUTHZ --> SRVP
+    SRVP --> RQ
+    SRVP --> MSG
     MSG --> CA
     MSG --> CW
     CA -.->|"SSE GET /push/app"| APP
@@ -150,7 +154,7 @@ Tudo que se conecta ao servidor é uma **conta** com `papel`, `user_ids` (pessoa
 | `idoso` | App do idoso | `app` | Exatamente um `user_id`. |
 | `dispositivo` | Dispositivo Wokwi (a conta é usada pela ponte, em nome do conjunto firmware + ponte) | `wokwi` | Exatamente um `user_id`. |
 | `admin` | Operação/depuração | — | Lê `GET /dados` e `GET /estado/<id>`. |
-| `cuidador` *(abstrato)* | App do cuidador | — | Reservado; `user_ids` é lista para vincular várias pessoas. |
+| `cuidador` *(abstrato)* | App do cuidador | — | Reservado; `user_ids` é lista para vincular várias pessoas. A política vigente concede **conjunto vazio** de permissões (negar por padrão); a coluna `cuidador` da tabela 4.3 é o desenho futuro, sem implementação. |
 
 O `user_id` é uma consequência da conta: não é digitado no app nem no bridge. Dois produtores da mesma pessoa têm contas apontando para o mesmo `user_id`, e é isso que faz o servidor agregá-los.
 
@@ -177,11 +181,11 @@ RBAC com escopo por pessoa, **negando por padrão**.
 Dois estágios de verificação:
 
 1. **Papel e permissão**, antes de decifrar o corpo (decorador `exige(permissao, fonte=...)`): token válido, papel com a permissão, fonte do token igual à exigida. Falha → `401` ou `403`.
-2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids` e `source` deve ser a `fonte` do token. Falha → `403`. Payload **sem** `source` não é `403`: o servidor registra o erro no terminal e ignora os dados (`200`, como em 7). Existe porque o `user_id` está dentro do envelope cifrado.
+2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids` e `source` deve ser a `fonte` do token. Falha → `403`. Payload **sem** `source` válido (ausente ou fora de `app`/`wokwi`) é recusado com `400` antes da checagem de escopo, em `/dados` e em `/eventos`: nenhum caminho aceita dado ou evento sem `source`. `source` presente e diferente da fonte do token é `403`. O `user_id` precisa ser inteiro (ou string só de dígitos); booleano, decimal ou outro tipo é `400`. Esse estágio existe porque o `user_id` está dentro do envelope cifrado.
 
 Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do token; o cliente não escolhe de quem recebe.
 
-**Auditoria:** toda negação (`401`/`403`) vai para `dataUsers/auditoria.jsonl` (instante, rota, motivo, conta, IP), nunca o conteúdo da requisição.
+**Auditoria:** toda negação (`401`/`403`) vai para `dataUsers/auditoria.jsonl` (instante, rota, motivo, conta, IP), nunca o conteúdo da requisição. O arquivo é rotacionado por tamanho: ao passar de `AUDITORIA_MAX_BYTES` (5 MB) vira `auditoria.1.jsonl`, sobrescrevendo o anterior, e um novo começa; o espaço máximo fica em torno do dobro do limite. A rotação existe porque o estágio 1 roda antes de decifrar, e quem está na rede poderia encher o disco com negações sem conhecer a chave.
 
 ---
 
@@ -229,7 +233,7 @@ Detalhe campo a campo em `docs/schemas.md`.
 - **`timeoutMs` é relativo**, nunca um prazo absoluto: celular e servidor não têm relógios sincronizados. `issuedAt`/`expiresAt` servem ao servidor e ao bridge.
 - **Idempotência:** o dispositivo ignora `messageId` já tratado.
 - **Faixa física plausível:** aceleração de `0` a `160` m/s² (o sensor do Wokwi opera em ±8 g, magnitude máxima mensurável ≈136 m/s²; o teto é o mesmo do app).
-- **Versionamento tolerante, por schema:** versão ausente = 1; telemetria com versão anterior à atual do seu schema é aceita e logada como desatualizada (não alimenta a regra de queda); versão maior que a atual é descartada e logada. A versão atual de cada schema está em `docs/schemas.md`.
+- **Versionamento tolerante, por schema:** a versão atual de cada schema está em `docs/schemas.md` e é definida em um único lugar do servidor (`const.SCHEMA_VERSION_ATUAL`); nenhum outro ponto do código escreve o número. Versão ausente = 1. Versão de `1` até a atual é **aceita e usada**, e as regras logam o aviso de "desatualizada". Versão maior que a atual, abaixo da mínima ou que não seja inteiro é descartada e logada (resposta em 7). Na análise de queda a versão tem papel próprio: entre as leituras de um usuário vale a de maior versão presente (9.2).
 
 ---
 
@@ -247,6 +251,8 @@ Detalhe campo a campo em `docs/schemas.md`.
 | `/`, `/health` | GET | pública | Disponibilidade. |
 
 O servidor escuta em `0.0.0.0:5000` e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`; conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
+
+Entrada malformada **antes** de haver conteúdo interpretável é `400`: corpo decifrado que não é um objeto JSON, `source` ausente ou inválido, `user_id` inválido, `device_id` inválido no login (não string ou acima de 64 caracteres). `Last-Event-ID` inválido nunca é erro: vale `0`. `schemaVersion` não suportado em `/dados` e `/eventos` responde `200` com `descartado: true` e `motivo: "schemaVersion_nao_suportado"`, e o conteúdo não chega ao buffer nem às regras; em `/auth/login` e `/auth/refresh`, a versão maior que a atual ou inválida é `400` (a ausência é aceita).
 
 ---
 
@@ -298,21 +304,56 @@ As fontes medem coisas diferentes: no Wokwi o repouso é magnitude ≈ 0; no cel
 
 O pico existe porque uma amostra por segundo perderia o impacto, que dura frações de segundo: o firmware amostra o sensor a cada ~50 ms e o app a ~50 Hz, e ambos enviam o máximo da janela.
 
+**Só leitura válida e não repetida alimenta a regra.** A telemetria do wokwi passa antes pela validação e pela deduplicação de `regra_imobilidade` (evento inválido ou duplicado não chega a `regra_queda`). A do app é deduplicada pelo `timestamp_envio` (epoch ms, raiz do payload), por `(user_id, source, device_id)`: valor menor ou igual ao último aceito é duplicado; se regredir mais que `TOLERANCIA_RELOGIO_S` (60 s), considera-se reajuste de relógio do celular e o valor vira a nova referência, para não bloquear a análise. Payload sem `acelerometro` aproveitável, ou wokwi sem os campos de leitura, simplesmente não contribui.
+
 ### 9.2 Gatilhos
 
 | Gatilho | `motivo` | Fontes | Detecção |
 | --- | --- | --- | --- |
-| **A** (preferencial) impacto seguido de imobilidade | `IMPACTO_SEGUIDO_DE_IMOBILIDADE` | app e wokwi | Máquina por usuário e fonte, abaixo. |
+| **A** (preferencial) impacto seguido de imobilidade | `IMPACTO_SEGUIDO_DE_IMOBILIDADE` | app e wokwi | Máquina de estados **por usuário**, alimentada pelas leituras de todas as fontes (9.2.1). |
 | **B** imobilidade prolongada | `IMOBILIDADE_PROLONGADA` | wokwi | Alerta de `regra_imobilidade`, repassado por `server.py` a `regra_queda.abrir_por_imobilidade`. |
 
 ```mermaid
 stateDiagram-v2
     [*] --> OBSERVANDO
-    OBSERVANDO --> POS_IMPACTO: pico >= LIMIAR_IMPACTO
-    POS_IMPACTO --> OBSERVANDO: dinâmica >= LIMIAR_REPOUSO (houve movimento)
-    POS_IMPACTO --> Episodio: dinâmica < LIMIAR_REPOUSO por T_POS_IMPACTO_S
+    OBSERVANDO --> POS_IMPACTO: leitura usada com pico >= LIMIAR_IMPACTO da sua fonte
+    POS_IMPACTO --> OBSERVANDO: leitura usada com pico >= LIMIAR_REPOUSO da sua fonte (houve movimento)
+    POS_IMPACTO --> OBSERVANDO: mais de INTERVALO_MAX_ENTRE_LEITURAS_S sem leitura usada (impacto descartado)
+    POS_IMPACTO --> Episodio: sem movimento por T_POS_IMPACTO_S
     Episodio --> OBSERVANDO
 ```
+
+### 9.2.1 Fusão de fontes e prioridade por versão
+
+O mesmo idoso pode estar com o celular e com o dispositivo Wokwi ao mesmo tempo. A máquina é **uma por usuário** e usa as leituras das duas fontes, de modo que um movimento visto por qualquer dispositivo cancela a suspeita de impacto visto por outro.
+
+| Termo | Definição |
+| --- | --- |
+| Leitura | Amostra aproveitável de uma fonte, já validada e deduplicada (9.1): fonte, `device_id`, versão, dinâmica atual, pico da janela e instante de chegada (relógio do servidor). |
+| Leitura fresca | A última leitura de cada dispositivo (`fonte` + `device_id`) com no máximo `JANELA_FUSAO_S` (2 s) de idade. |
+| Versão de referência | A **maior** versão entre as leituras frescas do usuário naquele instante. É relativa ao que está presente, não à versão atual do contrato: assim o modo degradado funciona quando só há dispositivos antigos. |
+| Leitura usada | Leitura fresca da versão de referência. Entre várias leituras usadas vale o máximo (qualquer uma pode abrir ou cancelar a suspeita). |
+| Leitura desatualizada | Leitura fresca de versão menor que a de referência. Fica **fora do sinal**, é logada (no máximo uma vez a cada 60 s por usuário, fonte e versão) e não renova o relógio da máquina. |
+| Impacto | Leitura usada com pico `>= LIMIAR_IMPACTO` da sua fonte. |
+| Movimento | Leitura usada com pico `>= LIMIAR_REPOUSO` da sua fonte. O que conta é o **pico da janela**, não a última amostra: um movimento entre amostras não passa despercebido. |
+
+Cada leitura usada move a máquina **uma única vez, na chegada**; a leitura de impacto não é recontada como movimento nem como novo impacto quando outra fonte chega depois. Os limiares são por fonte, então combinar por máximo equivale a "alguma leitura usada alcança o limiar da sua própria fonte", sem misturar unidades. Consequência assumida: para concluir "parado", **nenhuma** leitura usada pode ter alcançado o repouso da sua fonte.
+
+Regras da máquina:
+
+- Em `OBSERVANDO`, um impacto leva a `POS_IMPACTO` e guarda o instante.
+- Em `POS_IMPACTO`, um movimento volta a `OBSERVANDO`; se a mesma leitura também for impacto, recomeça em `POS_IMPACTO` com novo instante. Sem movimento por `T_POS_IMPACTO_S`, abre o episódio.
+- Em `POS_IMPACTO`, se passar mais de `INTERVALO_MAX_ENTRE_LEITURAS_S` (3 s, a calibrar) sem nenhuma leitura usada, o impacto é descartado: uma única leitura calma depois de um silêncio longo não prova imobilidade.
+
+Dados degradados:
+
+| Situação | Tratamento |
+| --- | --- |
+| App v1 ou v2 (sem bloco `acelerometro`) | Não gera leitura; continua alimentando o buffer e a regra de luz. |
+| Wokwi v1 ou v2 (sem `valueMax`) | Gera leitura com pico igual ao valor da amostra e marca `degradada`. Se só houver dispositivos antigos, eles são a referência. |
+| Versão maior que a atual | Descartada antes de chegar à regra (6.3). |
+
+Nada disso altera o gatilho B, o episódio único, o cooldown nem o ciclo de confirmação. Quando os dois gatilhos disparam, vale o primeiro a chegar.
 
 A preferência pelo gatilho A é temporal: ele age cerca de `T_POS_IMPACTO_S` (3 s) depois do impacto, enquanto o B só chega depois da persistência (5 s) e da janela de confirmação local (8 s) do firmware. O B cobre quedas sem impacto detectável (desmaio, queda lenta).
 
@@ -330,7 +371,8 @@ stateDiagram-v2
 - **Um único episódio aberto por `user_id`**, qualquer que seja o número de fontes e gatilhos; após o encerramento, `COOLDOWN_S` até o próximo.
 - O pedido vai a **todos os dispositivos** do usuário com canal ativo, na mesma mensagem (mesmo `messageId`).
 - A primeira resposta `ESTOU_BEM` encerra o episódio (`CONFIRMADO`) e o servidor envia `queda.confirmacao_encerrada` aos canais, para que o outro dispositivo cale o alarme. Resposta tardia é armazenada como tardia e não reabre nada.
-- Um vigia (a cada 1 s) encerra como `EXPIRADO` o episódio cujo prazo venceu.
+- **O episódio de um retorno é o da sua `messageId`**, resolvido por um mapa `messageId` → (usuário, episódio, validade) preenchido a cada pedido emitido. Retorno (`push.ack`, `SEM_RESPOSTA` ou `ESTOU_BEM`) de episódio já encerrado, inclusive de um anterior ao mais recente, é gravado com `tardia: true`. Retorno de `messageId` desconhecida ou de outro usuário é gravado com `episodeId: null` e `mensagem_desconhecida: true` e não encerra nada. Só `ESTOU_BEM` de mensagem conhecida com episódio aberto encerra como `CONFIRMADO`. O mapa é podado pelo vigia, `RETENCAO_MENSAGENS_S` (1 h) depois de a mensagem expirar.
+- Um vigia (a cada 1 s) encerra como `EXPIRADO` o episódio cujo prazo venceu. Falha ao gravar ou despachar o encerramento de um episódio não impede os demais nem derruba a thread; o episódio fica encerrado e o erro vai para o log. A thread de flush do buffer tem a mesma proteção, por usuário.
 
 ```mermaid
 sequenceDiagram
@@ -348,7 +390,7 @@ sequenceDiagram
     S-->>O: SSE queda.confirmacao_encerrada
 ```
 
-### 9.4 Parâmetros (topo de `regra_queda.py`)
+### 9.4 Parâmetros (`const.py`)
 
 | Constante | Padrão | Observação |
 | --- | --- | --- |
@@ -358,10 +400,15 @@ sequenceDiagram
 | `LIMIAR_REPOUSO` | wokwi 2, app 1,5 (m/s²) | |
 | `T_POS_IMPACTO_S` | 3 | Imobilidade exigida após o impacto. |
 | `COOLDOWN_S` | 60 | Entre episódios do mesmo usuário. |
+| `JANELA_FUSAO_S` | 2 | Idade máxima de uma leitura para participar da fusão (9.2.1). |
+| `INTERVALO_MAX_ENTRE_LEITURAS_S` | 3 | Sem leitura usada por mais que isso, o impacto é descartado. A calibrar. |
+| `LOG_DESATUALIZADA_INTERVALO_S` | 60 | Frequência máxima do log de leitura desatualizada. |
+| `TOLERANCIA_RELOGIO_S` | 60 | Regressão de `timestamp_envio` acima da qual a deduplicação do app assume reajuste de relógio. |
+| `RETENCAO_MENSAGENS_S` | 3600 | Tempo que o mapa `messageId` → episódio guarda a entrada depois de a mensagem expirar. |
 
 ### 9.5 Armazenamento
 
-`dataUsers/confirmacoes_usuario_<user_id>.jsonl`, uma linha por ocorrência com `timestamp`: `episodio.aberto`, `push.entrega` (resultado por canal), `push.ack`, `confirmacao.resposta`, `episodio.encerrado`. **É tudo que o servidor faz com a resposta do idoso**; o uso posterior dessa informação não está definido.
+`dataUsers/confirmacoes_usuario_<user_id>.jsonl`, uma linha por ocorrência com `timestamp`: `episodio.aberto`, `push.entrega` (resultado por canal), `push.ack`, `confirmacao.resposta`, `episodio.encerrado`. Todo retorno leva o `episodeId` da sua `messageId` (ou `null`, com `mensagem_desconhecida: true`) e, quando o episódio já estava encerrado, `tardia: true`. A linha `episodio.aberto` do gatilho A registra também a fusão: `fonte_do_disparo`, `versao_referencia`, `fontes_usadas` e `fontes_desatualizadas` (campos em `docs/schemas.md`). **É tudo que o servidor faz com a resposta do idoso**; o uso posterior dessa informação não está definido.
 
 ---
 
@@ -388,9 +435,10 @@ Tipos: `queda.confirmacao_solicitada` e `queda.confirmacao_encerrada` (`payload.
 
 ### 10.2 Hub SSE (`sse_hub.py`)
 
-- Registro `(user_id, canal) → conexões`. Nova conexão do mesmo `device_id` substitui a anterior.
-- Cada evento SSE: `id:` (contador por usuário e canal), `event: push`, `data:` (envelope cifrado). Comentário `: keepalive` a cada 15 s.
-- **Replay:** anel das últimas 20 mensagens por usuário e canal; na reconexão com `Last-Event-ID`, reenvia só o **não expirado**, com `timeoutMs` **recalculado** para o tempo restante.
+- Registro `(user_id, canal) → conexões`. Nova conexão do mesmo `device_id` substitui a anterior. A conexão só é registrada quando o stream de fato começa; um cliente que cai antes disso não deixa conexão fantasma.
+- Cada evento SSE: `id:` (contador por usuário e canal), `event: push`, `data:` (envelope cifrado). Comentário `: keepalive` a cada 15 s. O contador parte de um valor derivado do instante de subida do servidor (em segundos, para caber em inteiro de 32 bits), de modo que o `Last-Event-ID` guardado pelo cliente nunca fica à frente do contador depois de um reinício.
+- **Fila por conexão:** pequena (`TAMANHO_FILA_CONEXAO`, 16), em memória. É só o amortecedor entre quem publica e a thread que escreve no stream, não uma fila de mensagens. Cliente que não consome e enche a fila tem a conexão fechada e não conta como entregue; ao reconectar com `Last-Event-ID` recebe o que ainda não expirou.
+- **Replay:** anel das últimas 20 mensagens por usuário e canal; na reconexão com `Last-Event-ID`, reenvia só o **não expirado**, com `timeoutMs` **recalculado** para o tempo restante. O replay entra na fila antes de a conexão ficar visível para novas publicações, então os `id` saem em ordem crescente; se houver mais pendentes que a fila comporta, vão os mais recentes. O servidor não define o cabeçalho `Connection` (é específico de salto e fica com o servidor HTTP).
 - **Presença:** o hub informa se há conexão ativa por canal, de onde vem o resultado de entrega `ENTREGUE_AO_CANAL` ou `SEM_CANAL_ATIVO`.
 
 ### 10.3 Canais
@@ -473,15 +521,18 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | --- | --- |
 | Falha de rede no envio (app ou bridge) | Evento descartado; o ciclo seguinte envia dados frescos. Sem fila. |
 | Fonte de dados indisponível (serial) | O bridge reconecta sozinho (`RECONECTAR_A_CADA_S`). |
-| Nenhum canal ativo no pedido | `push.entrega = SEM_CANAL_ATIVO`; o episódio segue até o prazo e fecha `EXPIRADO`. Não há fila: o pedido não vale depois de expirar. |
+| Nenhum canal ativo no pedido | `push.entrega = SEM_CANAL_ATIVO`; o episódio segue até o prazo e fecha `EXPIRADO`. Não há fila nem retransmissão: o anel guarda a mensagem só até expirar, e um dispositivo que conecte antes do `expiresAt` a recebe com `timeoutMs` reduzido (a linha `push.entrega` continua `SEM_CANAL_ATIVO`). Depois de expirar, o pedido não vale. |
 | Bridge conectado, firmware mudo (simulação pausada) | Entrega ao canal, mas nenhum `push.ack`; o bridge descarta comandos expirados; o firmware tem o teto do buzzer. |
 | Conexão SSE cai | Reconexão com recuo exponencial e `Last-Event-ID`; reenvio só do não expirado, `timeoutMs` recalculado. |
+| Cliente SSE conectado que não consome | Fila de 16 enche, o servidor fecha a conexão; o cliente reconecta e recebe o não expirado. |
+| Falha ao gravar um encerramento, o flush de um usuário ou despachar um canal | Registrada no log; não derruba as threads de vigia e de flush nem impede os demais episódios ou usuários. |
 | Token expira com o stream aberto | `event: reautenticar`, fechamento, renovação e reconexão. |
 | Refresh recusado | Bridge refaz login com o segredo do ambiente; app pede nova autenticação. |
-| Servidor reinicia | Episódios em memória se perdem (expirariam em segundos); sessões persistem; streams reconectam sozinhos. |
+| Servidor reinicia | Episódios e o mapa de mensagens em memória se perdem (expirariam em segundos); sessões persistem; streams reconectam sozinhos, e os novos `id` de push são maiores que os da execução anterior. |
 | `messageId` repetido | Ignorado pelo dispositivo. |
-| Resposta duplicada ou tardia | Armazenada; não reabre nem altera episódio encerrado. |
+| Resposta duplicada ou tardia | Armazenada com `tardia: true` e o `episodeId` da sua mensagem; não reabre nem altera episódio encerrado. `messageId` desconhecida: `mensagem_desconhecida: true`. |
 | Duas fontes ou dois gatilhos disparam | Um episódio só. |
+| Dispositivos de versões diferentes do mesmo usuário | Vale a maior versão presente; as menores ficam fora do sinal e são logadas (9.2.1). |
 | Credencial errada repetida | Bloqueio temporário; negação em `auditoria.jsonl`. |
 | Dispositivo silencioso *(abstrato)* | Política registrada (alerta de "sem comunicação"), ainda sem rotina que a dispare; os dados para calculá-la existem (`null` no `.jsonl`, `ultima_atualizacao` na tabela de estado). |
 | Entrada inválida ou repetida | Descartada e logada; resposta `200`. |
@@ -521,13 +572,13 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | ambiente do servidor | Opcionais; padrão `contas.json`, `sessoes.json`. |
 | `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_BRIDGE_DEVICE` | ambiente do bridge | Os dois primeiros são obrigatórios. |
 | Usuário e senha, IP e porta | tela "Configurações" do app | |
-| Timeout do botão, limiares, cooldown | topo de `regra_queda.py` | Sem recompilar app nem firmware. |
-| Validade dos tokens, bloqueio | topo de `auth.py` | |
+| Timeout do botão, limiares, cooldown, fusão de fontes, retenções | `SensorServer/const.py` | Sem recompilar app nem firmware. |
+| Porta, pasta de dados, validade dos tokens, bloqueio de login, rotação da auditoria, fila do SSE, versão atual do contrato | `SensorServer/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
 | Versão do core ESP32 | `arduino-cli core list` | 3.x (usa `tone`/`noTone`). |
 
 Ordem de subida: contas criadas → servidor → simulação Wokwi (aba visível, `rfc2217ServerPort = 4000`) → bridge → app. O firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
 
-Arquivos produzidos em `dataUsers/`: `usuario_<id>.jsonl` (agregado), `confirmacoes_usuario_<id>.jsonl`, `auditoria.jsonl`, `alerta_*.json`, `alerta_imobilidade_*.json`.
+Arquivos produzidos em `dataUsers/`: `usuario_<id>.jsonl` (agregado), `confirmacoes_usuario_<id>.jsonl`, `auditoria.jsonl` (e `auditoria.1.jsonl` depois da rotação), `alerta_*.json`, `alerta_imobilidade_*.json`. O `device_id` que entra no nome dos arquivos de alerta é sanitizado (só `A-Z a-z 0-9 _ . -`, até 64 caracteres).
 
 ---
 

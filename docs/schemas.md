@@ -27,9 +27,10 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 
 - **Envelope de transporte** (idêntico em todas as rotas e no push): `{"nonce": "<base64>", "ciphertext": "<base64>"}`, AES-256-GCM. Os schemas abaixo descrevem o **texto decifrado**.
 - **Autenticação:** toda rota, exceto `/`, `/health`, `/auth/login` e `/auth/refresh`, exige `Authorization: Bearer <access_token>`.
-- **`schemaVersion`** é obrigatório **na raiz** de todo payload de produtor e se refere à versão do schema daquele payload (ver tabela de versões atuais). Se ausente, o servidor assume `1`.
-  - Telemetria com versão **anterior à atual** do seu schema é aceita como legado (log "desatualizado"; não alimenta a regra de queda).
-  - Versão **maior que a atual** do schema é descartada e logada.
+- **`schemaVersion`** é obrigatório **na raiz** de todo payload de produtor e se refere à versão do schema daquele payload (ver tabela de versões atuais). Se ausente, o servidor assume `1`. A versão **mais recente** do contrato é definida num único lugar do servidor (`const.SCHEMA_VERSION_ATUAL`); `const.SCHEMA_VERSION_MINIMA` (hoje `1`) é a menor aceita.
+  - Versão **de `1` até a mais recente** é aceita e **usada**, inclusive a anterior à atual (as regras logam o aviso "desatualizada"). Na regra de queda a versão decide a prioridade entre dispositivos do mesmo usuário (arquitetura, 9.2.1); wokwi v1/v2 (sem `valueMax`) alimentam a regra de forma degradada, e app v1/v2 (sem `acelerometro`) não geram leitura de aceleração.
+  - Versão **maior que a mais recente**, menor que a mínima, não inteira (inclui `"3"` e `3.0`) ou booleana é **descartada e logada**. Em `/dados` e `/eventos` a resposta é `200` com `{"status": "ok", "descartado": true, "motivo": "schemaVersion_nao_suportado"}` e o conteúdo não chega ao buffer nem às regras. Em `/auth/login` e `/auth/refresh` a resposta é `400` (a ausência é aceita).
+- **`source`** é obrigatório e deve ser `app` ou `wokwi` em `/dados` e `/eventos`; ausente ou inválido = `400`. **`user_id`** deve ser inteiro ou string só de dígitos; booleano ou decimal = `400`. O corpo decifrado deve ser um objeto JSON; senão `400`.
 - **`user_id` e `source`** continuam no payload de telemetria, mas **devem coincidir com as claims do token** (`user_ids`, `fonte`); divergência = `403`.
 - **Tempos:** `issuedAt`/`expiresAt` em ISO 8601 UTC com milissegundos e `Z`. Prazos para o dispositivo são **relativos** (`timeoutMs`), nunca absolutos.
 
@@ -60,6 +61,8 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 | `imobilidade.decisao` | `SUSPEITA_IMOBILIDADE`, `CONFIRMADO_OK`, `MOVIMENTO_RETOMADO`, `ALERTA_IMOBILIDADE`, `REARMADO_MANUAL`, `LEITURA_INVALIDA`, `LEITURA_FORA_DE_FAIXA` |
 
 Exceções de `value`: `LEITURA_INVALIDA` → exatamente `-1.0`; `LEITURA_FORA_DE_FAIXA` → `> 160`. Com o sensor em ±8 g a magnitude máxima mensurável é ≈136 m/s², então `LEITURA_FORA_DE_FAIXA` só ocorreria se a faixa do sensor fosse ampliada; o teto é mantido igual ao do app por consistência de contrato.
+
+Versões 1 e 2 não trazem `valueMax`: a leitura entra na regra de queda com o pico igual a `value`, marcada como degradada.
 
 > O bridge acrescenta `"user_id": <int>` e `"source": "wokwi"` antes de cifrar, **tanto na telemetria quanto nos eventos de retorno (seção 2)**. O `user_id` vem do login do bridge, não de configuração manual; o servidor confere ambos contra o token.
 
@@ -152,6 +155,8 @@ Bloco da telemetria do app (versionado pela raiz). Derivado do `TYPE_ACCELEROMET
 | `amostras` | inteiro | `>= 1`, amostras na janela |
 | `janela_ms` | inteiro | `> 0`, duração da janela |
 
+**Deduplicação:** o servidor descarta a leitura de aceleração cujo `timestamp_envio` (epoch ms, raiz do payload) seja menor ou igual ao último aceito para `(user_id, source, device_id)`. Se o valor regredir mais de 60 s (`TOLERANCIA_RELOGIO_S`), considera-se reajuste de relógio do celular e o valor passa a ser a nova referência. Payload sem `acelerometro` aproveitável ou sem `timestamp_envio` numérico não é duplicata: simplesmente não contribui.
+
 ### Backlog de mudanças (telemetria do app, incluindo `acelerometro`)
 
 | Versão | Mudança |
@@ -216,6 +221,8 @@ event: push
 data: {"nonce": "...", "ciphertext": "..."}
 ```
 
+`id` é um inteiro crescente por usuário e canal. Parte de um valor derivado do instante de subida do servidor (em segundos), para nunca ficar atrás do `Last-Event-ID` guardado pelo cliente depois de um reinício; cabe em inteiro de 32 bits, e o cliente deve guardá-lo como tal ou maior. `Last-Event-ID` ausente, vazio, não numérico ou negativo vale `0`. Cada conexão tem fila pequena (16); cliente que não consome e a enche é desconectado e, ao reconectar com `Last-Event-ID`, recebe o que ainda não expirou.
+
 Eventos SSE sem `data` cifrado: `event: reautenticar` (token a expirar; cliente renova e reconecta) e comentários `:keepalive` a cada 15 s.
 
 Texto decifrado do `data`:
@@ -256,7 +263,7 @@ Requisição:
 | `identificador` | string | id da conta |
 | `segredo` | string | senha |
 | `fonte` | string | fontes atuais: `app` e `wokwi` (uma nova fonte entra aqui); deve estar nas `fontes` permitidas da conta |
-| `device_id` | string | identifica o dispositivo (vai para a claim do token) |
+| `device_id` | string | identifica o dispositivo (vai para a claim do token); até 64 caracteres, senão `400` |
 
 Resposta `200`:
 
@@ -284,7 +291,7 @@ Falhas: `401` credencial inválida (resposta idêntica para conta inexistente e 
 
 `POST /auth/refresh` (corpo e resposta em envelope) · **Versão atual: 3**
 
-Requisição: `schemaVersion` (versão atual deste schema) e `refresh_token`. Resposta: mesma da seção 7. O refresh anterior é invalidado; reutilizá-lo devolve `401`.
+Requisição: `schemaVersion` (versão atual deste schema; ausente é aceita) e `refresh_token`. Resposta: mesma da seção 7. O refresh anterior é invalidado; reutilizá-lo devolve `401`.
 
 ### Backlog de mudanças
 
@@ -299,13 +306,35 @@ Requisição: `schemaVersion` (versão atual deste schema) e `refresh_token`. Re
 | HTTP | Quando |
 | --- | --- |
 | `401` | token ausente, malformado, expirado ou com assinatura inválida; credencial de login inválida |
+| `400` | corpo que não é envelope ou não decifra para objeto JSON; `source` ausente ou inválido; `user_id` inválido; `device_id` inválido no login; `schemaVersion` inválido ou maior que a atual em login/refresh |
 | `403` | papel sem a permissão da rota; `fonte` do token diferente da exigida; `user_id`/`source` do payload divergem do token |
 | `429` | bloqueio temporário de login |
 
-Corpo: `{"status": "erro", "codigo": "<texto curto>"}`. Falhas de conteúdo de evento já autenticado continuam descartadas internamente com resposta `200`.
+Corpo: `{"status": "erro", "codigo": "<texto curto>"}`. Falhas de conteúdo de evento já autenticado continuam descartadas internamente com resposta `200` (inclui `schemaVersion` não suportado em `/dados` e `/eventos`, com `descartado: true`). Toda negação `401`/`403` vai para `auditoria.jsonl`, rotacionado por tamanho.
 
 ### Backlog de mudanças
 
 | Versão | Mudança |
 | --- | --- |
 | v3 (criação) | Códigos `401`, `403` e `429` e formato do corpo de erro criados junto com a autenticação. |
+
+---
+
+## 10. Registro de confirmações (saída do servidor)
+
+`dataUsers/confirmacoes_usuario_<user_id>.jsonl` · uma linha JSON por ocorrência. É saída do servidor, não um contrato de produtor, e **não tem `schemaVersion`**.
+
+Campos comuns: `timestamp` (ISO 8601 UTC) e `tipo`: `episodio.aberto`, `push.entrega`, `push.ack`, `confirmacao.resposta` ou `episodio.encerrado`. Toda linha traz `episodeId`.
+
+| `tipo` | Campos próprios |
+| --- | --- |
+| `episodio.aberto` | `motivo` (`IMPACTO_SEGUIDO_DE_IMOBILIDADE` ou `IMOBILIDADE_PROLONGADA`). Só no gatilho A: `fonte_do_disparo` (fonte da leitura que fechou a condição), `versao_referencia`, `fontes_usadas` (lista de `{fonte, device_id, versao, degradada}`) e `fontes_desatualizadas` (lista de `{fonte, device_id, versao}`, vazia se não houve) |
+| `push.entrega` | `messageId`, `messageType`, `canal`, `resultado`: `ENTREGUE_AO_CANAL`, `SEM_CANAL_ATIVO` ou `TIPO_NAO_SUPORTADO` |
+| `push.ack`, `confirmacao.resposta` | `eventType`, `state`, `messageId`, `device_id`, `source`. `episodeId` é o da `messageId`; `tardia: true` se o episódio já estava encerrado; `mensagem_desconhecida: true` (com `episodeId: null`) se a `messageId` é desconhecida ou de outro usuário |
+| `episodio.encerrado` | `resultado`: `CONFIRMADO` ou `EXPIRADO` |
+
+### Backlog de mudanças
+
+| Versão | Mudança |
+| --- | --- |
+| sem versão | Campos de fusão no `episodio.aberto` do gatilho A; `tardia` para qualquer retorno de episódio encerrado; `mensagem_desconhecida`. |
