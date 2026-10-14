@@ -12,8 +12,8 @@ Regras de uso:
   - Politica e vocabulario (POLITICA, FONTE_DO_PAPEL, EVENTOS_ESPERADOS,
     EVENTOS_RETORNO, tipos de mensagem) ficam nos modulos que os usam.
 
-Constantes marcadas com "[ainda nao usada: R-xx]" ja estao definidas aqui para
-que quem implementar o item correspondente nao precise mexer neste arquivo.
+Constantes marcadas com "[ainda nao usada]" ja estao definidas aqui para
+que quem implementar o recurso correspondente nao precise mexer neste arquivo.
 """
 import os
 
@@ -204,8 +204,8 @@ AVISO_REAUTENTICAR_S = 5
 TAMANHO_ANEL = 20
 
 # Capacidade da fila de cada conexao SSE. Fila cheia: a conexao e fechada para
-# forcar reconexao com Last-Event-ID.
-# [ainda nao usada]
+# forcar reconexao com Last-Event-ID. Menor valor = fecha mais cedo clientes
+# lentos; deve ser pequeno (o anel de replay maior que a fila e truncado).
 TAMANHO_FILA_CONEXAO = 16
 
 # ===========================================================================
