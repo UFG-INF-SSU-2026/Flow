@@ -5,6 +5,7 @@ Negar por padrao: o que nao esta em POLITICA e proibido.
 import functools
 import json
 import os
+import threading
 from datetime import datetime, timezone
 
 from flask import g, jsonify, request
@@ -25,13 +26,26 @@ class ForaDeEscopo(Exception):
     pass
 
 
+_auditoria_lock = threading.Lock()   # Flask roda com uma thread por requisicao: rotacao e escrita sao atomicas
+
+
 def auditar(rota: str, status: int, codigo: str, conta: str | None = None) -> None:
     """Registra negacoes (401/403). Nunca grava o conteudo da requisicao."""
     os.makedirs(const.DATA_DIR, exist_ok=True)
     linha = {"timestamp": datetime.now(timezone.utc).isoformat(), "rota": rota,
              "status": status, "motivo": codigo, "conta": conta, "ip": request.remote_addr}
-    with open(os.path.join(const.DATA_DIR, "auditoria.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+    caminho = os.path.join(const.DATA_DIR, "auditoria.jsonl")
+    with _auditoria_lock:
+        # Rotacao por tamanho: o estagio 1 roda antes de decifrar, entao quem esta na rede pode gerar negacoes
+        # sem conhecer a chave. Ao passar de const.AUDITORIA_MAX_BYTES o arquivo vira auditoria.1.jsonl
+        # (sobrescrevendo o anterior) e um novo comeca. Guarda no maximo ~2x o limite.
+        try:
+            if os.path.getsize(caminho) >= const.AUDITORIA_MAX_BYTES:
+                os.replace(caminho, os.path.join(const.DATA_DIR, "auditoria.1.jsonl"))
+        except FileNotFoundError:
+            pass
+        with open(caminho, "a", encoding="utf-8") as f:
+            f.write(json.dumps(linha, ensure_ascii=False) + "\n")
 
 
 def negar(status: int, codigo: str, conta: str | None = None):

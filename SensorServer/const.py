@@ -86,7 +86,8 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 
 # Tamanho maximo (caracteres) de device_id aceito no login (auth.device_id_valido).
-# device_id vira chave do hub SSE; acima disso o login responde 400.
+# device_id vira chave do hub SSE; acima disso o login responde 400. Tambem
+# limita o trecho de device_id usado em nomes de arquivo de alerta.
 MAX_DEVICE_ID_LEN = 64
 
 # ===========================================================================
@@ -94,8 +95,8 @@ MAX_DEVICE_ID_LEN = 64
 # ===========================================================================
 
 # Tamanho (bytes) a partir do qual auditoria.jsonl e rotacionado para
-# auditoria.1.jsonl. Evita encher o disco com negacoes repetidas.
-# [ainda nao usada]
+# auditoria.1.jsonl (sobrescrevendo o anterior). Evita encher o disco com
+# negacoes repetidas: o espaco maximo fica em torno de 2x este valor.
 AUDITORIA_MAX_BYTES = 5 * 1024 * 1024
 
 # ===========================================================================

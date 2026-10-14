@@ -92,6 +92,12 @@ def _agora_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _nome_seguro(valor: str) -> str:
+    """Valor vindo do cliente (device_id) para compor nome de arquivo: qualquer caractere fora de [A-Za-z0-9_.-]
+    vira '_' (impede '/' e '..' de sair da pasta de dados) e o resultado e limitado a const.MAX_DEVICE_ID_LEN."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", valor)[:const.MAX_DEVICE_ID_LEN]
+
+
 def _arquivo_usuario(user_id: int) -> str:
     return os.path.join(const.DATA_DIR, f"usuario_{user_id}.jsonl")
 
@@ -179,7 +185,7 @@ def _processar_leitura_ambiente(payload: dict, device_id: str) -> None:
     resultado_regra = avaliar_regra(evento_ambiente)
     if resultado_regra is not None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"alerta_{device_id}_{timestamp}.json"
+        filename = f"alerta_{_nome_seguro(device_id)}_{timestamp}.json"
         filepath = os.path.join(const.DATA_DIR, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(resultado_regra, f, ensure_ascii=False, indent=2)
@@ -223,7 +229,7 @@ def _processar_evento_wokwi(payload: dict, device_id: str) -> ResultadoWokwi:
     alerta = regra_imobilidade.processar_evento(payload)
     if alerta is not None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"alerta_imobilidade_{device_id}_{timestamp}.json"
+        filename = f"alerta_imobilidade_{_nome_seguro(device_id)}_{timestamp}.json"
         filepath = os.path.join(const.DATA_DIR, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(alerta, f, ensure_ascii=False, indent=2)
