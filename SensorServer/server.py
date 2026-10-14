@@ -282,9 +282,10 @@ def _encerrar(enc: "regra_queda.Encerramento") -> None:
     _despachar(enc.user_id, mensagens.criar_encerramento(enc.user_id, enc.episode_id, enc.resultado))
 
 
-def _avaliar_queda(user_id: int, source: str, payload: dict, alerta_imobilidade: dict | None) -> None:
+def _avaliar_queda(user_id: int, source: str, payload: dict, alerta_imobilidade: dict | None,
+                   device_id: str) -> None:
     """Gatilho A (impacto + imobilidade) tem preferencia; gatilho B usa o alerta da regra de imobilidade."""
-    pedido = regra_queda.avaliar(user_id, source, payload)
+    pedido = regra_queda.avaliar(user_id, source, payload, device_id=device_id)
     if pedido is None and alerta_imobilidade is not None:
         pedido = regra_queda.abrir_por_imobilidade(user_id)
     if pedido is not None:
@@ -516,7 +517,7 @@ def receber_dados():
 
     # 5. Marco 3: analise de queda (acelerometro) -> se provavel, push de confirmacao
     if alimenta_queda:
-        _avaliar_queda(user_id, source, payload, alerta_imobilidade)
+        _avaliar_queda(user_id, source, payload, alerta_imobilidade, device_id)
 
     return jsonify({
         "status": "ok",

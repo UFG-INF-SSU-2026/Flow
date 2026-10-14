@@ -5,7 +5,7 @@ Recebe leituras de aceleracao das duas fontes e decide se ha QUEDA PROVAVEL. Nao
 devolve um PedidoConfirmacao (server.py despacha pelos canais). Nao importa regra_imobilidade nem canais.
 
 Gatilhos:
-  A (preferencial) IMPACTO_SEGUIDO_DE_IMOBILIDADE  -> avaliar()              (app e wokwi)
+  A (preferencial) IMPACTO_SEGUIDO_DE_IMOBILIDADE  -> avaliar()              (app e wokwi, fusao por usuario)
   B                IMOBILIDADE_PROLONGADA          -> abrir_por_imobilidade() (wokwi; chamado por server.py)
 
 Um unico episodio aberto por user_id, com cooldown depois de encerrado.
@@ -15,7 +15,7 @@ import math
 import os
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import const   # todas as constantes (limiares, timeout, margem, cooldown...) vivem em const.py
@@ -48,12 +48,28 @@ class Encerramento:
 
 
 @dataclass
-class _FaseFonte:
+class _Leitura:
+    """Uma amostra aproveitavel de aceleracao (ja validada e deduplicada)."""
+    fonte: str
+    device_id: str
+    versao: int
+    din: float              # aceleracao dinamica atual (m/s2)
+    din_max: float          # maximo da janela de 1 s (m/s2)
+    t_chegada: float        # relogio do servidor (s)
+    degradada: bool         # wokwi sem valueMax: din_max = din
+
+
+@dataclass
+class _EstadoUsuario:
+    """Maquina do gatilho A: uma por usuario, alimentada por todas as fontes e dispositivos."""
     fase: str = "OBSERVANDO"        # OBSERVANDO | POS_IMPACTO
     t_impacto: float = 0.0
+    t_ultima_leitura: float = 0.0   # ultima leitura USADA (desatualizada nao conta)
+    leituras: dict = field(default_factory=dict)   # (fonte, device_id) -> ultima _Leitura do dispositivo
 
 
-_fases: dict[tuple, _FaseFonte] = {}
+_estados: dict[int, _EstadoUsuario] = {}
+_ultimo_log_desatualizada: dict[tuple, float] = {}   # (user_id, fonte, versao) -> instante do ultimo log
 _episodios: dict[int, Episodio] = {}      # episodio mais recente por usuario (aberto ou encerrado)
 
 
@@ -132,27 +148,83 @@ def eh_duplicado_app(user_id: int, device_id: str, dados: dict) -> bool:
 
 
 # --------------------------- gatilho A (impacto) ---------------------------
-def avaliar(user_id: int, fonte: str, dados: dict, agora: float | None = None) -> PedidoConfirmacao | None:
+def _versao_da_leitura(dados: dict) -> int:
+    v = dados.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
+    return v if isinstance(v, int) and not isinstance(v, bool) else const.SCHEMA_VERSION_PADRAO
+
+
+def _log_desatualizada(user_id: int, leitura: _Leitura, referencia: int, agora: float) -> None:
+    """Loga a leitura de versao menor que a de referencia, no maximo uma vez por const.LOG_DESATUALIZADA_INTERVALO_S
+    para cada (usuario, fonte, versao). Chamar com _lock tomado."""
+    chave = (user_id, leitura.fonte, leitura.versao)
+    if agora - _ultimo_log_desatualizada.get(chave, float("-inf")) < const.LOG_DESATUALIZADA_INTERVALO_S:
+        return
+    _ultimo_log_desatualizada[chave] = agora
+    print(f"  [queda] leitura desatualizada ignorada: user={user_id} fonte={leitura.fonte} "
+          f"device={leitura.device_id} versao={leitura.versao} (referencia={referencia})")
+
+
+def avaliar(user_id: int, fonte: str, dados: dict, agora: float | None = None,
+            device_id: str | None = None) -> PedidoConfirmacao | None:
+    """Gatilho A. Chamar uma vez por leitura aceita (validada e deduplicada), na chegada.
+
+    Fusao de fontes por usuario:
+      - versao de referencia = maior versao entre as leituras frescas (const.JANELA_FUSAO_S) de todos os
+        dispositivos do usuario; so as leituras dessa versao sao USADAS. Leitura de versao menor e
+        desatualizada: e logada e fica de fora (nao move a maquina nem renova o relogio dela);
+      - entre leituras usadas vale o MAXIMO: cada leitura e comparada com o limiar da PROPRIA fonte, e qualquer
+        uma pode abrir a suspeita (impacto) ou cancela-la (movimento). Nao ha media entre fontes;
+      - cada leitura move a maquina uma unica vez, na chegada, e nao e recontada quando outra chega depois.
+
+    Maquina: OBSERVANDO -(impacto)-> POS_IMPACTO -(sem movimento por T_POS_IMPACTO_S)-> episodio.
+    Em POS_IMPACTO, "movimento" e din_max >= LIMIAR_REPOUSO (o pico da janela, nao a ultima amostra); se passar
+    mais de const.INTERVALO_MAX_ENTRE_LEITURAS_S sem leitura usada, o impacto e descartado."""
     agora = _agora() if agora is None else agora
     leitura = extrair_dinamica(fonte, dados)
     if leitura is None:
         return None
     din, din_max = leitura
+    nova = _Leitura(fonte, str(device_id if device_id is not None else f"user{user_id}"),
+                    _versao_da_leitura(dados), din, din_max, agora,
+                    degradada=(fonte == "wokwi" and "valueMax" not in dados))
     with _lock:
-        f = _fases.setdefault((user_id, fonte), _FaseFonte())
-        if f.fase == "OBSERVANDO":
-            if din_max >= const.LIMIAR_IMPACTO[fonte]:
-                f.fase, f.t_impacto = "POS_IMPACTO", agora
+        u = _estados.setdefault(user_id, _EstadoUsuario())
+        u.leituras[(nova.fonte, nova.device_id)] = nova
+        # So ficam as leituras frescas; isso tambem limita a memoria (device_id vem do cliente).
+        u.leituras = {k: l for k, l in u.leituras.items() if agora - l.t_chegada <= const.JANELA_FUSAO_S}
+        referencia = max(l.versao for l in u.leituras.values())
+        if nova.versao < referencia:
+            _log_desatualizada(user_id, nova, referencia, agora)
+            return None
+
+        if u.fase == "POS_IMPACTO" and agora - u.t_ultima_leitura > const.INTERVALO_MAX_ENTRE_LEITURAS_S:
+            u.fase = "OBSERVANDO"          # leituras pararam: o impacto nao vale mais
+        u.t_ultima_leitura = agora
+
+        impacto = din_max >= const.LIMIAR_IMPACTO[fonte]
+        movimento = din_max >= const.LIMIAR_REPOUSO[fonte]
+        if u.fase == "OBSERVANDO":
+            if impacto:
+                u.fase, u.t_impacto = "POS_IMPACTO", agora
             return None
         # fase POS_IMPACTO
-        if din >= const.LIMIAR_REPOUSO[fonte]:           # houve movimento: nao e queda
-            f.fase = "OBSERVANDO"
-            if din_max >= const.LIMIAR_IMPACTO[fonte]:   # ... mas pode ser novo impacto
-                f.fase, f.t_impacto = "POS_IMPACTO", agora
+        if movimento:                      # houve movimento: nao e queda (mas pode ser novo impacto)
+            u.fase = "OBSERVANDO"
+            if impacto:
+                u.fase, u.t_impacto = "POS_IMPACTO", agora
             return None
-        if agora - f.t_impacto >= const.T_POS_IMPACTO_S:
-            f.fase = "OBSERVANDO"
-            return _abrir(user_id, const.MOTIVO_A, agora)
+        if agora - u.t_impacto >= const.T_POS_IMPACTO_S:
+            u.fase = "OBSERVANDO"
+            usadas = [l for l in u.leituras.values() if l.versao == referencia]
+            antigas = [l for l in u.leituras.values() if l.versao < referencia]
+            return _abrir(user_id, const.MOTIVO_A, agora, {
+                "fonte_do_disparo": fonte,
+                "versao_referencia": referencia,
+                "fontes_usadas": [{"fonte": l.fonte, "device_id": l.device_id, "versao": l.versao,
+                                   "degradada": l.degradada} for l in usadas],
+                "fontes_desatualizadas": [{"fonte": l.fonte, "device_id": l.device_id, "versao": l.versao}
+                                          for l in antigas],
+            })
         return None
 
 
@@ -162,7 +234,7 @@ def abrir_por_imobilidade(user_id: int, agora: float | None = None) -> PedidoCon
 
 
 # ------------------------------- episodios ---------------------------------
-def _abrir(user_id: int, motivo: str, agora: float) -> PedidoConfirmacao | None:
+def _abrir(user_id: int, motivo: str, agora: float, extra: dict | None = None) -> PedidoConfirmacao | None:
     with _lock:
         ep = _episodios.get(user_id)
         if ep is not None:
@@ -173,7 +245,7 @@ def _abrir(user_id: int, motivo: str, agora: float) -> PedidoConfirmacao | None:
         novo = Episodio(str(uuid.uuid4()), motivo, agora,
                         agora + const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S)
         _episodios[user_id] = novo
-    registrar(user_id, "episodio.aberto", {"episodeId": novo.episode_id, "motivo": motivo})
+    registrar(user_id, "episodio.aberto", {"episodeId": novo.episode_id, "motivo": motivo, **(extra or {})})
     return PedidoConfirmacao(novo.episode_id, const.TIMEOUT_CONFIRMACAO_S, motivo)
 
 

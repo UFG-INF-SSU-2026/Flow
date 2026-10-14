@@ -11,9 +11,6 @@ Regras de uso:
     assumida, documentada la).
   - Politica e vocabulario (POLITICA, FONTE_DO_PAPEL, EVENTOS_ESPERADOS,
     EVENTOS_RETORNO, tipos de mensagem) ficam nos modulos que os usam.
-
-Constantes marcadas com "[ainda nao usada]" ja estao definidas aqui para
-que quem implementar o recurso correspondente nao precise mexer neste arquivo.
 """
 import os
 
@@ -153,12 +150,10 @@ T_POS_IMPACTO_S = 3
 
 # Depois de um impacto, se passar mais que isto (s) sem leitura aproveitavel,
 # o impacto e descartado e a maquina volta a OBSERVANDO. A calibrar.
-# [ainda nao usada]
 INTERVALO_MAX_ENTRE_LEITURAS_S = 3
 
 # Idade maxima (s) da ultima leitura de uma fonte para participar da fusao de
 # fontes. Deve ser menor ou igual a INTERVALO_MAX_ENTRE_LEITURAS_S.
-# [ainda nao usada]
 JANELA_FUSAO_S = 2.0
 
 # Intervalo minimo (s) entre episodios do mesmo usuario, contado a partir do
@@ -167,7 +162,6 @@ COOLDOWN_S = 60
 
 # No maximo um log de "leitura desatualizada" por (usuario, fonte, versao)
 # neste intervalo (s), para nao inundar o console.
-# [ainda nao usada]
 LOG_DESATUALIZADA_INTERVALO_S = 60
 
 # Regressao (s) de timestamp_envio do app acima da qual se assume reajuste de
