@@ -42,4 +42,6 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Marco 3: SSE (canal de push servidor -> app). MESMA versao do okhttp acima.
+    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
 }

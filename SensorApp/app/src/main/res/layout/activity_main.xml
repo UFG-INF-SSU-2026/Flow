@@ -6,6 +6,38 @@
     android:gravity="center"
     android:padding="32dp">
 
+    <!-- Marco 3: painel do pedido de confirmacao de queda. Invisivel ate o servidor pedir. -->
+    <LinearLayout
+        android:id="@+id/painelAlerta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="16dp"
+        android:background="#FFE0E0"
+        android:layout_marginBottom="24dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvAlerta"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Você está bem?"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:layout_marginBottom="16dp" />
+
+        <Button
+            android:id="@+id/btnEstouBem"
+            android:layout_width="match_parent"
+            android:layout_height="96dp"
+            android:text="ESTOU BEM"
+            android:textSize="28sp"
+            android:backgroundTint="#2E7D32"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/tvTitulo"
         android:layout_width="wrap_content"
@@ -43,6 +75,15 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text=""
+        android:textSize="14sp"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Marco 3: estado do canal de push (conectado / reconectando / desconectado ...) -->
+    <TextView
+        android:id="@+id/tvPush"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Alertas: desconectado"
         android:textSize="14sp"
         android:layout_marginBottom="32dp" />
 

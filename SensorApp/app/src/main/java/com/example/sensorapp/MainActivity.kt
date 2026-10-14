@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.WindowManager
 import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -26,6 +27,7 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener {
 
@@ -51,15 +53,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private val DEFAULT_SERVER_PORT: String = "5000"
 
     /**
-     * ID padrao do usuario (idoso), usado apenas na PRIMEIRA vez que o app
-     * abre, antes de o usuario configurar o valor real pelo botao
-     * "Configurações". Precisa ser o MESMO numero inteiro configurado no
-     * wokwi correspondente (ver WokwiBridge/bridge.py, WOKWI_USER_ID), para
-     * que o servidor entenda que os dados vem da mesma pessoa.
-     */
-    private val DEFAULT_USER_ID: Int = 1
-
-    /**
      * Faixa fisica plausivel para o evento LeituraAmbiente (Marco 2).
      * Leituras fora dessa faixa sao descartadas ANTES do envio (validacao no
      * dispositivo, conforme decidido na Atividade 02), para nao gastar banda/
@@ -74,7 +67,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
      * no lado do app: SensorServer/regra_luz.py sabe interpretar esta versao
      * e assume 1 quando o campo nao vem, sem rejeitar o evento por isso).
      */
-    private val SCHEMA_VERSION_LEITURA_AMBIENTE: Int = 2
+    private val SCHEMA_VERSION_LEITURA_AMBIENTE: Int = 3
+
+    /** Versao do schema do payload do app (raiz). Marco 3 = 3 (docs/schemas.md). */
+    private val SCHEMA_VERSION: Int = 3
+
+    /** Teto plausivel da magnitude do acelerometro (m/s2); mesmo teto do servidor. */
+    private val ACELEROMETRO_MAX_PLAUSIVEL: Float = 160f
 
     // =========================================================================================
 
@@ -82,7 +81,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private lateinit var prefs: android.content.SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
-    private val httpClient = OkHttpClient()
+
+    // Marco 3: autenticacao, push e alerta de confirmacao (criados em onCreate, depois do prefs)
+    private lateinit var auth: AuthClient
+    private lateinit var httpClient: OkHttpClient
+    private lateinit var pushClient: PushClient
+    private lateinit var alerta: AlertaController
 
     private var isRunning = false
 
@@ -90,13 +94,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var serverIp: String = DEFAULT_SERVER_IP
     private var serverPort: String = DEFAULT_SERVER_PORT
 
-    // ID do usuario (idoso) atualmente configurado (carregado do SharedPreferences em onCreate).
-    // Enviado em TODO envio (app e wokwi) para que o servidor saiba que os dados
-    // pertencem a mesma pessoa.
-    private var userId: Int = DEFAULT_USER_ID
+    // URL base do servidor. O user_id NAO e mais configurado a mao: vem do login (auth.userId).
+    private val baseUrl: String
+        get() = "http://$serverIp:$serverPort"
 
-    private val serverUrl: String
-        get() = "http://$serverIp:$serverPort/dados"
+    // Janela do acelerometro desde o ultimo envio (Marco 3): alimenta o bloco "acelerometro" do payload.
+    private var accMagUltima = 0f
+    private var accMagMax = 0f
+    private var accAmostras = 0
+    private var accJanelaInicioMs = 0L
 
     // Guarda a leitura mais recente de cada sensor (chave = tipo do sensor)
     private val latestReadings = mutableMapOf<Int, SensorReading>()
@@ -144,7 +150,29 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // Carrega o IP/porta salvos anteriormente (ou usa o padrao, na primeira vez)
         serverIp = prefs.getString("server_ip", DEFAULT_SERVER_IP) ?: DEFAULT_SERVER_IP
         serverPort = prefs.getString("server_port", DEFAULT_SERVER_PORT) ?: DEFAULT_SERVER_PORT
-        userId = prefs.getInt("user_id", DEFAULT_USER_ID)
+
+        // Marco 3: autenticacao + canal de push + alerta de confirmacao
+        auth = AuthClient(prefs, { baseUrl }, deviceId)
+        auth.onSessaoExpirada = {
+            runOnUiThread {
+                if (isRunning) pararEnvio()
+                atualizarStatus("Sessão expirada: faça login em Configurações", false)
+                atualizarTextoServidor()
+            }
+        }
+        httpClient = OkHttpClient.Builder()
+            .addInterceptor(auth.interceptor)
+            .authenticator(auth.authenticator)
+            .build()
+        alerta = AlertaController(this, binding.painelAlerta, binding.tvAlerta, binding.btnEstouBem) { tipo, estado, mid ->
+            enviarEventoRetorno(tipo, estado, mid)
+        }
+        pushClient = PushClient(
+            auth,
+            { "$baseUrl/push/app" },
+            { msg -> alerta.aoReceber(msg) },
+            { estado -> binding.tvPush.text = "Alertas: $estado" }
+        )
         atualizarTextoServidor()
 
         binding.btnStartStop.setOnClickListener {
@@ -170,11 +198,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val dialogView = layoutInflater.inflate(R.layout.dialog_socket, null)
         val etIp = dialogView.findViewById<EditText>(R.id.etIp)
         val etPorta = dialogView.findViewById<EditText>(R.id.etPorta)
-        val etUserId = dialogView.findViewById<EditText>(R.id.etUserId)
+        val etUsuario = dialogView.findViewById<EditText>(R.id.etUsuario)
+        val etSenha = dialogView.findViewById<EditText>(R.id.etSenha)
 
         etIp.setText(serverIp)
         etPorta.setText(serverPort)
-        etUserId.setText(userId.toString())
+        // Usuario e senha ficam em branco: preencha so para (re)fazer o login. A senha nao e guardada.
 
         AlertDialog.Builder(this)
             .setTitle("Configurações")
@@ -182,43 +211,45 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             .setPositiveButton("Salvar") { _, _ ->
                 val novoIp = etIp.text.toString().trim()
                 val novaPorta = etPorta.text.toString().trim()
-                val novoUserIdTexto = etUserId.text.toString().trim()
+                val usuario = etUsuario.text.toString().trim()
+                val senha = etSenha.text.toString()
 
-                if (novoIp.isEmpty() || novaPorta.isEmpty() || novoUserIdTexto.isEmpty()) {
-                    Toast.makeText(this, "Preencha IP, porta e ID do usuário", Toast.LENGTH_SHORT).show()
+                if (novoIp.isEmpty() || novaPorta.isEmpty()) {
+                    Toast.makeText(this, "Preencha IP e porta", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-
-                val novoUserId = novoUserIdTexto.toIntOrNull()
-                if (novoUserId == null) {
-                    Toast.makeText(this, "ID do usuário precisa ser um número inteiro", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-
-                // Se o app estiver enviando dados no momento, para antes de trocar a configuracao
                 if (isRunning) {
                     pararEnvio()
                 }
 
                 serverIp = novoIp
                 serverPort = novaPorta
-                userId = novoUserId
-
                 prefs.edit()
                     .putString("server_ip", serverIp)
                     .putString("server_port", serverPort)
-                    .putInt("user_id", userId)
                     .apply()
-
                 atualizarTextoServidor()
-                Toast.makeText(this, "Configuração atualizada", Toast.LENGTH_SHORT).show()
+
+                if (usuario.isNotEmpty() && senha.isNotEmpty()) {
+                    // login e uma chamada de rede bloqueante: fora da thread principal
+                    Thread {
+                        val r = auth.login(usuario, senha)
+                        runOnUiThread {
+                            atualizarTextoServidor()
+                            Toast.makeText(this, r.mensagem, Toast.LENGTH_LONG).show()
+                        }
+                    }.start()
+                } else {
+                    Toast.makeText(this, "Configuração atualizada", Toast.LENGTH_SHORT).show()
+                }
             }
             .setNegativeButton("Cancelar", null)
             .show()
     }
 
     private fun atualizarTextoServidor() {
-        binding.tvServidor.text = "Servidor: $serverIp:$serverPort | ID: $userId"
+        val pessoa = auth.userId?.let { "pessoa $it" } ?: "sem login"
+        binding.tvServidor.text = "Servidor: $serverIp:$serverPort | $pessoa"
     }
 
     // ---------------------------------------------------------------------------------------
@@ -226,11 +257,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // ---------------------------------------------------------------------------------------
 
     private fun iniciarEnvio() {
+        if (auth.sessao == null) {
+            atualizarStatus("Faça login em Configurações", false)
+            return
+        }
         try {
             registrarTodosSensores()
             isRunning = true
             binding.btnStartStop.text = "Parar"
             atualizarStatus("Coletando...", true)
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)   // o canal so existe em primeiro plano
+            pushClient.conectar()
             handler.post(sendRunnable)
         } catch (e: Exception) {
             atualizarStatus("Erro ao iniciar: ${e.message}", false)
@@ -243,6 +280,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         binding.btnStartStop.text = "Iniciar"
         atualizarStatus("Parado", false)
         handler.removeCallbacks(sendRunnable)
+        pushClient.desconectar()
+        alerta.cancelar()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         sensorManager.unregisterListener(this)
         activeSensors.clear()
     }
@@ -261,14 +301,21 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private fun registrarTodosSensores() {
         activeSensors.clear()
+        accMagUltima = 0f
+        accMagMax = 0f
+        accAmostras = 0
+        accJanelaInicioMs = System.currentTimeMillis()
         val todosSensores = sensorManager.getSensorList(Sensor.TYPE_ALL)
         for (sensor in todosSensores) {
             try {
-                val ok = sensorManager.registerListener(
-                    this,
-                    sensor,
+                // Acelerometro em taxa maior (~50 Hz): precisamos do PICO de uma queda, que dura fracoes de segundo.
+                // Nao exige permissao (o limite de 200 Hz do Android 12 so afeta taxas acima disso).
+                val taxa = if (sensor.type == Sensor.TYPE_ACCELEROMETER) {
+                    SensorManager.SENSOR_DELAY_GAME
+                } else {
                     SensorManager.SENSOR_DELAY_NORMAL
-                )
+                }
+                val ok = sensorManager.registerListener(this, sensor, taxa)
                 if (ok) {
                     activeSensors.add(sensor)
                 }
@@ -280,6 +327,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER && event.values.size >= 3) {
+            val m = sqrt(
+                event.values[0] * event.values[0] +
+                    event.values[1] * event.values[1] +
+                    event.values[2] * event.values[2]
+            )
+            accMagUltima = m
+            if (m > accMagMax) accMagMax = m
+            accAmostras++
+        }
         latestReadings[event.sensor.type] = SensorReading(
             sensorName = event.sensor.name,
             values = event.values.toList(),
@@ -316,7 +373,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val body = envelope.toString().toRequestBody(mediaType)
 
         val request = Request.Builder()
-            .url(serverUrl)
+            .url("$baseUrl/dados")
             .post(body)
             .build()
 
@@ -334,6 +391,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                         val hora = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                         atualizarStatus("Conectado", true)
                         binding.tvUltimoEnvio.text = "Ultimo envio: $hora"
+                    } else if (response.code == 401 || response.code == 403) {
+                        atualizarStatus("Sem autorização (${response.code}): faça login em Configurações", false)
                     } else {
                         atualizarStatus("Erro do servidor (codigo ${response.code})", false)
                     }
@@ -342,12 +401,45 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         })
     }
 
+    /**
+     * Evento de retorno ao servidor (POST /eventos): push.ack ou confirmacao.resposta.
+     * Sem fila de retransmissao (decisao de arquitetura): se falhar, o servidor expira o episodio sozinho.
+     */
+    private fun enviarEventoRetorno(eventType: String, state: String, messageId: String) {
+        val uid = auth.userId ?: return
+        val json = JSONObject().apply {
+            put("schemaVersion", SCHEMA_VERSION)
+            put("user_id", uid)
+            put("source", "app")
+            put("device_id", deviceId)
+            put("eventType", eventType)
+            put("messageId", messageId)
+            put("event_time", formatarIso8601(System.currentTimeMillis()))
+            put("state", state)
+        }
+        val (nonceB64, cipherB64) = CryptoUtils.encrypt(json.toString())
+        val envelope = JSONObject().put("nonce", nonceB64).put("ciphertext", cipherB64)
+        val body = envelope.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val request = Request.Builder().url("$baseUrl/eventos").post(body).build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread { atualizarStatus("Falha ao enviar $eventType ao servidor", false) }
+            }
+
+            override fun onResponse(call: Call, response: okhttp3.Response) {
+                response.close()
+            }
+        })
+    }
+
     private fun montarJson(): JSONObject {
         val root = JSONObject()
+        root.put("schemaVersion", SCHEMA_VERSION)
         // Marco 3: identifica o usuario (idoso) dono deste envio, para o
         // servidor conseguir juntar com os dados vindos do wokwi da mesma
         // pessoa. "source" identifica de qual fonte este payload veio.
-        root.put("user_id", userId)
+        root.put("user_id", auth.userId ?: -1)
         root.put("source", "app")
         root.put("device_id", deviceId)
         root.put("device_model", android.os.Build.MODEL)
@@ -374,6 +466,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // caso contrario, a chave fica ausente e o servidor simplesmente ignora
         // este ciclo para fins da regra de luz inadequada.
         montarLeituraAmbiente()?.let { root.put("leitura_ambiente", it) }
+
+        // Marco 3: bloco do acelerometro (entrada da regra de queda no servidor)
+        montarAcelerometro()?.let { root.put("acelerometro", it) }
 
         return root
     }
@@ -414,6 +509,28 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             put("cct", cct.toDouble())
             put("seq_num", ambientSeqNum)
         }
+    }
+
+    /**
+     * Bloco "acelerometro" (schemaVersion 3): magnitude da ultima amostra e o MAXIMO da janela desde o ultimo envio
+     * (o pico de uma queda dura fracoes de segundo; uma amostra por segundo o perderia). Zera a janela.
+     * Retorna null se nao houve amostra na janela.
+     */
+    private fun montarAcelerometro(): JSONObject? {
+        if (accAmostras == 0) return null
+        val agora = System.currentTimeMillis()
+        val max = accMagMax.coerceAtMost(ACELEROMETRO_MAX_PLAUSIVEL)
+        val ultima = accMagUltima.coerceAtMost(max)
+        val bloco = JSONObject().apply {
+            put("magnitude", ultima.toDouble())
+            put("magnitude_max_janela", max.toDouble())
+            put("amostras", accAmostras)
+            put("janela_ms", maxOf(1L, agora - accJanelaInicioMs))
+        }
+        accMagMax = 0f
+        accAmostras = 0
+        accJanelaInicioMs = agora
+        return bloco
     }
 
     /** Formata um timestamp em milissegundos como ISO 8601 com offset (ex.: 2026-09-11T22:00:20.000-03:00). */

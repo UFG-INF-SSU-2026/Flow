@@ -69,4 +69,12 @@ object CryptoUtils {
         val cipherB64 = Base64.encodeToString(cipherBytes, Base64.NO_WRAP)
         return Pair(nonceB64, cipherB64)
     }
+    fun decrypt(nonceB64: String, cipherB64: String): String {
+        val nonce = Base64.decode(nonceB64, Base64.NO_WRAP)
+        val cipherBytes = Base64.decode(cipherB64, Base64.NO_WRAP)
+
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_BITS, nonce))
+        return String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
+    }
 }

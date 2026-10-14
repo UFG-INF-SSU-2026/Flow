@@ -36,14 +36,23 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="ID do usuário (idoso)"
+        android:text="Login (deixe em branco para manter o atual)"
         android:textSize="14sp" />
 
     <EditText
-        android:id="@+id/etUserId"
+        android:id="@+id/etUsuario"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="ex: 1 (mesmo ID configurado no wokwi)"
-        android:inputType="number" />
+        android:hint="Usuário (ex: idoso1)"
+        android:inputType="text"
+        android:autofillHints="username" />
+
+    <EditText
+        android:id="@+id/etSenha"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Senha"
+        android:inputType="textPassword"
+        android:autofillHints="password" />
 
 </LinearLayout>
