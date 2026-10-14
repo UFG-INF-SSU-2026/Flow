@@ -14,7 +14,9 @@
     { "type": "wokwi-resistor", "id": "r2", "top": -180, "left": 380, "attrs": { "value": "220" } },
 
     { "type": "wokwi-led", "id": "ledSuspeita", "top": -280, "left": 460, "attrs": { "color": "yellow", "label": "Suspeita" } },
-    { "type": "wokwi-led", "id": "ledAlerta",   "top": -180, "left": 460, "attrs": { "color": "red",    "label": "Alerta"   } }
+    { "type": "wokwi-led", "id": "ledAlerta",   "top": -180, "left": 460, "attrs": { "color": "red",    "label": "Alerta"   } },
+
+    { "type": "wokwi-buzzer", "id": "buzzer1", "top": -60, "left": 460, "attrs": { "volume": "0.1" } }
   ],
   "connections": [
     ["esp:TX0", "$serialMonitor:RX", "", []],
@@ -37,7 +39,10 @@
 
     ["esp:D14", "r2:1",        "orange", []],
     ["r2:2",    "ledAlerta:A", "orange", []],
-    ["ledAlerta:C", "esp:GND.1", "black", []]
+    ["ledAlerta:C", "esp:GND.1", "black", []],
+
+    ["buzzer1:1", "esp:GND.1", "black", []],
+    ["buzzer1:2", "esp:D13",   "red",   []]
   ],
   "dependencies": {},
   "serialMonitor": { "display": "always" }

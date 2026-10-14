@@ -32,12 +32,27 @@ const int MPU_ADDR = 0x68;
 #define PIN_BTN_REARM     26
 #define PIN_LED_SUSPEITA  27
 #define PIN_LED_ALERTA    14
+#define PIN_BUZZER        13   // buzzer (wokwi-buzzer): terminal 1 -> GND, terminal 2 -> D13
 
 const char* DEVICE_ID = "esp32-decisao-imobilidade-01";
 const char* ENTITY_ID = "idoso-simulado-01";
 
 // ---- Versao do schema do payload (docs/arquitetura.md, secao 4.3) ----
-const int SCHEMA_VERSION = 2;
+const int SCHEMA_VERSION = 3;
+
+// ---- Faixa do sensor (Marco 3) ----
+// MPU6050 em +-8 g: ACCEL_CONFIG (0x1C) = 0x10 -> 4096 LSB/g. Teto plausivel de 160 m/s2 (igual ao do app).
+// Em +-8 g a magnitude maxima mensuravel e ~136 m/s2, entao o teto e um limite de contrato, nao atingivel.
+const uint8_t ACCEL_CONFIG_8G      = 0x10;
+const float   ACCEL_LSB_POR_G      = 4096.0;
+const float   MAGNITUDE_MAX_PLAUSIVEL = 160.0;
+const unsigned long AMOSTRA_MS     = 50;   // amostragem rapida entre ciclos, para capturar o PICO (valueMax)
+
+// ---- Buzzer (Marco 3) ----
+const unsigned int  BUZZER_FREQ_HZ = 2000;
+const unsigned long BUZZER_MAX_MS  = 30000; // TETO DE SEGURANCA do firmware: o buzzer nunca passa disso,
+                                            // mesmo que servidor/bridge morram. NAO e o timeout de confirmacao
+                                            // (esse vem na mensagem, em timeoutMs).
 
 // ---- Histerese em m/s² ----
 // Repouso no Wokwi: sliders zerados → magnitude ≈ 0 m/s²
@@ -76,6 +91,19 @@ const unsigned long CICLO_MS = 1000;
 // ---- Cliques pendentes (capturados a cada volta do loop, aplicados no próximo ciclo) ----
 bool pendingConfirm = false;
 bool pendingRearm   = false;
+bool pendingBuzzerConfirm = false;   // clique em "Estou bem" enquanto o buzzer toca (tratado a cada volta do loop)
+
+// ---- Buzzer / comandos recebidos pela serial (Marco 3) ----
+bool buzzerAtivo = false;
+unsigned long tBuzzerInicio = 0;
+unsigned long buzzerTimeoutMs = 0;
+char buzzerMsgId[40] = "";
+char cmdBuf[96];
+uint8_t cmdLen = 0;
+
+// ---- Pico de aceleracao entre ciclos (valueMax) ----
+unsigned long tUltimaAmostra = 0;
+float magMaxCiclo = 0.0;
 
 // ---- Debounce ----
 int lastRawConfirm = HIGH, stableConfirm = HIGH;
@@ -100,14 +128,15 @@ bool lerMPU() {
 }
 
 float calcMagnitude() {
-  // Converte para m/s² (sensibilidade padrão ±2g = 16384 LSB/g)
-  float ax = (AcX / 16384.0) * 9.80665;
-  float ay = (AcY / 16384.0) * 9.80665;
-  float az = (AcZ / 16384.0) * 9.80665;
+  // Converte para m/s² (±8g configurado no setup: 4096 LSB/g)
+  float ax = (AcX / ACCEL_LSB_POR_G) * 9.80665;
+  float ay = (AcY / ACCEL_LSB_POR_G) * 9.80665;
+  float az = (AcZ / ACCEL_LSB_POR_G) * 9.80665;
   return sqrt(ax*ax + ay*ay + az*az);
 }
 
-void emitirEvento(const char* eventType, const char* estadoTexto, float value) {
+// valueMax < 0 = nao incluir o campo (so imobilidade.leitura envia o pico do ciclo)
+void emitirEvento(const char* eventType, const char* estadoTexto, float value, float valueMax = -1.0) {
   sequence++;
   Serial.print("{");
   Serial.print("\"schemaVersion\":"); Serial.print(SCHEMA_VERSION); Serial.print(",");
@@ -117,9 +146,91 @@ void emitirEvento(const char* eventType, const char* estadoTexto, float value) {
   Serial.print("\"eventTimeMs\":"); Serial.print(millis()); Serial.print(",");
   Serial.print("\"sequence\":"); Serial.print(sequence); Serial.print(",");
   Serial.print("\"value\":"); Serial.print(value, 2); Serial.print(",");
+  if (valueMax >= 0.0) { Serial.print("\"valueMax\":"); Serial.print(valueMax, 2); Serial.print(","); }
   Serial.print("\"unit\":\"m/s2\",");
   Serial.print("\"state\":\""); Serial.print(estadoTexto); Serial.print("\"");
   Serial.println("}");
+}
+
+// Evento de retorno (push.ack / confirmacao.resposta): o bridge o envia a POST /eventos.
+void emitirEventoRetorno(const char* eventType, const char* estadoTexto, const char* messageId) {
+  sequence++;
+  Serial.print("{");
+  Serial.print("\"schemaVersion\":"); Serial.print(SCHEMA_VERSION); Serial.print(",");
+  Serial.print("\"eventType\":\""); Serial.print(eventType); Serial.print("\",");
+  Serial.print("\"deviceId\":\""); Serial.print(DEVICE_ID); Serial.print("\",");
+  Serial.print("\"entityId\":\""); Serial.print(ENTITY_ID); Serial.print("\",");
+  Serial.print("\"eventTimeMs\":"); Serial.print(millis()); Serial.print(",");
+  Serial.print("\"sequence\":"); Serial.print(sequence); Serial.print(",");
+  Serial.print("\"messageId\":\""); Serial.print(messageId); Serial.print("\",");
+  Serial.print("\"state\":\""); Serial.print(estadoTexto); Serial.print("\"");
+  Serial.println("}");
+}
+
+void desligarBuzzer() {
+  noTone(PIN_BUZZER);
+  buzzerAtivo = false;
+}
+
+void ligarBuzzer(const char* messageId, long timeoutMs) {
+  // Valida: timeout em (0, BUZZER_MAX_MS] e messageId que cabe no buffer
+  if (timeoutMs <= 0 || (unsigned long)timeoutMs > BUZZER_MAX_MS || strlen(messageId) == 0 || strlen(messageId) >= sizeof(buzzerMsgId)) {
+    emitirEventoRetorno("push.ack", "REJEITADO", messageId);
+    return;
+  }
+  strncpy(buzzerMsgId, messageId, sizeof(buzzerMsgId) - 1);
+  buzzerMsgId[sizeof(buzzerMsgId) - 1] = '\0';
+  buzzerTimeoutMs = (unsigned long)timeoutMs;
+  tBuzzerInicio = millis();
+  buzzerAtivo = true;
+  pendingBuzzerConfirm = false;
+  tone(PIN_BUZZER, BUZZER_FREQ_HZ);
+  emitirEventoRetorno("push.ack", "ATIVADO", messageId);
+}
+
+// Linha de comando do bridge:  CMD;BUZZER_ON;<messageId>;<timeoutMs>   |   CMD;BUZZER_OFF;<messageId>;<motivo>
+void processarComando(char* linha) {
+  char* ctx = nullptr;
+  char* t0 = strtok_r(linha, ";", &ctx);
+  char* t1 = strtok_r(nullptr, ";", &ctx);
+  char* t2 = strtok_r(nullptr, ";", &ctx);
+  char* t3 = strtok_r(nullptr, ";", &ctx);
+  if (!t0 || strcmp(t0, "CMD") != 0 || !t1 || !t2) return;   // linha que nao e comando: ignora
+  if (strcmp(t1, "BUZZER_ON") == 0 && t3) {
+    ligarBuzzer(t2, atol(t3));
+  } else if (strcmp(t1, "BUZZER_OFF") == 0) {
+    if (buzzerAtivo) desligarBuzzer();                       // encerrado pelo servidor: desliga sem evento
+  }
+}
+
+// Le a serial sem bloquear, acumulando ate '\n'.
+void lerComandosSerial() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      cmdBuf[cmdLen] = '\0';
+      if (cmdLen > 0) processarComando(cmdBuf);
+      cmdLen = 0;
+    } else if (cmdLen < sizeof(cmdBuf) - 1) {
+      cmdBuf[cmdLen++] = c;
+    } else {
+      cmdLen = 0;                                            // linha longa demais: descarta
+    }
+  }
+}
+
+// Resposta do idoso / fim do tempo, avaliado a cada volta do loop (nao espera o ciclo de 1 s).
+void atenderBuzzer() {
+  if (!buzzerAtivo) { pendingBuzzerConfirm = false; return; }
+  if (pendingBuzzerConfirm) {
+    pendingBuzzerConfirm = false;
+    desligarBuzzer();
+    emitirEventoRetorno("confirmacao.resposta", "ESTOU_BEM", buzzerMsgId);
+  } else if (millis() - tBuzzerInicio >= buzzerTimeoutMs) {
+    desligarBuzzer();
+    emitirEventoRetorno("confirmacao.resposta", "SEM_RESPOSTA", buzzerMsgId);
+  }
 }
 
 bool debounceRead(int pin, int &lastRaw, int &stable, unsigned long &lastChange) {
@@ -140,6 +251,8 @@ void setup() {
   pinMode(PIN_BTN_REARM,    INPUT_PULLUP);
   pinMode(PIN_LED_SUSPEITA, OUTPUT);
   pinMode(PIN_LED_ALERTA,   OUTPUT);
+  pinMode(PIN_BUZZER,       OUTPUT);
+  noTone(PIN_BUZZER);
 
   digitalWrite(PIN_LED_SUSPEITA, LOW);
   digitalWrite(PIN_LED_ALERTA,   LOW);
@@ -152,6 +265,14 @@ void setup() {
   Wire.write(0x6B); // PWR_MGMT_1
   Wire.write(0x00); // 0 = acorda o sensor
   int err = Wire.endTransmission();
+
+  // Marco 3: faixa do acelerometro em +-8 g (ACCEL_CONFIG = 0x10)
+  if (err == 0) {
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x1C);              // ACCEL_CONFIG
+    Wire.write(ACCEL_CONFIG_8G);
+    err = Wire.endTransmission();
+  }
 
   if (err != 0) {
     Serial.print("{\"schemaVersion\":"); Serial.print(SCHEMA_VERSION);
@@ -170,13 +291,29 @@ void loop() {
   // --- Leitura dos botões a cada volta do loop (rápida, sem delay) ---
   // Garante que um único clique seja capturado, sem precisar segurar o botão.
   bool bordaConfirm = debounceRead(PIN_BTN_CONFIRM, lastRawConfirm, stableConfirm, lastChangeConfirm);
-  if (bordaConfirm && stableConfirm == LOW) pendingConfirm = true;
+  if (bordaConfirm && stableConfirm == LOW) {
+    pendingConfirm = true;                       // maquina de imobilidade (Marco 2), consumido no ciclo de 1 s
+    if (buzzerAtivo) pendingBuzzerConfirm = true; // resposta ao pedido do servidor (Marco 3), tratado ja
+  }
 
   bool bordaRearm = debounceRead(PIN_BTN_REARM, lastRawRearm, stableRearm, lastChangeRearm);
   if (bordaRearm && stableRearm == LOW) pendingRearm = true;
 
-  // --- Ciclo de leitura do sensor / decisão: só executa 1x por segundo ---
+  // --- Marco 3: comandos do servidor (via bridge) e buzzer, a cada volta do loop ---
+  lerComandosSerial();
+  atenderBuzzer();
+
+  // --- Marco 3: amostragem rapida do MPU para capturar o PICO entre ciclos (valueMax) ---
   unsigned long agora = millis();
+  if (agora - tUltimaAmostra >= AMOSTRA_MS) {
+    tUltimaAmostra = agora;
+    if (lerMPU()) {
+      float m = calcMagnitude();
+      if (m > magMaxCiclo) magMaxCiclo = m;
+    }
+  }
+
+  // --- Ciclo de leitura do sensor / decisão: só executa 1x por segundo ---
   if (agora - tUltimoCiclo < CICLO_MS) return;
   tUltimoCiclo = agora;
 
@@ -186,12 +323,14 @@ void loop() {
   }
 
   float magnitude = calcMagnitude();
+  float valueMax = (magMaxCiclo > magnitude) ? magMaxCiclo : magnitude;   // pico do ciclo (>= value)
+  magMaxCiclo = 0.0;
 
-  // Heartbeat: emite a leitura + estado atual da máquina a cada ciclo (1x/s)
-  emitirEvento("imobilidade.leitura", nomeEstado(estado), magnitude);
+  // Heartbeat: emite a leitura + pico + estado atual da máquina a cada ciclo (1x/s)
+  emitirEvento("imobilidade.leitura", nomeEstado(estado), magnitude, valueMax);
 
-  // Faixa plausível: 0 a 30 m/s²
-  if (magnitude > 30.0) {
+  // Faixa plausível: 0 a 160 m/s²
+  if (magnitude > MAGNITUDE_MAX_PLAUSIVEL) {
     emitirEvento("imobilidade.decisao", "LEITURA_FORA_DE_FAIXA", magnitude);
     return;
   }
