@@ -41,9 +41,30 @@ inadequada -> alerta simulado para o cuidador) continua funcionando
 normalmente para dados vindos do app, de forma independente do buffer acima
 (processado assim que o payload chega, sem esperar o flush de 1s).
 
+Autenticacao e autorizacao: nenhuma rota de dados e aberta. O cliente faz login em POST /auth/login
+(identificador, segredo, fonte e device_id, cifrados com a mesma chave) e recebe, tambem cifrados, um
+access token e um refresh token (auth.py). O refresh e de uso unico: POST /auth/refresh devolve um par
+novo. Todas as demais rotas exigem "Authorization: Bearer <access_token>". Em cada uma, authz.py
+checa a permissao do papel da conta (estagio 1, antes de decifrar o corpo) e, nas rotas com corpo, que o
+user_id e a source declarados sao os do token (estagio 2). O que nao esta na politica e negado.
+
+Caminho de volta (servidor -> dispositivo), tambem do Marco 3:
+
+    1. Cada leitura de aceleracao aceita alimenta regra_queda. Ao concluir QUEDA PROVAVEL (impacto seguido
+       de imobilidade, ou imobilidade prolongada), regra_queda devolve um PedidoConfirmacao.
+    2. server.py cria a mensagem (mensagens.py) e a despacha a TODOS os canais: GET /push/app (SSE para o
+       app) e GET /push/wokwi (SSE para o bridge). Cada mensagem vai cifrada com a mesma chave e passa
+       pelo hub de conexoes (sse_hub.py), que guarda as mensagens ainda validas para quem reconectar.
+    3. O dispositivo responde com POST /eventos: "push.ack" (ativou ou rejeitou o push) e
+       "confirmacao.resposta" (ESTOU_BEM ou SEM_RESPOSTA). O servidor valida o evento, associa a
+       messageId ao episodio e, se for ESTOU_BEM de um episodio aberto, encerra o episodio.
+    4. Uma thread vigia encerra por expiracao os episodios que ninguem respondeu. Todo encerramento
+       (resposta ou expiracao) vira uma mensagem "queda.confirmacao_encerrada" enviada pelos canais.
+
 Como rodar:
     pip install -r requirements.txt
-    python server.py
+    FLOW_JWT_SECRET=<segredo> python server.py
+    (sem FLOW_JWT_SECRET o servidor nao sobe; contas se criam com "python auth.py criar-conta")
 """
 
 import json

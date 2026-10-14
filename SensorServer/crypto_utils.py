@@ -75,8 +75,12 @@ def decrypt_payload(nonce_b64: str, ciphertext_b64: str) -> str:
 
 def encrypt_payload(plaintext: str) -> tuple[str, str]:
     """
-    Cifra um texto (usado apenas em testes/simulacoes no servidor).
-    Retorna (nonce_b64, ciphertext_b64).
+    Cifra um texto com a chave compartilhada (AES-256-GCM, nonce aleatorio novo a cada chamada).
+    Retorna (nonce_b64, ciphertext_b64), o mesmo formato que decrypt_payload recebe.
+
+    E o caminho de saida do servidor: cifra as respostas de /auth/login e /auth/refresh (server.py) e
+    cada mensagem de push enviada pelos canais (canal_app.py e canal_wokwi.py). Tambem e usada por
+    simular_queda.py e pelos testes para montar requisicoes como um cliente faria.
     """
     nonce = os.urandom(NONCE_SIZE_BYTES)
     ciphertext = _aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)
