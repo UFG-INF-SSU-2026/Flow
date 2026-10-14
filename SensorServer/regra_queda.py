@@ -208,7 +208,14 @@ def vigiar(agora: float | None = None) -> list[Encerramento]:
                 ep.encerrado_em, ep.resultado = agora, "EXPIRADO"
                 saida.append(Encerramento(uid, ep.episode_id, "EXPIRADO"))
     for e in saida:
-        registrar(e.user_id, "episodio.encerrado", {"episodeId": e.episode_id, "resultado": "EXPIRADO"})
+        # R-05: falha de gravacao (disco cheio, permissao) num episodio nao pode impedir que os demais
+        # sejam registrados e devolvidos ao chamador (que despacha o encerramento). O episodio ja esta
+        # marcado como encerrado acima; o erro so fica no log.
+        try:
+            registrar(e.user_id, "episodio.encerrado", {"episodeId": e.episode_id, "resultado": "EXPIRADO"})
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [vigia] falha ao registrar encerramento episodeId={e.episode_id} user={e.user_id}: "
+                  f"{type(exc).__name__}: {str(exc)[:200]}")
     return saida
 
 

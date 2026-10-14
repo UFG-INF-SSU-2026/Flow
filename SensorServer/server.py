@@ -103,43 +103,60 @@ def _registrar_no_buffer(user_id: int, source: str, dados: dict) -> None:
         slot[source] = dados
 
 
+def _gravar_usuario(user_id: int, fontes: dict) -> None:
+    """Grava a linha de um usuario no flush. Pode levantar excecao (disco, permissao, dado nao serializavel)."""
+    dado_app = fontes.get("app")
+    dado_wokwi = fontes.get("wokwi")
+
+    if dado_app is None and dado_wokwi is None:
+        return  # nada chegou dessa vez para esse usuario
+
+    registro = {
+        "timestamp": _agora_iso(),
+        "user_id": user_id,
+        "app": dado_app,
+        "wokwi": dado_wokwi,
+    }
+
+    filepath = _arquivo_usuario(user_id)
+    with open(filepath, "a", encoding="utf-8") as f:
+        f.write(json.dumps(registro, ensure_ascii=False) + "\n")
+
+    _registros_recentes.append(registro)
+    if len(_registros_recentes) > const.MAX_EM_MEMORIA:
+        _registros_recentes.pop(0)
+
+    print(
+        f"[{registro['timestamp']}] usuario={user_id} "
+        f"app={'ok' if dado_app else 'null'} "
+        f"wokwi={'ok' if dado_wokwi else 'null'} -> {filepath}"
+    )
+
+
+def _flush_iteracao() -> None:
+    """Uma passada do flush: esvazia o buffer e grava uma linha por usuario.
+    Cada usuario tem a sua propria protecao (R-05): a falha de um nao impede a gravacao dos outros.
+    A linha do usuario que falhou se perde (o buffer ja foi esvaziado); o erro fica no log."""
+    with _buffer_lock:
+        _buffer_local_copy = {uid: dict(v) for uid, v in _buffer.items()}
+        _buffer.clear()
+
+    for user_id, fontes in _buffer_local_copy.items():
+        try:
+            _gravar_usuario(user_id, fontes)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [flush] falha ao gravar usuario={user_id} (linha perdida): {type(e).__name__}: {str(e)[:200]}")
+
+
 def _flush_loop() -> None:
     """Roda em thread separada: a cada const.JANELA_AGREGACAO_S segundos, grava uma
     linha por usuario que recebeu dado (de app e/ou wokwi) na janela."""
     while True:
         time.sleep(const.JANELA_AGREGACAO_S)
-
-        with _buffer_lock:
-            _buffer_local_copy = {uid: dict(v) for uid, v in _buffer.items()}
-            _buffer.clear()
-
-        for user_id, fontes in _buffer_local_copy.items():
-            dado_app = fontes.get("app")
-            dado_wokwi = fontes.get("wokwi")
-
-            if dado_app is None and dado_wokwi is None:
-                continue  # nada chegou dessa vez para esse usuario
-
-            registro = {
-                "timestamp": _agora_iso(),
-                "user_id": user_id,
-                "app": dado_app,
-                "wokwi": dado_wokwi,
-            }
-
-            filepath = _arquivo_usuario(user_id)
-            with open(filepath, "a", encoding="utf-8") as f:
-                f.write(json.dumps(registro, ensure_ascii=False) + "\n")
-
-            _registros_recentes.append(registro)
-            if len(_registros_recentes) > const.MAX_EM_MEMORIA:
-                _registros_recentes.pop(0)
-
-            print(
-                f"[{registro['timestamp']}] usuario={user_id} "
-                f"app={'ok' if dado_app else 'null'} "
-                f"wokwi={'ok' if dado_wokwi else 'null'} -> {filepath}"
-            )
+        try:
+            _flush_iteracao()
+        except Exception as e:  # noqa: BLE001  (R-05: a thread nunca pode morrer em silencio)
+            print(f"  [flush] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
 def _processar_leitura_ambiente(payload: dict, device_id: str) -> None:
@@ -247,11 +264,26 @@ def _avaliar_queda(user_id: int, source: str, payload: dict, alerta_imobilidade:
         _emitir_pedido(user_id, pedido)
 
 
+def _vigia_iteracao() -> None:
+    """Uma passada do vigia: encerra os episodios vencidos e despacha o encerramento de cada um.
+    Cada encerramento tem a sua propria protecao (R-05): a falha de um nao impede os seguintes.
+    O episodio ja esta marcado como encerrado em regra_queda antes do despacho; se o despacho falhar,
+    so o aviso ao dispositivo se perde e o erro fica no log."""
+    for enc in regra_queda.vigiar():
+        try:
+            _encerrar(enc)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [vigia] falha ao encerrar episodeId={enc.episode_id} user={enc.user_id}: "
+                  f"{type(e).__name__}: {str(e)[:200]}")
+
+
 def _vigia_loop() -> None:
     while True:
         time.sleep(const.INTERVALO_VIGIA_S)
-        for enc in regra_queda.vigiar():
-            _encerrar(enc)
+        try:
+            _vigia_iteracao()
+        except Exception as e:  # noqa: BLE001  (R-05: a thread nunca pode morrer em silencio)
+            print(f"  [vigia] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
 def _decifrar_corpo():
@@ -285,25 +317,19 @@ def _resposta_cifrada(obj: dict):
     return jsonify({"nonce": nonce, "ciphertext": ct})
 
 
-_PADRAO = object()   # sentinela: 'use const.SCHEMA_VERSION_PADRAO lido na hora da chamada' (DC-18)
+def verificar_versao(payload: dict) -> int | None:
+    """Verifica `schemaVersion` (raiz do payload) ANTES de interpretar o resto (Marco 3, 10.2; DC-06/DC-07/DC-20).
 
-
-def verificar_versao(payload: dict, *, ausente=_PADRAO, minima: int = 1) -> int | None:
-    """Verifica `schemaVersion` (raiz do payload) ANTES de interpretar o resto (Marco 3, 10.2; DC-06/DC-07).
-
+    Funcao unica para todas as rotas, sem numero fixo: os limites vem de const.py, lidos na hora da chamada (DC-18).
     Retorna a versao (int) quando suportada, ou None quando nao suportada. Nunca levanta excecao.
-      - ausente: valor assumido se o campo nao existir (omitido = const.SCHEMA_VERSION_PADRAO);
-                 None = a ausencia e invalida.
-      - minima:  menor versao aceita.
-    Invalido: nao inteiro (inclui "3", 3.0, null), booleano (em Python True e int), menor que `minima`
-    ou maior que const.SCHEMA_VERSION_ATUAL."""
-    if "schemaVersion" in payload:
-        v = payload["schemaVersion"]
-    else:
-        v = const.SCHEMA_VERSION_PADRAO if ausente is _PADRAO else ausente
-    if v is None or isinstance(v, bool) or not isinstance(v, int):
+      - ausente: vale const.SCHEMA_VERSION_PADRAO;
+      - de const.SCHEMA_VERSION_MINIMA ate const.SCHEMA_VERSION_ATUAL: aceita (inclusive versao menor que a atual);
+      - invalido: nao inteiro (inclui "3", 3.0, null), booleano (em Python True e int), menor que a minima
+        ou maior que a atual."""
+    v = payload.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
+    if isinstance(v, bool) or not isinstance(v, int):
         return None
-    if v < minima or v > const.SCHEMA_VERSION_ATUAL:
+    if v < const.SCHEMA_VERSION_MINIMA or v > const.SCHEMA_VERSION_ATUAL:
         return None
     return v
 
@@ -324,7 +350,7 @@ def login():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo, ausente=const.SCHEMA_VERSION_ATUAL) is None:   # ausente aceito (DC-07)
+    if verificar_versao(corpo) is None:   # ausente aceito (DC-07)
         return _versao_invalida_400()
     if not auth.device_id_valido(corpo.get("device_id")):
         return jsonify({"status": "erro", "mensagem": "device_id invalido"}), 400
@@ -343,7 +369,7 @@ def refresh():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo, ausente=const.SCHEMA_VERSION_ATUAL) is None:   # ausente aceito (DC-07)
+    if verificar_versao(corpo) is None:   # ausente aceito (DC-07)
         return _versao_invalida_400()
     try:
         tokens = auth.refresh(str(corpo.get("refresh_token", "")))
@@ -359,8 +385,6 @@ def receber_evento():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo, ausente=const.SCHEMA_VERSION_ATUAL) is None:   # ausente aceito (DC-07)
-        return _versao_invalida_400()
     source = corpo.get("source")
     if not isinstance(source, str) or source not in const.FONTES_VALIDAS:
         return jsonify({
@@ -374,8 +398,9 @@ def receber_evento():
         exigir_escopo(g.principal, user_id, source)
     except ForaDeEscopo:
         return negar(403, "fora_de_escopo", g.principal.conta_id)
-    # /eventos so existe a partir da v3: schemaVersion obrigatorio e >= 3 (DC-07)
-    if verificar_versao(corpo, ausente=None, minima=3) is None:
+    # DC-06/DC-07: mesma regra de /dados. Ausente ou versao antiga e aceita; maior que a atual ou invalida
+    # e descartada e logada, com 200 (conteudo invalido de requisicao autenticada, 10.1).
+    if verificar_versao(corpo) is None:
         return _descartar_por_versao("eventos", corpo)
     try:
         ev = mensagens.validar_evento_retorno(corpo, source)

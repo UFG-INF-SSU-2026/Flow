@@ -102,10 +102,14 @@ AUDITORIA_MAX_BYTES = 5 * 1024 * 1024
 # 4. ESQUEMA E VALIDACAO
 # ===========================================================================
 
-# Versao de contrato em vigor (docs/schemas.md). Payload com versao maior e
-# descartado e logado. Definicao unica (antes em mensagens.py, regra_luz.py e
+# Versao MAIS RECENTE do contrato (docs/schemas.md) e unico lugar que escreve o numero (DC-20).
+# Payload com versao maior e descartado e logado; versao menor e aceita. Definicao unica (antes em mensagens.py, regra_luz.py e
 # regra_imobilidade.py).
 SCHEMA_VERSION_ATUAL = 3
+
+# Menor versao do contrato que o servidor ainda aceita (DC-20). Abaixo disso o payload e descartado.
+# Versao menor que a atual, mas >= esta, e aceita e usada.
+SCHEMA_VERSION_MINIMA = 1
 
 # Versao assumida quando o payload nao traz schemaVersion (produtor antigo).
 SCHEMA_VERSION_PADRAO = 1
