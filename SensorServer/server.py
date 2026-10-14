@@ -68,7 +68,6 @@ import regra_imobilidade
 
 # Canais de push (servidor -> dispositivo). Todos expoem CANAL e enviar(user_id, mensagem).
 CANAIS = [canal_app, canal_wokwi]
-_SCHEMA_VERSION_AUSENTE_DADOS=1
 
 app = Flask(__name__)
 app.register_blueprint(canal_app.bp)
@@ -286,22 +285,25 @@ def _resposta_cifrada(obj: dict):
     return jsonify({"nonce": nonce, "ciphertext": ct})
 
 
-def verificar_versao(payload: dict, *, ausente: int | None = _SCHEMA_VERSION_AUSENTE_DADOS,
-                     minima: int = 1) -> int | None:
+_PADRAO = object()   # sentinela: 'use const.SCHEMA_VERSION_PADRAO lido na hora da chamada' (DC-18)
+
+
+def verificar_versao(payload: dict, *, ausente=_PADRAO, minima: int = 1) -> int | None:
     """Verifica `schemaVersion` (raiz do payload) ANTES de interpretar o resto (Marco 3, 10.2; DC-06/DC-07).
 
     Retorna a versao (int) quando suportada, ou None quando nao suportada. Nunca levanta excecao.
-      - ausente: valor assumido se o campo nao existir; None = a ausencia e invalida.
+      - ausente: valor assumido se o campo nao existir (omitido = const.SCHEMA_VERSION_PADRAO);
+                 None = a ausencia e invalida.
       - minima:  menor versao aceita.
     Invalido: nao inteiro (inclui "3", 3.0, null), booleano (em Python True e int), menor que `minima`
-    ou maior que mensagens.SCHEMA_VERSION."""
+    ou maior que const.SCHEMA_VERSION_ATUAL."""
     if "schemaVersion" in payload:
         v = payload["schemaVersion"]
     else:
-        v = ausente
+        v = const.SCHEMA_VERSION_PADRAO if ausente is _PADRAO else ausente
     if v is None or isinstance(v, bool) or not isinstance(v, int):
         return None
-    if v < minima or v > mensagens.SCHEMA_VERSION:
+    if v < minima or v > const.SCHEMA_VERSION_ATUAL:
         return None
     return v
 
@@ -314,7 +316,7 @@ def _descartar_por_versao(rota: str, payload: dict):
 
 def _versao_invalida_400():
     return jsonify({"status": "erro",
-                    "mensagem": f"schemaVersion invalido ou nao suportado (maximo {mensagens.SCHEMA_VERSION})"}), 400
+                    "mensagem": f"schemaVersion invalido ou nao suportado (maximo {const.SCHEMA_VERSION_ATUAL})"}), 400
 
 
 @app.route("/auth/login", methods=["POST"])
@@ -322,7 +324,7 @@ def login():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo, ausente=mensagens.SCHEMA_VERSION) is None:   # ausente aceito (DC-07)
+    if verificar_versao(corpo, ausente=const.SCHEMA_VERSION_ATUAL) is None:   # ausente aceito (DC-07)
         return _versao_invalida_400()
     if not auth.device_id_valido(corpo.get("device_id")):
         return jsonify({"status": "erro", "mensagem": "device_id invalido"}), 400
@@ -341,7 +343,7 @@ def refresh():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo, ausente=mensagens.SCHEMA_VERSION) is None:   # ausente aceito (DC-07)
+    if verificar_versao(corpo, ausente=const.SCHEMA_VERSION_ATUAL) is None:   # ausente aceito (DC-07)
         return _versao_invalida_400()
     try:
         tokens = auth.refresh(str(corpo.get("refresh_token", "")))
@@ -357,7 +359,7 @@ def receber_evento():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo, ausente=mensagens.SCHEMA_VERSION) is None:   # ausente aceito (DC-07)
+    if verificar_versao(corpo, ausente=const.SCHEMA_VERSION_ATUAL) is None:   # ausente aceito (DC-07)
         return _versao_invalida_400()
     source = corpo.get("source")
     if not isinstance(source, str) or source not in const.FONTES_VALIDAS:

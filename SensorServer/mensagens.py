@@ -6,7 +6,7 @@ Mensagens do Marco 3 (sem I/O de rede):
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import const   # SCHEMA_VERSION_ATUAL, MARGEM_SERVIDOR_S, TTL_ENCERRAMENTO_S (lidos na hora do uso)
+import const   # SCHEMA_VERSION_ATUAL, FONTES_VALIDAS, MARGEM_SERVIDOR_S, TTL_ENCERRAMENTO_S (lidos na hora do uso)
 
 TIPO_SOLICITADA = "queda.confirmacao_solicitada"
 TIPO_ENCERRADA = "queda.confirmacao_encerrada"
@@ -90,8 +90,8 @@ def validar_evento_retorno(payload: dict, source: str) -> dict:
 
     `source` deve ser 'app' ou 'wokwi' e JA conferida com o token pelo chamador (authz.exigir_escopo).
     Qualquer outro valor e erro de programacao (ValueError), nao conteudo invalido do cliente."""
-    if source not in ("app", "wokwi"):
-        raise ValueError(f"source deve ser 'app' ou 'wokwi' (ja conferida com o token): {source!r}")
+    if source not in const.FONTES_VALIDAS:
+        raise ValueError(f"source deve ser uma de {sorted(const.FONTES_VALIDAS)} (ja conferida com o token): {source!r}")
     tipo = payload.get("eventType")
     if tipo not in EVENTOS_RETORNO:
         raise EventoRetornoInvalido(f"eventType desconhecido: {tipo}")

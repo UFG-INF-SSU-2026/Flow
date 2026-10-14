@@ -90,7 +90,6 @@ def extrair_dinamica(fonte: str, dados: dict) -> tuple[float, float] | None:
 
 
 # ------------------- deduplicacao da telemetria do app (DC-08) -------------------
-TOLERANCIA_RELOGIO_S = 60       # TODO(R-12): migrar para const.py (tabela 6.5)
 _MAX_REFERENCIAS_DEDUP = 1000   # limite de dispositivos rastreados (device_id vem do payload do cliente)
 
 _ultimo_ts_app: dict[tuple, float] = {}   # (user_id, "app", device_id) -> ultimo timestamp_envio (epoch ms)
@@ -98,7 +97,7 @@ _ultimo_ts_app: dict[tuple, float] = {}   # (user_id, "app", device_id) -> ultim
 
 def eh_duplicado_app(user_id: int, device_id: str, dados: dict) -> bool:
     """True se esta leitura do app e duplicata/atrasada: `timestamp_envio` (epoch ms, raiz do payload) menor ou
-    igual ao ultimo aceito para (user_id, 'app', device_id). Se regredir mais de TOLERANCIA_RELOGIO_S, assume
+    igual ao ultimo aceito para (user_id, 'app', device_id). Se regredir mais de const.TOLERANCIA_RELOGIO_S, assume
     reajuste de relogio do celular: vira a nova referencia e NAO e duplicata (nao bloqueia a analise de queda).
 
     Nao e duplicata (retorna False, sem tocar no estado) a leitura sem `acelerometro` aproveitavel ou sem
@@ -112,7 +111,7 @@ def eh_duplicado_app(user_id: int, device_id: str, dados: dict) -> bool:
     with _lock:
         ultimo = _ultimo_ts_app.get(chave)
         if ultimo is not None and ts <= ultimo:
-            if ultimo - ts <= TOLERANCIA_RELOGIO_S * 1000:
+            if ultimo - ts <= const.TOLERANCIA_RELOGIO_S * 1000:
                 return True                          # duplicata ou leitura atrasada
             # regressao grande: reajuste de relogio, cai na nova referencia abaixo
         _ultimo_ts_app.pop(chave, None)              # reinsere no fim: mantem a ordem de uso para o limite

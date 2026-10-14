@@ -166,8 +166,8 @@ COOLDOWN_S = 60
 LOG_DESATUALIZADA_INTERVALO_S = 60
 
 # Regressao (s) de timestamp_envio do app acima da qual se assume reajuste de
-# relogio do celular e a referencia da deduplicacao e reiniciada.
-# [ainda nao usada: R-03]
+# relogio do celular e a referencia da deduplicacao e reiniciada
+# (regra_queda.eh_duplicado_app, DC-08).
 TOLERANCIA_RELOGIO_S = 60
 
 # Tempo (s) que o mapa messageId -> episodio guarda entradas, para classificar
