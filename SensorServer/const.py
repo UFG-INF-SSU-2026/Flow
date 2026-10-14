@@ -174,9 +174,10 @@ LOG_DESATUALIZADA_INTERVALO_S = 60
 # (regra_queda.eh_duplicado_app, DC-08).
 TOLERANCIA_RELOGIO_S = 60
 
-# Tempo (s) que o mapa messageId -> episodio guarda entradas, para classificar
-# respostas tardias.
-# [ainda nao usada]
+# Tempo (s) que o mapa messageId -> episodio guarda cada entrada DEPOIS de a
+# mensagem expirar, para classificar respostas tardias. Menor valor = mapa
+# menor, mas respostas muito atrasadas passam a ser gravadas como mensagem
+# desconhecida. A poda roda na iteracao do vigia.
 RETENCAO_MENSAGENS_S = 3600
 
 # Valores de 'motivo' na mensagem e no registro do episodio.

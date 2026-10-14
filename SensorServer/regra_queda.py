@@ -15,7 +15,7 @@ import math
 import os
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import const   # todas as constantes (limiares, timeout, margem, cooldown...) vivem em const.py
@@ -29,7 +29,6 @@ class Episodio:
     motivo: str
     aberto_em: float
     prazo: float
-    message_ids: set = field(default_factory=set)
     encerrado_em: float | None = None
     resultado: str | None = None
 
@@ -56,7 +55,18 @@ class _FaseFonte:
 
 _fases: dict[tuple, _FaseFonte] = {}
 _episodios: dict[int, Episodio] = {}      # episodio mais recente por usuario (aberto ou encerrado)
-_msg_para_user: dict[str, int] = {}
+
+
+@dataclass
+class _Mensagem:
+    user_id: int
+    episode_id: str
+    expira_em: float        # relogio do servidor (s); base da poda por const.RETENCAO_MENSAGENS_S
+
+
+# messageId -> dono e episodio da mensagem. E a unica fonte para saber a que episodio um retorno pertence.
+# Cresce a cada pedido emitido e e podado em vigiar().
+_mensagens: dict[str, _Mensagem] = {}
 
 
 def _agora() -> float:
@@ -167,32 +177,43 @@ def _abrir(user_id: int, motivo: str, agora: float) -> PedidoConfirmacao | None:
     return PedidoConfirmacao(novo.episode_id, const.TIMEOUT_CONFIRMACAO_S, motivo)
 
 
-def anotar_mensagem(user_id: int, episode_id: str, message_id: str) -> None:
+def anotar_mensagem(user_id: int, episode_id: str, message_id: str, agora: float | None = None) -> None:
+    """Registra que `message_id` pertence a (user_id, episode_id). O episodio do retorno e sempre resolvido por aqui."""
+    agora = _agora() if agora is None else agora
     with _lock:
         ep = _episodios.get(user_id)
-        if ep and ep.episode_id == episode_id:
-            ep.message_ids.add(message_id)
-        _msg_para_user[message_id] = user_id
+        if ep is not None and ep.episode_id == episode_id:
+            expira_em = ep.prazo
+        else:
+            expira_em = agora + const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S
+        _mensagens[message_id] = _Mensagem(user_id, episode_id, expira_em)
 
 
 def registrar_retorno(user_id: int, evento: dict, agora: float | None = None) -> Encerramento | None:
-    """evento: dict normalizado por mensagens.validar_evento_retorno. Armazena e, se ESTOU_BEM num episodio
-    aberto, encerra como CONFIRMADO."""
+    """evento: dict normalizado por mensagens.validar_evento_retorno. Grava o retorno com o episodio da sua
+    `messageId` e, se for ESTOU_BEM de mensagem conhecida cujo episodio ainda esta aberto, encerra como CONFIRMADO.
+
+    - messageId desconhecida ou de outro usuario: `episodeId: null` e `mensagem_desconhecida: true`; nada encerra.
+    - retorno de episodio ja encerrado (inclusive de um episodio anterior ao mais recente): `tardia: true`."""
     agora = _agora() if agora is None else agora
     enc = None
-    ep_id = None
+    extra: dict = {}
     with _lock:
-        ep = _episodios.get(user_id)
-        if ep is not None:
-            ep_id = ep.episode_id
-        aberto = ep is not None and ep.encerrado_em is None and evento["messageId"] in ep.message_ids
-        if evento["eventType"] == "confirmacao.resposta" and evento["state"] == "ESTOU_BEM":
-            if aberto:
+        msg = _mensagens.get(evento["messageId"])
+        if msg is None or msg.user_id != user_id:
+            ep_id = None
+            extra["mensagem_desconhecida"] = True
+        else:
+            ep_id = msg.episode_id
+            ep = _episodios.get(user_id)
+            # O episodio mais recente e o unico que pode estar aberto: um novo so abre depois que o anterior encerra.
+            aberto = ep is not None and ep.episode_id == ep_id and ep.encerrado_em is None
+            if aberto and evento["eventType"] == "confirmacao.resposta" and evento["state"] == "ESTOU_BEM":
                 ep.encerrado_em, ep.resultado = agora, "CONFIRMADO"
-                enc = Encerramento(user_id, ep.episode_id, "CONFIRMADO")
-            else:
-                evento = {**evento, "tardia": True}
-    registrar(user_id, evento["eventType"], {**evento, "episodeId": ep_id})
+                enc = Encerramento(user_id, ep_id, "CONFIRMADO")
+            elif not aberto:
+                extra["tardia"] = True
+    registrar(user_id, evento["eventType"], {**evento, **extra, "episodeId": ep_id})
     if enc:
         registrar(user_id, "episodio.encerrado", {"episodeId": enc.episode_id, "resultado": "CONFIRMADO"})
     return enc
@@ -207,6 +228,7 @@ def vigiar(agora: float | None = None) -> list[Encerramento]:
             if ep.encerrado_em is None and agora >= ep.prazo:
                 ep.encerrado_em, ep.resultado = agora, "EXPIRADO"
                 saida.append(Encerramento(uid, ep.episode_id, "EXPIRADO"))
+        _podar_mensagens(agora)
     for e in saida:
         # falha de gravacao (disco cheio, permissao) num episodio nao pode impedir que os demais
         # sejam registrados e devolvidos ao chamador (que despacha o encerramento). O episodio ja esta
@@ -217,6 +239,14 @@ def vigiar(agora: float | None = None) -> list[Encerramento]:
             print(f"  [vigia] falha ao registrar encerramento episodeId={e.episode_id} user={e.user_id}: "
                   f"{type(exc).__name__}: {str(exc)[:200]}")
     return saida
+
+
+def _podar_mensagens(agora: float) -> None:
+    """Remove do mapa as mensagens que expiraram ha mais de const.RETENCAO_MENSAGENS_S. Chamar com _lock tomado.
+    A retencao alem da validade existe para classificar como `tardia` as respostas que chegam depois do prazo."""
+    corte = agora - const.RETENCAO_MENSAGENS_S
+    for mid in [m for m, info in _mensagens.items() if info.expira_em < corte]:
+        del _mensagens[mid]
 
 
 # ------------------------------- armazenamento -----------------------------
