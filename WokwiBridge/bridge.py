@@ -1,136 +1,315 @@
 """
-Ponte entre a simulação Wokwi (rodando no VS Code) e o servidor unificado
-(SensorServer/server.py).
+Gateway bidirecional entre a simulacao Wokwi (VS Code) e o servidor (Marco 3).
 
-Como funciona:
-  1. O Wokwi for VS Code expõe a porta serial do ESP32 simulado via
-     RFC2217 (configurado em Sketch/wokwi.toml: rfc2217ServerPort = 4000).
-     Esse recurso é de depuração da extensão e funciona com a licença
-     gratuita/Community (não depende do Private IoT Gateway pago).
-  2. Este script conecta nessa porta serial local, lê linha por linha
-     (o firmware já imprime um JSON por linha via Serial.println),
-     anexa a identificação do usuário (user_id) e da fonte (source),
-     CIFRA o evento (AES-256-GCM, mesmo mecanismo do app Android - ver
-     crypto_utils.py) e envia (POST) o envelope cifrado para o servidor.
+  Serial -> servidor : le JSON do ESP32, anexa user_id/source, cifra e envia
+                       imobilidade.*                      -> POST /dados
+                       push.ack / confirmacao.resposta    -> POST /eventos
+  Servidor -> serial : mantem GET /push/wokwi (SSE) aberto, decifra, valida e traduz em comando de texto
+                       CMD;BUZZER_ON;<messageId>;<timeoutMs>
+                       CMD;BUZZER_OFF;<messageId>;<motivo>
 
-Pré-requisitos:
-  - A simulação já estar rodando no VS Code (F1 -> Wokwi: Start Simulator),
-    com a aba do simulador VISÍVEL (senão a simulação pausa).
-  - O servidor (SensorServer/server.py) já estar rodando.
+O bridge NAO decide nada: decifra, valida, traduz, escreve.
+
+Configuracao por variaveis de ambiente (nada de editar este arquivo):
+  FLOW_BRIDGE_ID      conta do bridge (papel 'dispositivo')          [obrigatoria]
+  FLOW_BRIDGE_SECRET  senha da conta                                   [obrigatoria]
+  FLOW_SERVIDOR       URL base do servidor (padrao http://localhost:5000)
+  FLOW_BRIDGE_DEVICE  identificador deste bridge (padrao wokwi-bridge-01)
+
+Pre-requisitos:
+  - Simulacao rodando no VS Code (F1 -> Wokwi: Start Simulator), com a aba do simulador VISIVEL
+    (rfc2217ServerPort = 4000 em sketch/wokwi.toml).
+  - Servidor (SensorServer/server.py) no ar e conta de papel 'dispositivo' (fonte 'wokwi') criada.
 
 Uso:
   pip install -r requirements.txt
   python bridge.py
 """
-
 import json
+import os
 import sys
+import threading
 import time
+from collections import deque
+from datetime import datetime, timezone
 
 import requests
 import serial
 
-from crypto_utils import encrypt_payload
+from crypto_utils import decrypt_payload, encrypt_payload
 
-# --- Configurações ---------------------------------------------------
+# --- Configuracoes ----------------------------------------------------------
 RFC2217_URL = "rfc2217://localhost:4000"
 BAUDRATE = 115200
-SERVIDOR_URL = "http://localhost:5000/dados"
-RECONECTAR_A_CADA_S = 3  # tempo de espera para tentar reconectar em caso de erro
+SERVIDOR = os.environ.get("FLOW_SERVIDOR", "http://localhost:5000").rstrip("/")
+BRIDGE_ID = os.environ.get("FLOW_BRIDGE_ID", "")
+BRIDGE_SECRET = os.environ.get("FLOW_BRIDGE_SECRET", "")
+BRIDGE_DEVICE = os.environ.get("FLOW_BRIDGE_DEVICE", "wokwi-bridge-01")
+RECONECTAR_A_CADA_S = 3
+BACKOFF_MAX_S = 30
+READ_TIMEOUT_SSE_S = 40          # > keepalive do servidor (15 s): detecta conexao morta
+EVENTOS_RETORNO = {"push.ack", "confirmacao.resposta"}
+MENSAGENS_VISTAS_MAX = 100
+# -----------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------
-# ID do usuário (idoso) dono deste dispositivo wokwi.
-#
-# IMPORTANTE: precisa ser EXATAMENTE o mesmo número inteiro configurado
-# no app Android (tela "Configurações", campo "ID do usuário"), para que
-# o servidor entenda que os dados do celular e do wokwi pertencem à mesma
-# pessoa e os salve juntos em dataUsers/usuario_<ID>.jsonl.
-#
-# Se este bridge estiver simulando o wokwi de outro idoso, basta trocar
-# este valor (não precisa reiniciar a simulação no Wokwi, só o bridge).
-# ---------------------------------------------------------------------
-WOKWI_USER_ID = 1
+
+def log(msg: str) -> None:
+    print(f"[bridge] {msg}", flush=True)
+
+
+def _cifrar(obj: dict) -> dict:
+    nonce, ct = encrypt_payload(json.dumps(obj))
+    return {"nonce": nonce, "ciphertext": ct}
+
+
+def _decifrar(envelope: dict) -> dict:
+    return json.loads(decrypt_payload(envelope["nonce"], envelope["ciphertext"]))
+
+
+class Sessao:
+    """Credenciais do bridge: login, renovacao e cabecalho Authorization."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.access = None
+        self.refresh_token = None
+        self.user_id = None
+
+    def _aplicar(self, tokens: dict) -> None:
+        self.access = tokens["access_token"]
+        self.refresh_token = tokens["refresh_token"]
+        self.user_id = tokens["user_ids"][0]       # o user_id vem do login, nao de configuracao manual
+
+    def login(self) -> None:
+        r = requests.post(f"{SERVIDOR}/auth/login", timeout=5, json=_cifrar({
+            "schemaVersion": 3, "identificador": BRIDGE_ID, "segredo": BRIDGE_SECRET,
+            "fonte": "wokwi", "device_id": BRIDGE_DEVICE}))
+        if r.status_code != 200:
+            raise RuntimeError(f"login recusado ({r.status_code}): {r.text}")
+        self._aplicar(_decifrar(r.json()))
+
+    def renovar(self, token_recusado: str | None = None) -> None:
+        """refresh; se o refresh falhar, refaz o login com a senha do ambiente.
+
+        token_recusado: o access token que acabou de receber 401. Se outra thread ja o trocou
+        enquanto esta esperava o lock, nao ha o que renovar (o refresh token e de uso unico).
+        """
+        with self._lock:
+            if token_recusado is not None and self.access != token_recusado:
+                return
+            try:
+                r = requests.post(f"{SERVIDOR}/auth/refresh", timeout=5,
+                                  json=_cifrar({"schemaVersion": 3, "refresh_token": self.refresh_token}))
+                if r.status_code == 200:
+                    self._aplicar(_decifrar(r.json()))
+                    return
+            except requests.RequestException:
+                pass
+            self.login()
+
+    def headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.access}"}
+
+
+class SerialHolder:
+    """A conexao serial pode ser recriada pela reconexao; as duas threads usam sempre a ATUAL."""
+
+    def __init__(self):
+        self.ser = None
+        self._wlock = threading.Lock()
+
+    def escrever(self, linha: str) -> bool:
+        with self._wlock:
+            if self.ser is None:
+                return False
+            try:
+                self.ser.write((linha + "\n").encode())
+                return True
+            except Exception as e:
+                log(f"falha ao escrever na serial: {e}")
+                return False
 
 
 def conectar_serial():
-    """Tenta conectar na porta serial exposta pelo Wokwi via RFC2217.
-    Fica tentando até a simulação estar de pé."""
     while True:
         try:
             ser = serial.serial_for_url(RFC2217_URL, baudrate=BAUDRATE, timeout=1)
-            print(f"[bridge] Conectado à porta serial do Wokwi ({RFC2217_URL})")
+            log(f"Conectado a porta serial do Wokwi ({RFC2217_URL})")
             return ser
         except Exception as e:
-            print(f"[bridge] Não foi possível conectar em {RFC2217_URL} ainda "
-                  f"({e}). A simulação já está rodando no VS Code? "
-                  f"Tentando novamente em {RECONECTAR_A_CADA_S}s...")
+            log(f"Nao foi possivel conectar em {RFC2217_URL} ainda ({e}). "
+                f"A simulacao ja esta rodando no VS Code? Tentando novamente em {RECONECTAR_A_CADA_S}s...")
             time.sleep(RECONECTAR_A_CADA_S)
 
 
-def enviar_para_servidor(envelope: dict):
+# ------------------------------ serial -> servidor ---------------------------
+def enviar(sessao: Sessao, rota: str, evento: dict) -> None:
+    for tentativa in (1, 2):
+        usado = sessao.access
+        try:
+            r = requests.post(f"{SERVIDOR}{rota}", json=_cifrar(evento), headers=sessao.headers(), timeout=5)
+        except requests.RequestException as e:
+            log(f"Falha ao enviar para {rota}: {e}")     # sem fila de retransmissao (decisao de arquitetura)
+            return
+        if r.status_code == 401 and tentativa == 1:
+            try:
+                sessao.renovar(usado)
+            except Exception as e:                       # servidor fora / credencial recusada: descarta o evento
+                log(f"Nao foi possivel renovar o token ({e}); evento descartado")
+                return
+            continue
+        if r.status_code >= 300:
+            log(f"Servidor respondeu {r.status_code} em {rota}: {r.text}")
+        return
+
+
+def processar_linha_serial(sessao: Sessao, linha: str) -> None:
+    # O firmware imprime boas-vindas e mensagens de [DEBUG] que nao sao JSON: so repassamos eventos estruturados.
+    if not linha.startswith("{"):
+        log(f"(ignorado, nao e JSON) {linha}")
+        return
     try:
-        resp = requests.post(SERVIDOR_URL, json=envelope, timeout=5)
-        if resp.status_code >= 300:
-            print(f"[bridge] Servidor respondeu {resp.status_code}: {resp.text}")
-    except requests.RequestException as e:
-        print(f"[bridge] Falha ao enviar para o servidor ({SERVIDOR_URL}): {e}")
+        evento = json.loads(linha)
+    except json.JSONDecodeError:
+        log(f"(ignorado, JSON invalido) {linha}")
+        return
+    if not isinstance(evento, dict):
+        log(f"(ignorado, JSON nao e objeto) {linha}")
+        return
+    evento["user_id"] = sessao.user_id
+    evento["source"] = "wokwi"
+    rota = "/eventos" if evento.get("eventType") in EVENTOS_RETORNO else "/dados"
+    log(f"Evento capturado -> {rota}: {evento}")
+    enviar(sessao, rota, evento)
 
 
-def main():
-    ser = conectar_serial()
-
-    print(f"[bridge] user_id configurado para este wokwi: {WOKWI_USER_ID}")
-    print("[bridge] Lendo eventos da simulação, cifrando e enviando para "
-          f"{SERVIDOR_URL} ... (Ctrl+C para sair)")
-
+def laco_serial(sessao: Sessao, holder: SerialHolder, abrir_serial=conectar_serial) -> None:
+    holder.ser = abrir_serial()
     while True:
         try:
-            linha_bruta = ser.readline()
+            bruta = holder.ser.readline()
         except Exception as e:
-            print(f"[bridge] Conexão serial perdida ({e}). Reconectando...")
-            ser = conectar_serial()
+            log(f"Conexao serial perdida ({e}). Reconectando...")
+            holder.ser = abrir_serial()
             continue
+        if not bruta:
+            continue                                     # timeout de leitura, tenta de novo
+        linha = bruta.decode(errors="ignore").strip()
+        if linha:
+            processar_linha_serial(sessao, linha)
 
-        if not linha_bruta:
-            continue  # timeout de leitura, tenta de novo
 
-        linha = linha_bruta.decode(errors="ignore").strip()
-        if not linha:
-            continue
+# ------------------------------ servidor -> serial ---------------------------
+def traduzir(msg: dict) -> str | None:
+    """Mensagem de push (v3) -> linha de comando para o firmware. None se o tipo nao e suportado."""
+    tipo, p = msg["messageType"], msg["payload"]
+    if tipo == "queda.confirmacao_solicitada":
+        return f"CMD;BUZZER_ON;{msg['messageId']};{int(p['timeoutMs'])}"
+    if tipo == "queda.confirmacao_encerrada":
+        return f"CMD;BUZZER_OFF;{msg['messageId']};{p['resultado']}"
+    return None
 
-        # O sketch imprime uma linha de boas-vindas e mensagens de [DEBUG]
-        # que não são JSON (ex.: toggles de botão) - ignoramos essas e
-        # repassamos só os eventos estruturados.
-        if not linha.startswith("{"):
-            print(f"[bridge] (ignorado, não é JSON) {linha}")
-            continue
 
+def _expirada(msg: dict) -> bool:
+    exp = datetime.strptime(msg["expiresAt"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= exp
+
+
+def tratar_push(sessao: Sessao, holder: SerialHolder, vistas: deque, msg: dict) -> None:
+    if msg.get("schemaVersion") != 3:
+        log(f"push descartado: schemaVersion {msg.get('schemaVersion')}")
+        return
+    if msg.get("userId") != sessao.user_id:
+        log("push descartado: userId diferente do deste bridge")
+        return
+    if msg["messageId"] in vistas:
+        return                                           # idempotencia (reconexao pode reenviar)
+    vistas.append(msg["messageId"])
+    if _expirada(msg):
+        log(f"push descartado: expirado ({msg['messageType']})")
+        return
+    cmd = traduzir(msg)
+    if cmd is None:
+        log(f"push ignorado: tipo nao suportado {msg['messageType']}")
+        return
+    ok = holder.escrever(cmd)
+    log(f"push {msg['messageType']} -> serial {'OK' if ok else 'FALHOU'}: {cmd}")
+
+
+def laco_push(sessao: Sessao, holder: SerialHolder) -> None:
+    vistas: deque = deque(maxlen=MENSAGENS_VISTAS_MAX)
+    last_id = 0
+    espera = 1
+    while True:
         try:
-            evento = json.loads(linha)
-        except json.JSONDecodeError:
-            print(f"[bridge] (ignorado, JSON inválido) {linha}")
-            continue
+            h = {**sessao.headers(), "Accept": "text/event-stream"}
+            usado = sessao.access
+            if last_id:
+                h["Last-Event-ID"] = str(last_id)
+            with requests.get(f"{SERVIDOR}/push/wokwi", headers=h, stream=True,
+                              timeout=(5, READ_TIMEOUT_SSE_S)) as r:
+                if r.status_code == 401:
+                    log("401 em /push/wokwi: renovando token")
+                    sessao.renovar(usado)
+                    time.sleep(1)                        # evita laco quente se o servidor continuar recusando
+                    continue
+                if r.status_code == 403:
+                    log("403 em /push/wokwi: conta sem permissao. Nova tentativa em 30s.")
+                    time.sleep(BACKOFF_MAX_S)
+                    continue
+                r.raise_for_status()
+                log("Canal de push aberto (/push/wokwi)")
+                espera = 1
+                ev: dict = {}
+                for linha in r.iter_lines(decode_unicode=True):
+                    if linha == "":                      # fim de um evento SSE
+                        if ev.get("event") == "push":
+                            last_id = int(ev.get("id", last_id))
+                            try:
+                                msg = _decifrar(json.loads(ev["data"]))
+                                tratar_push(sessao, holder, vistas, msg)
+                            except Exception as e:       # uma mensagem ruim nao derruba o canal
+                                log(f"push invalido descartado ({type(e).__name__}: {e})")
+                        elif ev.get("event") == "reautenticar":
+                            log("Servidor pediu reautenticacao; renovando token e reconectando")
+                            sessao.renovar(usado)
+                            break
+                        ev = {}
+                    elif not linha.startswith(":"):      # ':' = comentario/keepalive
+                        k, _, v = linha.partition(":")
+                        ev[k] = v.strip()
+        except requests.ConnectionError as e:
+            # Servidor fora do ar: ao voltar, os ids do SSE podem ter recomecado do 1 (contador em memoria).
+            # Zerar o Last-Event-ID e seguro: repetidas caem em 'vistas' e expiradas nao sao enviadas.
+            last_id = 0
+            log(f"Canal de push caiu ({e}). Reconectando em {espera}s...")
+        except Exception as e:                           # timeout, HTTP != 2xx, falha de renovacao, etc.
+            log(f"Canal de push caiu ({type(e).__name__}: {e}). Reconectando em {espera}s...")
+        time.sleep(espera)
+        espera = min(espera * 2, BACKOFF_MAX_S)
 
-        # Anexa identificação do usuário e da fonte ANTES de cifrar, para
-        # que o servidor consiga rotear/agregar sem precisar decifrar
-        # heurísticas de formato.
-        evento["user_id"] = WOKWI_USER_ID
-        evento["source"] = "wokwi"
 
-        print(f"[bridge] Evento capturado (user_id={WOKWI_USER_ID}): {evento}")
-
-        # Cifra o evento inteiro (mesmo mecanismo do app: AES-256-GCM,
-        # chave compartilhada fixa - ver crypto_utils.py). O servidor
-        # decifra o envelope da mesma forma para as duas fontes.
-        nonce_b64, cipher_b64 = encrypt_payload(json.dumps(evento))
-        envelope = {"nonce": nonce_b64, "ciphertext": cipher_b64}
-
-        enviar_para_servidor(envelope)
+# ----------------------------------- main -----------------------------------
+def main(abrir_serial=conectar_serial) -> None:
+    if not BRIDGE_ID or not BRIDGE_SECRET:
+        sys.exit("Defina FLOW_BRIDGE_ID e FLOW_BRIDGE_SECRET (ver INSTRUCOES.md).")
+    sessao = Sessao()
+    while True:
+        try:
+            sessao.login()
+            break
+        except Exception as e:
+            log(f"Login falhou ({e}). Tentando novamente em {RECONECTAR_A_CADA_S}s...")
+            time.sleep(RECONECTAR_A_CADA_S)
+    log(f"Autenticado. user_id={sessao.user_id}")
+    holder = SerialHolder()
+    threading.Thread(target=laco_push, args=(sessao, holder), daemon=True).start()
+    laco_serial(sessao, holder, abrir_serial)
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[bridge] Encerrado pelo usuário.")
+        log("Encerrado pelo usuario.")
         sys.exit(0)
