@@ -7,7 +7,7 @@ import const
 
 
 def _login(cli, **campos):
-    corpo = {"schemaVersion": 3, "identificador": "idoso1", "segredo": "senha-idoso", "fonte": "app",
+    corpo = {"schemaVersion": const.SCHEMA_VERSION_AUTH, "identificador": "idoso1", "segredo": "senha-idoso", "fonte": "app",
              "device_id": "cel1", **campos}
     return cli.post("/auth/login", corpo)
 

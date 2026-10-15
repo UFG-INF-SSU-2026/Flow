@@ -30,7 +30,7 @@ class FluxoQueda:
     def leitura_wokwi(self, value, vmax) -> None:
         seq = self._proxima_seq()
         self._dados_wokwi({
-            "schemaVersion": 3, "eventType": "imobilidade.leitura", "deviceId": "bridge-dev",
+            "schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "bridge-dev",
             "entityId": "idoso-sim", "eventTimeMs": seq * 1000, "sequence": seq, "value": value,
             "valueMax": vmax, "unit": "m/s2", "state": "NORMAL", "user_id": 1, "source": "wokwi"})
 
@@ -38,7 +38,7 @@ class FluxoQueda:
         """Evento imobilidade.decisao (por exemplo ALERTA_IMOBILIDADE, que alimenta o gatilho B)."""
         seq = self._proxima_seq()
         self._dados_wokwi({
-            "schemaVersion": 3, "eventType": "imobilidade.decisao", "deviceId": "bridge-dev",
+            "schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.decisao", "deviceId": "bridge-dev",
             "entityId": "idoso-sim", "eventTimeMs": seq * 1000, "sequence": seq, "value": value,
             "unit": "m/s2", "state": state, "user_id": 1, "source": "wokwi"})
 
@@ -46,7 +46,7 @@ class FluxoQueda:
         """Telemetria do app com `acelerometro`. `timestamp_envio` cresce a cada chamada (senao seria duplicata)."""
         self._ts_app += 1000
         r = self.srv.post("/dados", {
-            "schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "cel1",
+            "schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
             "timestamp_envio": self._ts_app,
             "acelerometro": {"magnitude": magnitude, "magnitude_max_janela": magnitude_max}}, self.tok_app)
         assert r.status_code == 200 and not r.json().get("descartado"), r.text
@@ -64,14 +64,14 @@ class FluxoQueda:
     def ack_bridge(self, message_id: str) -> None:
         seq = self._proxima_seq()
         r = self.srv.post("/eventos", {
-            "schemaVersion": 3, "source": "wokwi", "user_id": 1, "deviceId": "bridge-dev", "entityId": "idoso-sim",
+            "schemaVersion": const.SCHEMA_VERSION_WOKWI, "source": "wokwi", "user_id": 1, "deviceId": "bridge-dev", "entityId": "idoso-sim",
             "eventTimeMs": seq * 1000, "sequence": seq, "eventType": "push.ack", "state": "ATIVADO",
             "messageId": message_id}, self.tok_wk)
         assert r.status_code == 200 and r.json() == {"status": "ok"}, r.text
 
     def resposta_app(self, message_id: str, state: str = "ESTOU_BEM") -> None:
         r = self.srv.post("/eventos", {
-            "schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "cel1",
+            "schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
             "event_time": "2026-10-14T12:00:00.000Z", "eventType": "confirmacao.resposta", "state": state,
             "messageId": message_id}, self.tok_app)
         assert r.status_code == 200 and r.json() == {"status": "ok"}, r.text

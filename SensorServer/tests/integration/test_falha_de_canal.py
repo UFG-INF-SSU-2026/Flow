@@ -16,7 +16,7 @@ class Fluxo:
 
     def leitura(self, value, vmax):
         self._seq += 1
-        ev = {"schemaVersion": 3, "eventType": "imobilidade.leitura", "deviceId": "bridge-dev",
+        ev = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "bridge-dev",
               "entityId": "idoso-sim", "eventTimeMs": self._seq * 1000, "sequence": self._seq, "value": value,
               "valueMax": vmax, "unit": "m/s2", "state": "NORMAL", "user_id": 1, "source": "wokwi"}
         return self.cli.post("/dados", ev, self.tokens["dispositivo"])
@@ -39,7 +39,7 @@ def _entregas(ler_confirmacoes):
 
 def _resposta_app(cli, tokens, message_id):
     return cli.post("/eventos", {
-        "schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "cel1",
+        "schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
         "event_time": "2026-10-14T12:00:00.000Z", "eventType": "confirmacao.resposta", "state": "ESTOU_BEM",
         "messageId": message_id}, tokens["idoso"])
 

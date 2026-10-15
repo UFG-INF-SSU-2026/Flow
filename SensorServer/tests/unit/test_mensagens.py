@@ -17,7 +17,7 @@ def pedido(timeout_s=5, agora=T0):
 class TestCriarPedido:
     def test_campos_do_contrato(self):
         m = pedido()
-        assert m["schemaVersion"] == const.SCHEMA_VERSION_ATUAL
+        assert m["schemaVersion"] == const.SCHEMA_VERSION_MENSAGEM
         assert m["messageType"] == mensagens.TIPO_SOLICITADA
         assert m["userId"] == 1 and m["episodeId"] == "ep1" and m["messageId"]
         assert m["payload"]["motivo"] == "IMPACTO_SEGUIDO_DE_IMOBILIDADE"

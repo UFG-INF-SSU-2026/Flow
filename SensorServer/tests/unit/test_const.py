@@ -76,7 +76,8 @@ class TestFonteUnica:
         assert len(NOMES_CONST) > 30
 
     def test_constantes_chave_existem(self):
-        obrigatorias = {"MARGEM_SERVIDOR_S", "DATA_DIR", "FONTES_VALIDAS", "SCHEMA_VERSION_ATUAL",
+        obrigatorias = {"MARGEM_SERVIDOR_S", "DATA_DIR", "FONTES_VALIDAS", "SCHEMA_VERSION_APP",
+                        "SCHEMA_VERSION_WOKWI", "SCHEMA_VERSION_MENSAGEM", "SCHEMA_VERSION_AUTH",
                         "TOLERANCIA_RELOGIO_S", "TIMEOUT_CONFIRMACAO_S", "COOLDOWN_S", "TTL_ENCERRAMENTO_S"}
         assert obrigatorias <= NOMES_CONST
 
@@ -202,7 +203,7 @@ def _app_dado() -> dict:
 
 
 def _evento_app() -> dict:
-    return {"schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "cel1",
+    return {"schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
             "event_time": "2026-01-01T00:00:00Z", "eventType": "push.ack", "state": "ATIVADO", "messageId": "m1"}
 
 
@@ -218,21 +219,21 @@ class TestRotasSemReferenciaQuebrada:
         assert {"access_token", "refresh_token"} <= set(cli.corpo(r))
 
     def test_login_com_schemaversion_maior_da_400(self, cli):
-        assert _login(cli, schemaVersion=const.SCHEMA_VERSION_ATUAL + 1).status_code == 400
+        assert _login(cli, schemaVersion=const.SCHEMA_VERSION_AUTH + 1).status_code == 400
 
     def test_refresh_sem_schemaversion_e_aceito(self, cli):
         sessao = cli.corpo(_login(cli))
         assert cli.post("/auth/refresh", {"refresh_token": sessao["refresh_token"]}).status_code == 200
 
     def test_dados_valido_e_aceito(self, cli, tokens):
-        r = cli.post("/dados", {**_app_dado(), "schemaVersion": const.SCHEMA_VERSION_ATUAL}, tokens["idoso"])
+        r = cli.post("/dados", {**_app_dado(), "schemaVersion": const.SCHEMA_VERSION_APP}, tokens["idoso"])
         assert r.status_code == 200 and not r.get_json().get("descartado")
 
     def test_dados_sem_schemaversion_e_aceito_como_versao_padrao(self, cli, tokens):
         r = cli.post("/dados", _app_dado(), tokens["idoso"])
         assert r.status_code == 200 and not r.get_json().get("descartado")
 
-    @pytest.mark.parametrize("versao", [const.SCHEMA_VERSION_ATUAL + 1, "3", True], ids=repr)
+    @pytest.mark.parametrize("versao", [const.SCHEMA_VERSION_APP + 1, "3", True], ids=repr)
     def test_dados_com_versao_nao_suportada_e_descartado_com_200(self, cli, tokens, versao):
         r = cli.post("/dados", {**_app_dado(), "schemaVersion": versao}, tokens["idoso"])
         assert r.status_code == 200 and r.get_json().get("descartado") is True

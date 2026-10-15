@@ -112,13 +112,26 @@ AUDITORIA_MAX_BYTES = 5 * 1024 * 1024
 # 4. ESQUEMA E VALIDACAO
 # ===========================================================================
 
-# Versao MAIS RECENTE do contrato (docs/schemas.md) e unico lugar que escreve o numero.
-# Payload com versao maior e descartado e logado; versao menor e aceita. Definicao unica (antes em mensagens.py, regra_luz.py e
-# regra_imobilidade.py).
-SCHEMA_VERSION_ATUAL = 3
+# Versao MAIS RECENTE de cada contrato (docs/schemas.md). Uma constante por contrato, para subir a versao de um
+# deles sem arrastar os demais. Unico lugar que escreve o numero. Payload com versao maior que a do seu
+# contrato e descartado e logado; versao menor (>= SCHEMA_VERSION_MINIMA) e aceita.
 
-# Menor versao do contrato que o servidor ainda aceita. Abaixo disso o payload e descartado.
-# Versao menor que a atual, mas >= esta, e aceita e usada.
+# App (SensorApp): /dados source=app, leitura_ambiente e eventos de retorno vindos do app.
+SCHEMA_VERSION_APP = 3
+
+# Wokwi (firmware e WokwiBridge): /dados source=wokwi e eventos de retorno vindos do firmware/bridge.
+SCHEMA_VERSION_WOKWI = 3
+
+# Mensagem: push que o servidor envia (confirmacao.solicitada / confirmacao.encerrada). App e bridge
+# precisam suportar esta versao; ela NAO acompanha as demais.
+SCHEMA_VERSION_MENSAGEM = 3
+
+# Auth: /auth/login e /auth/refresh. Compartilhado por app e bridge e o payload nao traz `source`,
+# por isso nao da para seguir APP ou WOKWI.
+SCHEMA_VERSION_AUTH = 3
+
+# Menor versao que o servidor ainda aceita (vale para app, wokwi e auth). Abaixo disso o payload e descartado.
+# Versao menor que a do contrato, mas >= esta, e aceita e usada.
 SCHEMA_VERSION_MINIMA = 1
 
 # Versao assumida quando o payload nao traz schemaVersion (produtor antigo).

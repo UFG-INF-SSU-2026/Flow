@@ -17,7 +17,7 @@ import const   # CCT_*, HORA_*, LEITURAS_CONSECUTIVAS_PARA_ALERTA, SCHEMA_VERSIO
 
 # Versao do schema do payload LeituraAmbiente (mesma ideia aplicada ao
 # contrato do wokwi, ver docs/arquitetura.md secao 4.3). O app atual
-# (MainActivity.kt) sempre envia schemaVersion=3 (const.SCHEMA_VERSION_ATUAL).
+# (MainActivity.kt) envia a versao do contrato do app (const.SCHEMA_VERSION_APP).
 # Eventos sem o campo (app mais antigo/nao atualizado) sao tratados como
 # versao 1 (const.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
 # como desatualizados (ver validar_evento).
@@ -58,12 +58,12 @@ def validar_evento(evento: dict) -> None:
     """Valida schema + faixa fisica plausivel. Levanta EventoInvalido se falhar."""
     # 0. schemaVersion: identificacao/aviso, nao rejeita (mesma ideia do
     #    wokwi, ver regra_imobilidade.validar_evento). App atual sempre
-    #    manda 3; se ausente (app mais antigo), assume-se SCHEMA_VERSION_PADRAO.
+    #    manda SCHEMA_VERSION_APP; se ausente (app mais antigo), assume-se SCHEMA_VERSION_PADRAO.
     schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
-    if schema_version < const.SCHEMA_VERSION_ATUAL:
+    if schema_version < const.SCHEMA_VERSION_APP:
         print(
             f"  [app] aviso: evento leitura_ambiente com schemaVersion={schema_version} "
-            f"desatualizado (atual={const.SCHEMA_VERSION_ATUAL}), "
+            f"desatualizado (atual={const.SCHEMA_VERSION_APP}), "
             f"device_id={evento.get('device_id')}"
         )
 

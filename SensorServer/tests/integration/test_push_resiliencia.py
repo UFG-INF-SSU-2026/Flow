@@ -222,7 +222,7 @@ def test_sessoes_persistem_no_reinicio(cli, reiniciar):
     nova = cli.corpo(r)
     assert nova["refresh_token"] != sessao["refresh_token"] and nova["papel"] == "idoso" and nova["user_ids"] == [1]
     # o access token anterior segue valido (JWT sem estado no servidor)
-    r = cli.post("/eventos", {"schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "cel1",
+    r = cli.post("/eventos", {"schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
                               "event_time": "2026-10-14T12:00:00.000Z", "eventType": "push.ack", "state": "ATIVADO",
                               "messageId": "m-1"}, sessao["access_token"])
     assert r.status_code == 200

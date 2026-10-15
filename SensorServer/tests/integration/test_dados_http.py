@@ -18,7 +18,7 @@ def _app(**extra) -> dict:
 
 
 def _wokwi(seq=1, **extra) -> dict:
-    corpo = {"schemaVersion": 3, "source": "wokwi", "user_id": 1, "eventType": "imobilidade.leitura",
+    corpo = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "source": "wokwi", "user_id": 1, "eventType": "imobilidade.leitura",
              "deviceId": "bridge-dev", "entityId": "idoso-sim", "eventTimeMs": seq * 1000, "sequence": seq,
              "value": 0.3, "valueMax": 0.4, "unit": "m/s2", "state": "NORMAL"}
     corpo.update(extra)
@@ -88,7 +88,7 @@ class TestTelemetriaValida:
 
 # ------------------------------- schemaVersion -------------------------------
 class TestSchemaVersion:
-    @pytest.mark.parametrize("versao", [const.SCHEMA_VERSION_ATUAL + 1, 99, 0, -1, "3", 3.0, True, None, [3]],
+    @pytest.mark.parametrize("versao", [const.SCHEMA_VERSION_APP + 1, 99, 0, -1, "3", 3.0, True, None, [3]],
                              ids=repr)
     def test_versao_maior_ou_invalida_e_descartada_com_200(self, cli, tokens, versao):
         r = cli.post("/dados", _app(schemaVersion=versao), tokens["idoso"])
@@ -99,7 +99,7 @@ class TestSchemaVersion:
         assert _linhas() == []
 
     def test_versao_menor_e_aceita(self, cli, tokens):
-        r = cli.post("/dados", _app(schemaVersion=const.SCHEMA_VERSION_ATUAL - 1), tokens["idoso"])
+        r = cli.post("/dados", _app(schemaVersion=const.SCHEMA_VERSION_APP - 1), tokens["idoso"])
         assert r.status_code == 200 and "descartado" not in r.get_json()
         assert 1 in server._buffer
 
@@ -108,7 +108,7 @@ class TestSchemaVersion:
         assert r.status_code == 200 and "descartado" not in r.get_json()
 
     def test_versao_atual_e_aceita(self, cli, tokens):
-        r = cli.post("/dados", _app(schemaVersion=const.SCHEMA_VERSION_ATUAL), tokens["idoso"])
+        r = cli.post("/dados", _app(schemaVersion=const.SCHEMA_VERSION_APP), tokens["idoso"])
         assert "descartado" not in r.get_json()
 
     def test_a_versao_verificada_nao_vai_para_o_arquivo(self, cli, tokens):

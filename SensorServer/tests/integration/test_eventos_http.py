@@ -16,14 +16,14 @@ RETORNOS = [("push.ack", "ATIVADO"), ("push.ack", "REJEITADO"),
 
 
 def _app(tipo="push.ack", state="ATIVADO", message_id="m-desconhecida", **extra) -> dict:
-    corpo = {"schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "cel1",
+    corpo = {"schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
              "event_time": "2026-10-14T12:00:00.000Z", "eventType": tipo, "state": state, "messageId": message_id}
     corpo.update(extra)
     return corpo
 
 
 def _wokwi(tipo="push.ack", state="ATIVADO", message_id="m-desconhecida", seq=1, **extra) -> dict:
-    corpo = {"schemaVersion": 3, "source": "wokwi", "user_id": 1, "deviceId": "bridge-dev", "entityId": "idoso-sim",
+    corpo = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "source": "wokwi", "user_id": 1, "deviceId": "bridge-dev", "entityId": "idoso-sim",
              "eventTimeMs": seq * 1000, "sequence": seq, "eventType": tipo, "state": state, "messageId": message_id}
     corpo.update(extra)
     return corpo
@@ -78,7 +78,7 @@ class TestEventosValidos:
         assert ler_confirmacoes(1)[0]["device_id"] == "cel1"
 
     def test_schemaversion_ausente_ou_menor_e_aceito(self, cli, tokens, ler_confirmacoes):
-        for versao in (None, const.SCHEMA_VERSION_MINIMA, const.SCHEMA_VERSION_ATUAL - 1):
+        for versao in (None, const.SCHEMA_VERSION_MINIMA, const.SCHEMA_VERSION_APP - 1):
             corpo = _sem(_app(), "schemaVersion") if versao is None else _app(schemaVersion=versao)
             r = cli.post("/eventos", corpo, tokens["idoso"])
             assert r.status_code == 200 and r.get_json() == {"status": "ok"}
@@ -124,7 +124,7 @@ class TestEventoInvalidoEDescartado:
 
 # --------------------------- schemaVersion nao suportado ----------------------
 class TestSchemaVersionNaoSuportado:
-    @pytest.mark.parametrize("versao", [const.SCHEMA_VERSION_ATUAL + 1, 99, 0, -1, "3", 3.0, True, None, [3]], ids=repr)
+    @pytest.mark.parametrize("versao", [const.SCHEMA_VERSION_APP + 1, 99, 0, -1, "3", 3.0, True, None, [3]], ids=repr)
     def test_da_200_descartado_e_nao_grava(self, cli, tokens, ler_confirmacoes, versao):
         r = cli.post("/eventos", _app(schemaVersion=versao), tokens["idoso"])
         assert r.status_code == 200
@@ -133,12 +133,12 @@ class TestSchemaVersionNaoSuportado:
 
     def test_versao_nao_suportada_nao_encerra_episodio_aberto(self, cli, tokens):
         pedido, msg = _abrir_episodio()
-        corpo = _app("confirmacao.resposta", "ESTOU_BEM", msg["messageId"], schemaVersion=const.SCHEMA_VERSION_ATUAL + 1)
+        corpo = _app("confirmacao.resposta", "ESTOU_BEM", msg["messageId"], schemaVersion=const.SCHEMA_VERSION_APP + 1)
         assert cli.post("/eventos", corpo, tokens["idoso"]).get_json()["descartado"] is True
         assert regra_queda._episodios[1].encerrado_em is None
 
     def test_versao_vale_tambem_para_o_wokwi(self, cli, tokens, ler_confirmacoes):
-        r = cli.post("/eventos", _wokwi(schemaVersion=const.SCHEMA_VERSION_ATUAL + 1), tokens["dispositivo"])
+        r = cli.post("/eventos", _wokwi(schemaVersion=const.SCHEMA_VERSION_WOKWI + 1), tokens["dispositivo"])
         assert r.get_json()["descartado"] is True and ler_confirmacoes(1) == []
 
 

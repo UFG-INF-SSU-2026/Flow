@@ -51,7 +51,7 @@ def test_data_decifrada_e_o_json_do_contrato(servidor_real):
 
         recebida = leitor.proximo_push()
         assert leitor.ultimo_id > 0
-        assert recebida["schemaVersion"] == const.SCHEMA_VERSION_ATUAL
+        assert recebida["schemaVersion"] == const.SCHEMA_VERSION_MENSAGEM
         assert recebida["messageId"] == msg["messageId"]
         assert recebida["messageType"] == mensagens.TIPO_SOLICITADA
         assert recebida["userId"] == 1 and recebida["episodeId"] == "ep-1"

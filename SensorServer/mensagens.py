@@ -1,12 +1,12 @@
 """
 Mensagens do Marco 3 (sem I/O de rede):
-  - mensagem de push servidor -> dispositivo (schema v3, docs/schemas.md secao 3)
+  - mensagem de push servidor -> dispositivo (schema de mensagem, const.SCHEMA_VERSION_MENSAGEM, docs/schemas.md secao 3)
   - validacao dos eventos de retorno dispositivo -> servidor (push.ack, confirmacao.resposta)
 """
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import const   # SCHEMA_VERSION_ATUAL, FONTES_VALIDAS, MARGEM_SERVIDOR_S, TTL_ENCERRAMENTO_S (lidos na hora do uso)
+import const   # SCHEMA_VERSION_MENSAGEM, FONTES_VALIDAS, MARGEM_SERVIDOR_S, TTL_ENCERRAMENTO_S (lidos na hora do uso)
 
 TIPO_SOLICITADA = "queda.confirmacao_solicitada"
 TIPO_ENCERRADA = "queda.confirmacao_encerrada"
@@ -38,7 +38,7 @@ def criar_pedido_confirmacao(user_id: int, episode_id: str, timeout_s: float, mo
                              agora: datetime | None = None) -> dict:
     agora = agora or agora_utc()
     return {
-        "schemaVersion": const.SCHEMA_VERSION_ATUAL,
+        "schemaVersion": const.SCHEMA_VERSION_MENSAGEM,
         "messageId": str(uuid.uuid4()),
         "messageType": TIPO_SOLICITADA,
         "userId": user_id,
@@ -54,7 +54,7 @@ def criar_encerramento(user_id: int, episode_id: str, resultado: str, agora: dat
         raise ValueError(resultado)
     agora = agora or agora_utc()
     return {
-        "schemaVersion": const.SCHEMA_VERSION_ATUAL,
+        "schemaVersion": const.SCHEMA_VERSION_MENSAGEM,
         "messageId": str(uuid.uuid4()),
         "messageType": TIPO_ENCERRADA,
         "userId": user_id,

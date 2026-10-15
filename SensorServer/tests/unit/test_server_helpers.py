@@ -9,22 +9,39 @@ import server
 
 
 class TestVerificarVersao:
+    ATUAL = const.SCHEMA_VERSION_APP
+
     def test_ausente_vale_o_padrao(self):
-        assert server.verificar_versao({}) == const.SCHEMA_VERSION_PADRAO == 1
+        assert server.verificar_versao({}, self.ATUAL) == const.SCHEMA_VERSION_PADRAO == 1
 
     @pytest.mark.parametrize("v", [1, 2, 3])
     def test_aceitas(self, v):
-        assert server.verificar_versao({"schemaVersion": v}) == v
+        assert server.verificar_versao({"schemaVersion": v}, 3) == v
 
     @pytest.mark.parametrize("v", [0, 4, -1, "3", 3.0, True, False, None, [3]])
     def test_rejeitadas(self, v):
-        assert server.verificar_versao({"schemaVersion": v}) is None
+        assert server.verificar_versao({"schemaVersion": v}, 3) is None
 
-    def test_respeita_const_alterada(self, monkeypatch):
-        monkeypatch.setattr(const, "SCHEMA_VERSION_ATUAL", 5)
-        assert server.verificar_versao({"schemaVersion": 4}) == 4
+    def test_respeita_a_versao_atual_recebida(self):
+        assert server.verificar_versao({"schemaVersion": 4}, 5) == 4
+        assert server.verificar_versao({"schemaVersion": 4}, 3) is None
+
+    def test_respeita_const_minima_alterada(self, monkeypatch):
         monkeypatch.setattr(const, "SCHEMA_VERSION_MINIMA", 2)
-        assert server.verificar_versao({"schemaVersion": 1}) is None
+        assert server.verificar_versao({"schemaVersion": 1}, 5) is None
+        assert server.verificar_versao({"schemaVersion": 2}, 5) == 2
+
+
+class TestVersaoAtualDaFonte:
+    def test_cada_fonte_le_a_sua_constante(self, monkeypatch):
+        monkeypatch.setattr(const, "SCHEMA_VERSION_APP", 7)
+        monkeypatch.setattr(const, "SCHEMA_VERSION_WOKWI", 9)
+        assert server.versao_atual_da_fonte("app") == 7
+        assert server.versao_atual_da_fonte("wokwi") == 9
+
+    def test_fonte_desconhecida_levanta(self):
+        with pytest.raises(ValueError):
+            server.versao_atual_da_fonte("outra")
 
 
 class TestLerUserId:

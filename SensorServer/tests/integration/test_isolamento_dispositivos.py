@@ -3,6 +3,7 @@ import pytest
 
 import auth
 import regra_imobilidade
+import const
 
 
 @pytest.fixture
@@ -11,7 +12,7 @@ def bridge2(contas):
 
 
 def _wokwi(device, seq, user_id=1, **extra):
-    return {"schemaVersion": 3, "eventType": "imobilidade.leitura", "deviceId": device, "entityId": "e",
+    return {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": device, "entityId": "e",
             "eventTimeMs": seq * 1000, "sequence": seq, "value": 0.3, "valueMax": 0.4, "unit": "m/s2",
             "state": "NORMAL", "user_id": user_id, "source": "wokwi", **extra}
 
@@ -52,7 +53,7 @@ def test_app_com_device_id_alheio_da_403(cli, tokens):
 
 
 def test_eventos_com_device_alheio_da_403(cli, tokens):
-    ev = {"schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "celular-de-outro",
+    ev = {"schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "celular-de-outro",
           "event_time": "2026-10-14T12:00:00.000Z", "eventType": "push.ack", "state": "ATIVADO", "messageId": "m"}
     assert cli.post("/eventos", ev, tokens["idoso"]).status_code == 403
     assert cli.post("/eventos", {**ev, "device_id": "cel1"}, tokens["idoso"]).status_code == 200

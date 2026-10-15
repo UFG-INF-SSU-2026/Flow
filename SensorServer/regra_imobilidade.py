@@ -19,10 +19,10 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-import const   # ACEL_MIN/MAX_PLAUSIVEL, SCHEMA_VERSION_ATUAL/PADRAO (ver const.py)
+import const   # ACEL_MIN/MAX_PLAUSIVEL, SCHEMA_VERSION_WOKWI/PADRAO (ver const.py)
 
 # Versao do schema do payload wokwi (docs/arquitetura.md, secao 4.3).
-# O produtor atual (sketch.ino) sempre envia schemaVersion=3 (const.SCHEMA_VERSION_ATUAL).
+# O produtor atual (sketch.ino) envia a versao do contrato do wokwi (const.SCHEMA_VERSION_WOKWI).
 # Eventos sem o campo (produtor mais antigo/nao atualizado) sao tratados como
 # versao 1 (const.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
 # como desatualizados (ver validar_evento).
@@ -114,10 +114,10 @@ def validar_evento(evento: dict) -> None:
     #    nao invalida o evento - so gera um aviso explicito no console, para
     #    dar visibilidade de que ha um produtor fora da versao atual em campo.
     schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
-    if schema_version < const.SCHEMA_VERSION_ATUAL:
+    if schema_version < const.SCHEMA_VERSION_WOKWI:
         print(
             f"  [wokwi] aviso: evento com schemaVersion={schema_version} "
-            f"desatualizado (atual={const.SCHEMA_VERSION_ATUAL}), "
+            f"desatualizado (atual={const.SCHEMA_VERSION_WOKWI}), "
             f"deviceId={evento.get('deviceId')}"
         )
 

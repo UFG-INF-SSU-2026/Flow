@@ -362,19 +362,29 @@ def _resposta_cifrada(obj: dict):
     return jsonify({"nonce": nonce, "ciphertext": ct})
 
 
-def verificar_versao(payload: dict) -> int | None:
+def versao_atual_da_fonte(source: str) -> int:
+    """Versao mais recente do contrato da fonte ('app' ou 'wokwi'), lida de const.py na hora da chamada."""
+    if source == "app":
+        return const.SCHEMA_VERSION_APP
+    if source == "wokwi":
+        return const.SCHEMA_VERSION_WOKWI
+    raise ValueError(f"fonte desconhecida: {source!r}")
+
+
+def verificar_versao(payload: dict, versao_atual: int) -> int | None:
     """Verifica `schemaVersion` (raiz do payload) ANTES de interpretar o resto.
 
-    Funcao unica para todas as rotas, sem numero fixo: os limites vem de const.py, lidos na hora da chamada.
-    Retorna a versao (int) quando suportada, ou None quando nao suportada. Nunca levanta excecao.
+    Funcao unica para todas as rotas, sem numero fixo: `versao_atual` e a do contrato da rota (quem chama
+    escolhe: versao_atual_da_fonte(source) em /dados e /eventos, const.SCHEMA_VERSION_AUTH em login/refresh)
+    e o piso vem de const.py. Retorna a versao (int) quando suportada, ou None. Nunca levanta excecao.
       - ausente: vale const.SCHEMA_VERSION_PADRAO;
-      - de const.SCHEMA_VERSION_MINIMA ate const.SCHEMA_VERSION_ATUAL: aceita (inclusive versao menor que a atual);
+      - de const.SCHEMA_VERSION_MINIMA ate `versao_atual`: aceita (inclusive versao menor que a atual);
       - invalido: nao inteiro (inclui "3", 3.0, null), booleano (em Python True e int), menor que a minima
-        ou maior que a atual."""
+        ou maior que `versao_atual`."""
     v = payload.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
     if isinstance(v, bool) or not isinstance(v, int):
         return None
-    if v < const.SCHEMA_VERSION_MINIMA or v > const.SCHEMA_VERSION_ATUAL:
+    if v < const.SCHEMA_VERSION_MINIMA or v > versao_atual:
         return None
     return v
 
@@ -385,9 +395,9 @@ def _descartar_por_versao(rota: str, payload: dict):
     return jsonify({"status": "ok", "descartado": True, "motivo": "schemaVersion_nao_suportado"}), 200
 
 
-def _versao_invalida_400():
+def _versao_invalida_400(versao_atual: int):
     return jsonify({"status": "erro",
-                    "mensagem": f"schemaVersion invalido ou nao suportado (maximo {const.SCHEMA_VERSION_ATUAL})"}), 400
+                    "mensagem": f"schemaVersion invalido ou nao suportado (maximo {versao_atual})"}), 400
 
 
 @app.route("/auth/login", methods=["POST"])
@@ -395,8 +405,8 @@ def login():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo) is None:   # ausente aceito
-        return _versao_invalida_400()
+    if verificar_versao(corpo, const.SCHEMA_VERSION_AUTH) is None:   # ausente aceito
+        return _versao_invalida_400(const.SCHEMA_VERSION_AUTH)
     if not auth.device_id_valido(corpo.get("device_id")):
         return jsonify({"status": "erro", "mensagem": "device_id invalido"}), 400
     ident = str(corpo.get("identificador", ""))
@@ -414,8 +424,8 @@ def refresh():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo) is None:   # ausente aceito
-        return _versao_invalida_400()
+    if verificar_versao(corpo, const.SCHEMA_VERSION_AUTH) is None:   # ausente aceito
+        return _versao_invalida_400(const.SCHEMA_VERSION_AUTH)
     try:
         tokens = auth.refresh(str(corpo.get("refresh_token", "")))
     except auth.AuthError as e:
@@ -446,7 +456,7 @@ def receber_evento():
         return negar(403, "fora_de_escopo", g.principal.conta_id)
     # Mesma regra de /dados. Ausente ou versao antiga e aceita; maior que a atual ou invalida
     # e descartada e logada, com 200 (conteudo invalido de requisicao autenticada, 10.1).
-    if verificar_versao(corpo) is None:
+    if verificar_versao(corpo, versao_atual_da_fonte(source)) is None:
         return _descartar_por_versao("eventos", corpo)
     try:
         ev = mensagens.validar_evento_retorno(corpo, source)
@@ -498,7 +508,7 @@ def receber_dados():
 
     # schemaVersion: nao suportada -> descartada e logada, NAO entra no buffer nem nas regras.
     # Ausente vale como versao 1 (as regras avisam que esta desatualizada, como antes).
-    versao = verificar_versao(payload)
+    versao = verificar_versao(payload, versao_atual_da_fonte(source))
     if versao is None:
         return _descartar_por_versao("dados", payload)
 

@@ -3,10 +3,11 @@ import pytest
 
 import regra_imobilidade as imob
 import regra_luz as luz
+import const
 
 
 def ev_imob(seq=1, event_type="imobilidade.leitura", state="NORMAL", value=0.3, device="d1", **extra):
-    ev = {"schemaVersion": 3, "eventType": event_type, "deviceId": device, "entityId": "e1",
+    ev = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": event_type, "deviceId": device, "entityId": "e1",
           "eventTimeMs": seq * 1000, "sequence": seq, "value": value, "unit": "m/s2", "state": state}
     ev.update(extra)
     return ev
@@ -102,7 +103,7 @@ class TestImobilidadeEstado:
 
 
 def ev_luz(seq=1, cct=6000, hora="22:00:00", device="d1", lux=10, **extra):
-    ev = {"schemaVersion": 3, "device_id": device, "event_time": f"2026-10-14T{hora}-03:00",
+    ev = {"schemaVersion": const.SCHEMA_VERSION_APP, "device_id": device, "event_time": f"2026-10-14T{hora}-03:00",
           "luminosidade": lux, "cct": cct, "seq_num": seq}
     ev.update(extra)
     return ev
