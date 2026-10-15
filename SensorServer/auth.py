@@ -28,8 +28,15 @@ _falhas: dict[str, list[float]] = {}
 _bloqueado_ate: dict[str, float] = {}
 
 
+# Fonte que cada papel pode usar (authz.py reexporta). Mora aqui porque criar_conta valida e authz importa auth.
+FONTE_DO_PAPEL = {"idoso": "app", "dispositivo": "wokwi"}
+
+
 class AuthError(Exception):
     codigo = "nao_autenticado"
+    # So login() preenche: True quando o identificador e de uma conta que existe. A auditoria usa isto para
+    # gravar `conta` apenas de contas reais (R-03); senao o texto digitado pelo cliente iria para o log.
+    conta_existe: bool = False
 
 
 class CredenciaisInvalidas(AuthError):
@@ -112,8 +119,17 @@ def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str
         raise ValueError(f"papel invalido: {papel}")
     if not set(fontes) <= const.FONTES_VALIDAS:
         raise ValueError(f"fontes invalidas: {fontes}")
-    if papel in ("idoso", "dispositivo") and len(user_ids) != 1:
-        raise ValueError("papeis 'idoso' e 'dispositivo' exigem exatamente um --user-id")
+    for uid in user_ids:
+        if isinstance(uid, bool) or not isinstance(uid, int) or uid < 0:
+            raise ValueError(f"user_id invalido (esperado inteiro nao negativo): {uid!r}")
+    if papel in ("idoso", "dispositivo"):
+        if len(user_ids) != 1:
+            raise ValueError("papeis 'idoso' e 'dispositivo' exigem exatamente um --user-id")
+        permitida = FONTE_DO_PAPEL[papel]
+        if not fontes or set(fontes) != {permitida}:
+            raise ValueError(f"papel '{papel}' exige fontes == ['{permitida}'], recebeu {fontes}")
+    if papel == "admin" and user_ids:
+        raise ValueError("papel 'admin' nao tem --user-id (ele nao e escopado a uma pessoa)")
     with _lock:
         contas = _ler_json(const.CONTAS_PATH, {})
         if conta_id in contas:
@@ -183,13 +199,20 @@ def login(identificador: str, segredo: str, fonte: str | None, device_id: str | 
         raise ValueError("device_id invalido")
     agora = time.time()
     with _lock:
-        _checar_bloqueio(identificador, agora)
         conta = _ler_json(const.CONTAS_PATH, {}).get(identificador)
+        existe = conta is not None
+        try:
+            _checar_bloqueio(identificador, agora)
+        except Bloqueado as e:
+            e.conta_existe = existe
+            raise
         senha_ok = _verificar_senha(segredo, conta["hash"] if conta else _HASH_FALSO)
-        fonte_ok = bool(conta) and (fonte in conta["fontes"] or (conta["papel"] == "admin" and fonte is None))
-        if not (conta and senha_ok and fonte_ok):
+        fonte_ok = existe and (fonte in conta["fontes"] or (conta["papel"] == "admin" and fonte is None))
+        if not (existe and senha_ok and fonte_ok):
             _registrar_falha(identificador, agora)
-            raise CredenciaisInvalidas()
+            erro = CredenciaisInvalidas()
+            erro.conta_existe = existe
+            raise erro
         _falhas.pop(identificador, None)
         return _par_de_tokens(conta, fonte, device_id, agora)
 

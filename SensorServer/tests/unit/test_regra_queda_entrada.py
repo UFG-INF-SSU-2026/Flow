@@ -3,6 +3,7 @@ import math
 
 import pytest
 
+import const
 import regra_queda
 from regra_queda import eh_duplicado_app, extrair_dinamica
 
@@ -124,8 +125,7 @@ class TestDeduplicacaoApp:
         assert eh_duplicado_app(2, "d1", leitura(2000)) is False
 
     def test_limite_de_referencias_descarta_a_mais_antiga(self, monkeypatch):
-        # P-06: quando a constante for para const.py, trocar o alvo deste monkeypatch.
-        monkeypatch.setattr(regra_queda, "_MAX_REFERENCIAS_DEDUP", 3)
+        monkeypatch.setattr(const, "MAX_REFERENCIAS_DEDUP", 3)
         for i in range(4):
             eh_duplicado_app(1, f"d{i}", leitura(1000))
         assert set(regra_queda._ultimo_ts_app) == {(1, "app", "d1"), (1, "app", "d2"), (1, "app", "d3")}

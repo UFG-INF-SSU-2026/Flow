@@ -82,7 +82,7 @@ import mensagens
 import regra_queda
 import canal_app
 import canal_wokwi
-from authz import exige, exigir_escopo, ForaDeEscopo, negar
+from authz import exige, exigir_dispositivo, exigir_escopo, ForaDeEscopo, negar
 from crypto_utils import decrypt_payload, encrypt_payload, DecryptionError
 from regra_luz import validar_evento, eh_duplicado, avaliar_regra, EventoInvalido
 import regra_imobilidade
@@ -262,13 +262,26 @@ def _processar_evento_wokwi(payload: dict, device_id: str) -> ResultadoWokwi:
 # ---------------------------------------------------------------------------
 # Marco 3: decisao de queda e push
 # ---------------------------------------------------------------------------
+RESULTADO_ERRO_NO_CANAL = "ERRO_NO_CANAL"   # canal.enviar levantou excecao (alem de ENTREGUE_AO_CANAL etc. dos canais)
+
+
 def _despachar(user_id: int, msg: dict) -> None:
-    """Entrega a mesma mensagem a TODOS os canais; registra o resultado por canal."""
+    """Entrega a mesma mensagem a TODOS os canais; registra o resultado por canal.
+    Cada canal tem a sua propria protecao: a falha de um (envio ou gravacao do resultado) fica no log e
+    nao impede os demais."""
     for canal in CANAIS:
-        resultado = canal.enviar(user_id, msg)
-        regra_queda.registrar(user_id, "push.entrega", {
-            "episodeId": msg["episodeId"], "messageId": msg["messageId"],
-            "messageType": msg["messageType"], "canal": canal.CANAL, "resultado": resultado})
+        try:
+            resultado = canal.enviar(user_id, msg)
+        except Exception as e:  # noqa: BLE001
+            resultado = RESULTADO_ERRO_NO_CANAL
+            print(f"  [push] falha no canal={canal.CANAL} user={user_id}: {type(e).__name__}: {str(e)[:200]}")
+        try:
+            regra_queda.registrar(user_id, "push.entrega", {
+                "episodeId": msg["episodeId"], "messageId": msg["messageId"],
+                "messageType": msg["messageType"], "canal": canal.CANAL, "resultado": resultado})
+        except Exception as e:  # noqa: BLE001
+            print(f"  [push] falha ao registrar push.entrega canal={canal.CANAL} user={user_id}: "
+                  f"{type(e).__name__}: {str(e)[:200]}")
         print(f"  [push] {msg['messageType']} user={user_id} canal={canal.CANAL} -> {resultado}")
 
 
@@ -329,14 +342,10 @@ def _decifrar_corpo():
 
 
 def _ler_user_id(valor) -> int | None:
-    """user_id aceito: inteiro (nao booleano) ou string de digitos. Qualquer outra coisa -> None (400).
-    Evita que True vire 1 e que 1.9 vire 1 silenciosamente."""
-    if isinstance(valor, bool):
-        return None
-    if isinstance(valor, int):
+    """user_id aceito: somente inteiro JSON (nao booleano) (R-02). String (mesmo de digitos), decimal, null e
+    ausente -> None (400). Evita que True vire 1, que 1.9 vire 1 e que "1" passe como 1 silenciosamente."""
+    if isinstance(valor, int) and not isinstance(valor, bool):
         return valor
-    if isinstance(valor, str) and re.fullmatch(r"[0-9]+", valor.strip(), re.ASCII):
-        return int(valor.strip())
     return None
 
 
@@ -385,10 +394,10 @@ def login():
     ident = str(corpo.get("identificador", ""))
     try:
         tokens = auth.login(ident, str(corpo.get("segredo", "")), corpo.get("fonte"), corpo.get("device_id"))
-    except auth.Bloqueado:
-        return negar(429, "bloqueado", ident)
+    except auth.Bloqueado as e:
+        return negar(429, "bloqueado", ident if e.conta_existe else None)   # R-03: so conta que existe
     except auth.AuthError as e:
-        return negar(401, e.codigo, ident)
+        return negar(401, e.codigo, ident if e.conta_existe else None)
     return _resposta_cifrada(tokens)
 
 
@@ -424,6 +433,7 @@ def receber_evento():
         return jsonify({"status": "erro", "mensagem": "user_id ausente ou nao-inteiro"}), 400
     try:
         exigir_escopo(g.principal, user_id, source)
+        exigir_dispositivo(g.principal, corpo)
     except ForaDeEscopo:
         return negar(403, "fora_de_escopo", g.principal.conta_id)
     # DC-06/DC-07: mesma regra de /dados. Ausente ou versao antiga e aceita; maior que a atual ou invalida
@@ -437,7 +447,12 @@ def receber_evento():
         return jsonify({"status": "ok", "descartado": True}), 200   # conteudo invalido: 200, como em /dados
     enc = regra_queda.registrar_retorno(user_id, ev)
     if enc:
-        _encerrar(enc)
+        # O episodio ja esta encerrado e gravado; se o aviso aos dispositivos falhar, so ele se perde (log).
+        try:
+            _encerrar(enc)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [eventos] falha ao avisar o encerramento episodeId={enc.episode_id} user={user_id}: "
+                  f"{type(e).__name__}: {str(e)[:200]}")
     return jsonify({"status": "ok"}), 200
 
 
@@ -469,9 +484,10 @@ def receber_dados():
     # Estagio 2 de autorizacao: o user_id e a source declarados DEVEM ser os do token
     try:
         exigir_escopo(g.principal, user_id, source)
+        exigir_dispositivo(g.principal, payload)
     except ForaDeEscopo:
         return negar(403, "fora_de_escopo", g.principal.conta_id)
-    
+
     # schemaVersion (10.2 / DC-06): nao suportada -> descartada e logada, NAO entra no buffer nem nas regras.
     # Ausente vale como versao 1 (as regras avisam que esta desatualizada, como antes).
     versao = verificar_versao(payload)
@@ -516,8 +532,12 @@ def receber_dados():
         alimenta_queda = resultado.estado == WOKWI_ACEITO
 
     # 5. Marco 3: analise de queda (acelerometro) -> se provavel, push de confirmacao
+    # A telemetria ja foi aceita e gravada: falha ao avaliar/emitir o pedido fica no log e nao vira 500.
     if alimenta_queda:
-        _avaliar_queda(user_id, source, payload, alerta_imobilidade, device_id)
+        try:
+            _avaliar_queda(user_id, source, payload, alerta_imobilidade, device_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [queda] falha ao avaliar ou emitir o pedido user={user_id}: {type(e).__name__}: {str(e)[:200]}")
 
     return jsonify({
         "status": "ok",

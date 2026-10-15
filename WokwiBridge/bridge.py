@@ -14,7 +14,8 @@ Configuracao por variaveis de ambiente (nada de editar este arquivo):
   FLOW_BRIDGE_ID      conta do bridge (papel 'dispositivo')          [obrigatoria]
   FLOW_BRIDGE_SECRET  senha da conta                                   [obrigatoria]
   FLOW_SERVIDOR       URL base do servidor (padrao http://localhost:5000)
-  FLOW_BRIDGE_DEVICE  identificador deste bridge (padrao wokwi-bridge-01)
+  FLOW_BRIDGE_DEVICE  deviceId do firmware que este bridge repassa (padrao esp32-decisao-imobilidade-01,
+                      o DEVICE_ID de sketch.ino). O servidor exige que seja igual ao deviceId dos eventos.
 
 Pre-requisitos:
   - Simulacao rodando no VS Code (F1 -> Wokwi: Start Simulator), com a aba do simulador VISIVEL
@@ -44,7 +45,9 @@ BAUDRATE = 115200
 SERVIDOR = os.environ.get("FLOW_SERVIDOR", "http://localhost:5000").rstrip("/")
 BRIDGE_ID = os.environ.get("FLOW_BRIDGE_ID", "")
 BRIDGE_SECRET = os.environ.get("FLOW_BRIDGE_SECRET", "")
-BRIDGE_DEVICE = os.environ.get("FLOW_BRIDGE_DEVICE", "wokwi-bridge-01")
+# O login registra este device_id no token e o servidor confere com o deviceId de cada evento (403 se diferir):
+# precisa ser o DEVICE_ID de sketch/sketch.ino.
+BRIDGE_DEVICE = os.environ.get("FLOW_BRIDGE_DEVICE", "esp32-decisao-imobilidade-01")
 RECONECTAR_A_CADA_S = 3
 BACKOFF_MAX_S = 30
 READ_TIMEOUT_SSE_S = 40          # > keepalive do servidor (15 s): detecta conexao morta

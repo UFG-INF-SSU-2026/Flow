@@ -175,6 +175,10 @@ TOLERANCIA_RELOGIO_S = 60
 # desconhecida. A poda roda na iteracao do vigia.
 RETENCAO_MENSAGENS_S = 3600
 
+# Maximo de dispositivos rastreados na deduplicacao da telemetria do app (device_id vem do payload do cliente).
+# Passou disso, a referencia mais antiga e descartada (regra_queda.eh_duplicado_app).
+MAX_REFERENCIAS_DEDUP = 1000
+
 # Valores de 'motivo' na mensagem e no registro do episodio.
 MOTIVO_A = "IMPACTO_SEGUIDO_DE_IMOBILIDADE"   # gatilho A (preferencial)
 MOTIVO_B = "IMOBILIDADE_PROLONGADA"           # gatilho B

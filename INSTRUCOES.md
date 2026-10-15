@@ -185,9 +185,9 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 
 | O que ajustar | Onde |
 | --- | --- |
-| Tempo do botão "Estou bem" (padrão 5 s) | `TIMEOUT_CONFIRMACAO_S` em `SensorServer/regra_queda.py` (vale para app e wokwi, sem recompilar nada) |
-| Limiares de impacto e de repouso | constantes no topo de `SensorServer/regra_queda.py` (valores iniciais, a calibrar) |
-| Validade dos tokens | `ACCESS_TTL_S` e `REFRESH_TTL_S` em `SensorServer/auth.py` |
+| Tempo do botão "Estou bem" (padrão 5 s) | `TIMEOUT_CONFIRMACAO_S` em `SensorServer/const.py` (vale para app e wokwi, sem recompilar nada) |
+| Limiares de impacto e de repouso | `LIMIAR_IMPACTO` e `LIMIAR_REPOUSO` em `SensorServer/const.py` (valores iniciais, a calibrar) |
+| Validade dos tokens | `ACCESS_TTL_S` e `REFRESH_TTL_S` em `SensorServer/const.py` |
 | Intervalo de envio do app | `SEND_INTERVAL_MS` em `MainActivity.kt` (padrão 1 s) |
 
 ## Problemas comuns

@@ -49,6 +49,33 @@ class TestEscopo:
             authz.exigir_escopo(self.P, 1, "wokwi")
 
 
+class TestDispositivo:
+    P = auth.Principal("idoso1", "idoso", (1,), "app", "cel1", 9e9)
+
+    def test_igual_ao_do_token(self):
+        authz.exigir_dispositivo(self.P, {"device_id": "cel1"})
+        authz.exigir_dispositivo(self.P, {"deviceId": "cel1"})
+        authz.exigir_dispositivo(self.P, {"device_id": "cel1", "deviceId": "cel1"})
+
+    def test_nao_declarado_nao_e_conferido(self):
+        for payload in ({}, {"device_id": None}, {"device_id": ""}, {"deviceId": None, "device_id": ""}):
+            authz.exigir_dispositivo(self.P, payload)
+
+    @pytest.mark.parametrize("payload", [
+        {"device_id": "outro"}, {"deviceId": "outro"}, {"device_id": "cel1", "deviceId": "outro"},
+        {"device_id": 5}, {"device_id": ["cel1"]}, {"device_id": "CEL1"},
+    ])
+    def test_diferente_do_token_levanta(self, payload):
+        with pytest.raises(authz.ForaDeEscopo):
+            authz.exigir_dispositivo(self.P, payload)
+
+    def test_token_sem_device_id_nao_aceita_device_declarado(self):
+        sem_device = auth.Principal("idoso1", "idoso", (1,), "app", None, 9e9)
+        authz.exigir_dispositivo(sem_device, {})
+        with pytest.raises(authz.ForaDeEscopo):
+            authz.exigir_dispositivo(sem_device, {"device_id": "cel1"})
+
+
 @pytest.fixture
 def mini(contas):
     """App Flask minimo so com rotas protegidas por exige, mais os tokens de cada conta."""
@@ -106,7 +133,11 @@ class TestExige:
 
     def test_fonte_do_papel_errada(self, mini):
         c, _ = mini
-        auth.criar_conta("idoso-x", "idoso", [1], ["app", "wokwi"], "senha-x")   # P-05: criar_conta nao barra
+        # criar_conta (P-05) barra esta combinacao; grava direto para simular uma conta mal configurada
+        cs = auth._ler_json(const.CONTAS_PATH, {})
+        cs["idoso-x"] = {"id": "idoso-x", "papel": "idoso", "user_ids": [1], "fontes": ["app", "wokwi"],
+                         "hash": auth.hash_senha("senha-x")}
+        auth._gravar_json(const.CONTAS_PATH, cs)
         t = auth.login("idoso-x", "senha-x", "wokwi", "d")["access_token"]
         r = c.get("/enviar", headers=_bearer(t))
         assert r.status_code == 403 and r.get_json()["codigo"] == "fonte_invalida"

@@ -181,7 +181,7 @@ RBAC com escopo por pessoa, **negando por padrão**.
 Dois estágios de verificação:
 
 1. **Papel e permissão**, antes de decifrar o corpo (decorador `exige(permissao, fonte=...)`): token válido, papel com a permissão, fonte do token igual à exigida. Falha → `401` ou `403`.
-2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids` e `source` deve ser a `fonte` do token. Falha → `403`. Payload **sem** `source` válido (ausente ou fora de `app`/`wokwi`) é recusado com `400` antes da checagem de escopo, em `/dados` e em `/eventos`: nenhum caminho aceita dado ou evento sem `source`. `source` presente e diferente da fonte do token é `403`. O `user_id` precisa ser inteiro (ou string só de dígitos); booleano, decimal ou outro tipo é `400`. Esse estágio existe porque o `user_id` está dentro do envelope cifrado.
+2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids`, `source` deve ser a `fonte` do token e o `device_id`/`deviceId` do payload, se declarado, deve ser o `device_id` do token (o do login; o bridge usa o `deviceId` do firmware). Falha → `403`. Payload **sem** `source` válido (ausente ou fora de `app`/`wokwi`) é recusado com `400` antes da checagem de escopo, em `/dados` e em `/eventos`: nenhum caminho aceita dado ou evento sem `source`. `source` presente e diferente da fonte do token é `403`. O `user_id` precisa ser um número inteiro JSON; string (mesmo só de dígitos), booleano, decimal, `null` ou ausente é `400`. Esse estágio existe porque o `user_id` está dentro do envelope cifrado.
 
 Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do token; o cliente não escolhe de quem recebe.
 
@@ -439,7 +439,7 @@ Tipos: `queda.confirmacao_solicitada` e `queda.confirmacao_encerrada` (`payload.
 - Cada evento SSE: `id:` (contador por usuário e canal), `event: push`, `data:` (envelope cifrado). Comentário `: keepalive` a cada 15 s. O contador parte de um valor derivado do instante de subida do servidor (em segundos, para caber em inteiro de 32 bits), de modo que o `Last-Event-ID` guardado pelo cliente nunca fica à frente do contador depois de um reinício.
 - **Fila por conexão:** pequena (`TAMANHO_FILA_CONEXAO`, 16), em memória. É só o amortecedor entre quem publica e a thread que escreve no stream, não uma fila de mensagens. Cliente que não consome e enche a fila tem a conexão fechada e não conta como entregue; ao reconectar com `Last-Event-ID` recebe o que ainda não expirou.
 - **Replay:** anel das últimas 20 mensagens por usuário e canal; na reconexão com `Last-Event-ID`, reenvia só o **não expirado**, com `timeoutMs` **recalculado** para o tempo restante. O replay entra na fila antes de a conexão ficar visível para novas publicações, então os `id` saem em ordem crescente; se houver mais pendentes que a fila comporta, vão os mais recentes. O servidor não define o cabeçalho `Connection` (é específico de salto e fica com o servidor HTTP).
-- **Presença:** o hub informa se há conexão ativa por canal, de onde vem o resultado de entrega `ENTREGUE_AO_CANAL` ou `SEM_CANAL_ATIVO`.
+- **Presença:** o hub informa se há conexão ativa por canal, de onde vem o resultado de entrega `ENTREGUE_AO_CANAL` ou `SEM_CANAL_ATIVO` (`ERRO_NO_CANAL` quando o canal levanta exceção).
 
 ### 10.3 Canais
 
@@ -525,7 +525,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | Bridge conectado, firmware mudo (simulação pausada) | Entrega ao canal, mas nenhum `push.ack`; o bridge descarta comandos expirados; o firmware tem o teto do buzzer. |
 | Conexão SSE cai | Reconexão com recuo exponencial e `Last-Event-ID`; reenvio só do não expirado, `timeoutMs` recalculado. |
 | Cliente SSE conectado que não consome | Fila de 16 enche, o servidor fecha a conexão; o cliente reconecta e recebe o não expirado. |
-| Falha ao gravar um encerramento, o flush de um usuário ou despachar um canal | Registrada no log; não derruba as threads de vigia e de flush nem impede os demais episódios ou usuários. |
+| Falha ao gravar um encerramento, o flush de um usuário ou despachar um canal | Registrada no log; não derruba as threads de vigia e de flush nem impede os demais episódios, usuários ou canais. Canal que levanta exceção vira `push.entrega = ERRO_NO_CANAL` e os outros canais recebem a mensagem. Falha ao avisar o encerramento em `/eventos` ou ao emitir o pedido em `/dados` fica no log e a resposta segue `200`. |
 | Token expira com o stream aberto | `event: reautenticar`, fechamento, renovação e reconexão. |
 | Refresh recusado | Bridge refaz login com o segredo do ambiente; app pede nova autenticação. |
 | Servidor reinicia | Episódios e o mapa de mensagens em memória se perdem (expirariam em segundos); sessões persistem; streams reconectam sozinhos, e os novos `id` de push são maiores que os da execução anterior. |

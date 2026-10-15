@@ -30,8 +30,8 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 - **`schemaVersion`** é obrigatório **na raiz** de todo payload de produtor e se refere à versão do schema daquele payload (ver tabela de versões atuais). Se ausente, o servidor assume `1`. A versão **mais recente** do contrato é definida num único lugar do servidor (`const.SCHEMA_VERSION_ATUAL`); `const.SCHEMA_VERSION_MINIMA` (hoje `1`) é a menor aceita.
   - Versão **de `1` até a mais recente** é aceita e **usada**, inclusive a anterior à atual (as regras logam o aviso "desatualizada"). Na regra de queda a versão decide a prioridade entre dispositivos do mesmo usuário (arquitetura, 9.2.1); wokwi v1/v2 (sem `valueMax`) alimentam a regra de forma degradada, e app v1/v2 (sem `acelerometro`) não geram leitura de aceleração.
   - Versão **maior que a mais recente**, menor que a mínima, não inteira (inclui `"3"` e `3.0`) ou booleana é **descartada e logada**. Em `/dados` e `/eventos` a resposta é `200` com `{"status": "ok", "descartado": true, "motivo": "schemaVersion_nao_suportado"}` e o conteúdo não chega ao buffer nem às regras. Em `/auth/login` e `/auth/refresh` a resposta é `400` (a ausência é aceita).
-- **`source`** é obrigatório e deve ser `app` ou `wokwi` em `/dados` e `/eventos`; ausente ou inválido = `400`. **`user_id`** deve ser inteiro ou string só de dígitos; booleano ou decimal = `400`. O corpo decifrado deve ser um objeto JSON; senão `400`.
-- **`user_id` e `source`** continuam no payload de telemetria, mas **devem coincidir com as claims do token** (`user_ids`, `fonte`); divergência = `403`.
+- **`source`** é obrigatório e deve ser `app` ou `wokwi` em `/dados` e `/eventos`; ausente ou inválido = `400`. **`user_id`** deve ser um número inteiro JSON; string (mesmo só de dígitos), booleano, decimal, `null` ou ausente = `400`. O corpo decifrado deve ser um objeto JSON; senão `400`.
+- **`user_id` e `source`** continuam no payload de telemetria, mas **devem coincidir com as claims do token** (`user_ids`, `fonte`); divergência = `403`. O `device_id`/`deviceId` que o payload declarar também deve ser o `device_id` do token (o informado no login); divergência = `403`. O bridge faz login com o `deviceId` do firmware (`FLOW_BRIDGE_DEVICE`).
 - **Tempos:** `issuedAt`/`expiresAt` em ISO 8601 UTC com milissegundos e `Z`. Prazos para o dispositivo são **relativos** (`timeoutMs`), nunca absolutos.
 
 ---
@@ -307,7 +307,7 @@ Requisição: `schemaVersion` (versão atual deste schema; ausente é aceita) e 
 | --- | --- |
 | `401` | token ausente, malformado, expirado ou com assinatura inválida; credencial de login inválida |
 | `400` | corpo que não é envelope ou não decifra para objeto JSON; `source` ausente ou inválido; `user_id` inválido; `device_id` inválido no login; `schemaVersion` inválido ou maior que a atual em login/refresh |
-| `403` | papel sem a permissão da rota; `fonte` do token diferente da exigida; `user_id`/`source` do payload divergem do token |
+| `403` | papel sem a permissão da rota; `fonte` do token diferente da exigida; `user_id`/`source`/`device_id` do payload divergem do token |
 | `429` | bloqueio temporário de login |
 
 Corpo: `{"status": "erro", "codigo": "<texto curto>"}`. Falhas de conteúdo de evento já autenticado continuam descartadas internamente com resposta `200` (inclui `schemaVersion` não suportado em `/dados` e `/eventos`, com `descartado: true`). Toda negação `401`/`403` vai para `auditoria.jsonl`, rotacionado por tamanho.
@@ -329,7 +329,7 @@ Campos comuns: `timestamp` (ISO 8601 UTC) e `tipo`: `episodio.aberto`, `push.ent
 | `tipo` | Campos próprios |
 | --- | --- |
 | `episodio.aberto` | `motivo` (`IMPACTO_SEGUIDO_DE_IMOBILIDADE` ou `IMOBILIDADE_PROLONGADA`). Só no gatilho A: `fonte_do_disparo` (fonte da leitura que fechou a condição), `versao_referencia`, `fontes_usadas` (lista de `{fonte, device_id, versao, degradada}`) e `fontes_desatualizadas` (lista de `{fonte, device_id, versao}`, vazia se não houve) |
-| `push.entrega` | `messageId`, `messageType`, `canal`, `resultado`: `ENTREGUE_AO_CANAL`, `SEM_CANAL_ATIVO` ou `TIPO_NAO_SUPORTADO` |
+| `push.entrega` | `messageId`, `messageType`, `canal`, `resultado`: `ENTREGUE_AO_CANAL`, `SEM_CANAL_ATIVO`, `TIPO_NAO_SUPORTADO` ou `ERRO_NO_CANAL` (o canal levantou exceção; os demais canais seguem) |
 | `push.ack`, `confirmacao.resposta` | `eventType`, `state`, `messageId`, `device_id`, `source`. `episodeId` é o da `messageId`; `tardia: true` se o episódio já estava encerrado; `mensagem_desconhecida: true` (com `episodeId: null`) se a `messageId` é desconhecida ou de outro usuário |
 | `episodio.encerrado` | `resultado`: `CONFIRMADO` ou `EXPIRADO` |
 

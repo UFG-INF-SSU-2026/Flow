@@ -116,8 +116,6 @@ def extrair_dinamica(fonte: str, dados: dict) -> tuple[float, float] | None:
 
 
 # ------------------- deduplicacao da telemetria do app (DC-08) -------------------
-_MAX_REFERENCIAS_DEDUP = 1000   # limite de dispositivos rastreados (device_id vem do payload do cliente)
-
 _ultimo_ts_app: dict[tuple, float] = {}   # (user_id, "app", device_id) -> ultimo timestamp_envio (epoch ms)
 
 
@@ -142,7 +140,7 @@ def eh_duplicado_app(user_id: int, device_id: str, dados: dict) -> bool:
             # regressao grande: reajuste de relogio, cai na nova referencia abaixo
         _ultimo_ts_app.pop(chave, None)              # reinsere no fim: mantem a ordem de uso para o limite
         _ultimo_ts_app[chave] = ts
-        if len(_ultimo_ts_app) > _MAX_REFERENCIAS_DEDUP:
+        if len(_ultimo_ts_app) > const.MAX_REFERENCIAS_DEDUP:
             _ultimo_ts_app.pop(next(iter(_ultimo_ts_app)))
         return False
 

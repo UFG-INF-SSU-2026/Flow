@@ -19,7 +19,7 @@ POLITICA: dict[str, set[str]] = {
     "cuidador":    set(),                      # reservado (futuro)
     "admin":       {"dados:ler", "estado:ler"},
 }
-FONTE_DO_PAPEL = {"idoso": "app", "dispositivo": "wokwi"}
+FONTE_DO_PAPEL = auth.FONTE_DO_PAPEL     # definida em auth.py (criar_conta tambem a usa)
 
 
 class ForaDeEscopo(Exception):
@@ -77,6 +77,18 @@ def exige(permissao: str, fonte: str | None = None):
             return f(*args, **kwargs)
         return wrapper
     return deco
+
+
+def exigir_dispositivo(principal: auth.Principal, payload: dict) -> None:
+    """Estagio 2 (continuacao): o `device_id`/`deviceId` que o payload declarar deve ser o `device_id` do token
+    (o informado no login). Sem isso, a conta de um usuario poderia enviar eventos em nome do device de outro e
+    fazer os eventos reais dele serem descartados como duplicados. Campo ausente ou vazio nao declara nada."""
+    for campo in ("device_id", "deviceId"):
+        valor = payload.get(campo)
+        if valor is None or valor == "":
+            continue
+        if valor != principal.device_id:
+            raise ForaDeEscopo(f"{campo} do payload diferente do device_id do token")
 
 
 def exigir_escopo(principal: auth.Principal, user_id: int, source: str) -> None:
