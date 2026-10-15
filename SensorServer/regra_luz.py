@@ -35,15 +35,16 @@ class EstadoDispositivo:
     ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const.SCHEMA_VERSION_PADRAO, se ausente)
 
 
-# Estado por dispositivo (em memoria; reinicia se o servidor reiniciar -
+# Estado por (user_id, device_id) (em memoria; reinicia se o servidor reiniciar -
 # aceitavel nesta fase de prototipo, conforme decisao de simplicidade do grupo)
-_estados: dict[str, EstadoDispositivo] = {}
+_estados: dict[tuple[int, str], EstadoDispositivo] = {}
 
 
-def _estado_do(device_id: str) -> EstadoDispositivo:
-    if device_id not in _estados:
-        _estados[device_id] = EstadoDispositivo()
-    return _estados[device_id]
+def _estado_do(user_id: int, device_id: str) -> EstadoDispositivo:
+    chave = (user_id, device_id)
+    if chave not in _estados:
+        _estados[chave] = EstadoDispositivo()
+    return _estados[chave]
 
 
 def validar_evento(evento: dict) -> None:
@@ -79,9 +80,9 @@ def validar_evento(evento: dict) -> None:
         raise EventoInvalido(f"event_time invalido: {evento['event_time']}") from e
 
 
-def eh_duplicado(evento: dict) -> bool:
-    """Deduplicacao por device_id + seq_num (idempotencia)."""
-    estado = _estado_do(evento["device_id"])
+def eh_duplicado(user_id: int, evento: dict) -> bool:
+    """Deduplicacao por (user_id, device_id) + seq_num (idempotencia)."""
+    estado = _estado_do(user_id, evento["device_id"])
     seq = evento["seq_num"]
     if estado.ultimo_seq_num is not None and seq <= estado.ultimo_seq_num:
         return True
@@ -94,7 +95,7 @@ def _eh_noite(event_time: datetime) -> bool:
     return hora >= const.HORA_INICIO_NOITE or hora < const.HORA_FIM_NOITE
 
 
-def avaliar_regra(evento: dict) -> dict | None:
+def avaliar_regra(user_id: int, evento: dict) -> dict | None:
     """
     Aplica a regra de luz inadequada (noite + CCT frio, com debounce).
 
@@ -103,7 +104,7 @@ def avaliar_regra(evento: dict) -> dict | None:
     e "alerta ja estava ativo, nao repete").
     """
     device_id = evento["device_id"]
-    estado = _estado_do(device_id)
+    estado = _estado_do(user_id, device_id)
     event_time = datetime.fromisoformat(evento["event_time"])
 
     condicao_presente = _eh_noite(event_time) and evento["cct"] > const.CCT_LIMIAR_FRIO

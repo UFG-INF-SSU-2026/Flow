@@ -1,4 +1,4 @@
-"""Uma conta nao age em nome do device de outra pessoa (P-03): device_id/deviceId do payload = device_id do token."""
+"""Uma conta nao age em nome do device de outra pessoa: device_id/deviceId do payload = device_id do token."""
 import pytest
 
 import auth
@@ -70,3 +70,31 @@ def test_403_por_device_vai_para_a_auditoria(cli, tokens):
     with open(f"{const.DATA_DIR}/auditoria.jsonl", encoding="utf-8") as f:
         (linha,) = [json.loads(l) for l in f if l.strip()]
     assert (linha["status"], linha["motivo"], linha["conta"]) == (403, "fora_de_escopo", "bridge1")
+
+
+def test_mesmo_device_id_em_dois_usuarios_nao_compartilha_estado(cli, tokens, bridge2):
+    tok2 = cli.login("bridge2", "senha-bridge2", "wokwi", "bridge-dev")["access_token"]   # mesmo device_id do usuario 1
+
+    assert cli.post("/dados", _wokwi("bridge-dev", 50), tokens["dispositivo"]).status_code == 200
+    # sequence 1 do usuario 2 nao e duplicado do sequence 50 do usuario 1
+    assert cli.post("/dados", _wokwi("bridge-dev", 1, user_id=2), tok2).status_code == 200
+
+    assert regra_imobilidade._estados[(1, "bridge-dev")].ultimo_sequence == 50
+    assert regra_imobilidade._estados[(2, "bridge-dev")].ultimo_sequence == 1
+
+    # o usuario 1 segue com o proprio sequence
+    assert cli.post("/dados", _wokwi("bridge-dev", 51), tokens["dispositivo"]).status_code == 200
+    assert regra_imobilidade._estados[(1, "bridge-dev")].ultimo_sequence == 51
+    assert regra_imobilidade._estados[(2, "bridge-dev")].ultimo_sequence == 1
+
+
+def test_estado_do_device_devolve_o_usuario_atualizado_por_ultimo(cli, tokens, bridge2):
+    tok2 = cli.login("bridge2", "senha-bridge2", "wokwi", "bridge-dev")["access_token"]
+    cli.post("/dados", _wokwi("bridge-dev", 7), tokens["dispositivo"])
+    cli.post("/dados", _wokwi("bridge-dev", 3, user_id=2), tok2)
+    estado = cli.get("/estado/bridge-dev", tokens["admin"]).get_json()
+    assert (estado["user_id"], estado["ultimo_sequence"]) == (2, 3)
+
+    cli.post("/dados", _wokwi("bridge-dev", 8), tokens["dispositivo"])
+    estado = cli.get("/estado/bridge-dev", tokens["admin"]).get_json()
+    assert (estado["user_id"], estado["ultimo_sequence"]) == (1, 8)

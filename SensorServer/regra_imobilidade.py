@@ -70,15 +70,17 @@ class EstadoDispositivo:
     ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const.SCHEMA_VERSION_PADRAO, se ausente)
 
 
-# Estado por dispositivo (em memoria; reinicia se o servidor reiniciar,
-# mesma decisao de simplicidade ja assumida em regra_luz.py)
-_estados: dict[str, EstadoDispositivo] = {}
+# Estado por (user_id, device_id) (em memoria; reinicia se o servidor reiniciar,
+# mesma decisao de simplicidade ja assumida em regra_luz.py). O user_id faz parte da chave: dois usuarios com o
+# mesmo device_id nao compartilham estado nem sequence.
+_estados: dict[tuple[int, str], EstadoDispositivo] = {}
 
 
-def _estado_do(device_id: str) -> EstadoDispositivo:
-    if device_id not in _estados:
-        _estados[device_id] = EstadoDispositivo()
-    return _estados[device_id]
+def _estado_do(user_id: int, device_id: str) -> EstadoDispositivo:
+    chave = (user_id, device_id)
+    if chave not in _estados:
+        _estados[chave] = EstadoDispositivo()
+    return _estados[chave]
 
 
 def _agora_iso() -> str:
@@ -160,13 +162,13 @@ def validar_evento(evento: dict) -> None:
             )
 
 
-def eh_duplicado(evento: dict) -> bool:
+def eh_duplicado(user_id: int, evento: dict) -> bool:
     """Deduplicacao/idempotencia: sequence deve ser maior que o ultimo
-    conhecido para aquele deviceId (sequence e global por dispositivo no
+    conhecido para aquele (user_id, deviceId) (sequence e global por dispositivo no
     firmware, nao por eventType - um unico contador incrementa a cada
     emitirEvento(), seja leitura ou decisao)."""
     device_id = str(evento["deviceId"])
-    estado = _estado_do(device_id)
+    estado = _estado_do(user_id, device_id)
     seq = evento["sequence"]
 
     if estado.ultimo_sequence is not None and seq <= estado.ultimo_sequence:
@@ -176,7 +178,7 @@ def eh_duplicado(evento: dict) -> bool:
     return False
 
 
-def processar_evento(evento: dict) -> dict | None:
+def processar_evento(user_id: int, evento: dict) -> dict | None:
     """Atualiza a tabela de estado persistente e, quando aplicavel, produz
     a atuacao observavel (alerta) para state == "ALERTA_IMOBILIDADE".
 
@@ -186,7 +188,7 @@ def processar_evento(evento: dict) -> dict | None:
     para este episodio").
     """
     device_id = str(evento["deviceId"])
-    estado = _estado_do(device_id)
+    estado = _estado_do(user_id, device_id)
     estado.ultima_atualizacao = _agora_iso()
     estado.ultimo_schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
 
@@ -235,14 +237,17 @@ def processar_evento(evento: dict) -> dict | None:
 
 
 def obter_estado(device_id: str) -> dict | None:
-    """Exposto via GET /estado/<device_id> em server.py - e a evidencia
+    """Procura o device_id em todos os usuarios. Exposto via GET /estado/<device_id> em server.py - e a evidencia
     observavel de 'mudanca de estado' pedida no roteiro da apresentacao,
     em complemento ao log em dataUsers/usuario_<id>.jsonl."""
-    estado = _estados.get(device_id)
-    if estado is None:
+    candidatos = [(uid, e) for (uid, dev), e in _estados.items() if dev == device_id]
+    if not candidatos:
         return None
+    # O mesmo device_id pode existir em mais de um usuario: devolve o do usuario atualizado por ultimo.
+    user_id, estado = max(candidatos, key=lambda c: c[1].ultima_atualizacao or "")
     return {
         "device_id": device_id,
+        "user_id": user_id,
         "estado_atual": estado.estado_atual,
         "ultima_decisao": estado.ultima_decisao,
         "alerta_ativo": estado.alerta_ativo,

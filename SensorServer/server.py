@@ -188,7 +188,7 @@ def _flush_loop() -> None:
             print(f"  [flush] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
-def _processar_leitura_ambiente(payload: dict, device_id: str) -> None:
+def _processar_leitura_ambiente(user_id: int, payload: dict, device_id: str) -> None:
     """Fluxo priorizado (Marco 2): LeituraAmbiente -> regra de luz -> alerta.
     So se aplica a payloads vindos do app (unico que emite esse evento)."""
     evento_ambiente = payload.get("leitura_ambiente")
@@ -201,11 +201,11 @@ def _processar_leitura_ambiente(payload: dict, device_id: str) -> None:
         print(f"  [leitura_ambiente] descartada (invalida): {e}")
         return
 
-    if eh_duplicado(evento_ambiente):
+    if eh_duplicado(user_id, evento_ambiente):
         print(f"  [leitura_ambiente] descartada (duplicada, seq_num={evento_ambiente['seq_num']})")
         return
 
-    resultado_regra = avaliar_regra(evento_ambiente)
+    resultado_regra = avaliar_regra(user_id, evento_ambiente)
     if resultado_regra is not None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = f"alerta_{_nome_seguro(device_id)}_{timestamp}.json"
@@ -231,7 +231,7 @@ class ResultadoWokwi(NamedTuple):
     alerta: dict | None = None     # alerta de imobilidade (so quando ACEITO)
 
 
-def _processar_evento_wokwi(payload: dict, device_id: str) -> ResultadoWokwi:
+def _processar_evento_wokwi(user_id: int, payload: dict, device_id: str) -> ResultadoWokwi:
     """Fecha a pendencia do relatorio (secao 'Consumidor'): cascata de
     validacao por eventType + tabela de estado persistente + atuacao para
     imobilidade.decisao com state=ALERTA_IMOBILIDADE. Espelha o fluxo
@@ -245,11 +245,11 @@ def _processar_evento_wokwi(payload: dict, device_id: str) -> ResultadoWokwi:
         print(f"  [wokwi] evento descartado (invalido): {e}")
         return ResultadoWokwi(WOKWI_INVALIDO)
 
-    if regra_imobilidade.eh_duplicado(payload):
+    if regra_imobilidade.eh_duplicado(user_id, payload):
         print(f"  [wokwi] evento descartado (duplicado/atrasado, sequence={payload.get('sequence')})")
         return ResultadoWokwi(WOKWI_DUPLICADO)
 
-    alerta = regra_imobilidade.processar_evento(payload)
+    alerta = regra_imobilidade.processar_evento(user_id, payload)
     if alerta is not None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = f"alerta_imobilidade_{_nome_seguro(device_id)}_{timestamp}.json"
@@ -519,14 +519,14 @@ def receber_dados():
     if source == "app":
         # A analise de queda NAO depende do fluxo legado do app: se ele falhar, loga e segue.
         try:
-            _processar_leitura_ambiente(payload, device_id)
+            _processar_leitura_ambiente(user_id, payload, device_id)
         except Exception as e:
             _falha_fluxo_legado("leitura_ambiente", e)
         alimenta_queda = not regra_queda.eh_duplicado_app(user_id, device_id, payload)
     elif source == "wokwi":
         # Para o wokwi a queda depende so do estado ACEITO: excecao no fluxo legado = nao aceito.
         try:
-            resultado = _processar_evento_wokwi(payload, device_id)
+            resultado = _processar_evento_wokwi(user_id, payload, device_id)
         except Exception as e:
             _falha_fluxo_legado("wokwi", e)
             resultado = ResultadoWokwi(WOKWI_INVALIDO)
@@ -561,7 +561,7 @@ def obter_estado_imobilidade(device_id):
     """Debug/demo: expoe a tabela de estado persistente (nao o buffer de
     1s) de um dispositivo wokwi - evidencia observavel de 'mudanca de
     estado', separada do log em dataUsers/usuario_<id>.jsonl."""
-    estado = regra_imobilidade.obter_estado(device_id)
+    estado = regra_imobilidade.obter_estado(device_id)   # procura em todos os usuarios
     if estado is None:
         return jsonify({"status": "erro", "mensagem": f"device_id desconhecido: {device_id}"}), 404
     return jsonify(estado)
