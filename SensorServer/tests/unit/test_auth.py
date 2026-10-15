@@ -37,6 +37,58 @@ class TestSenha:
         assert auth._verificar_senha("abc", armazenado) is False
 
 
+# --------------------------- poda das tabelas de login -----------------------
+class TestPodaLogin:
+    def test_falha_vencida_sai_na_proxima_falha(self, contas, relogio_auth):
+        _errar(1, ident="fantasma")
+        relogio_auth.avancar(const.JANELA_FALHAS_S + 1)
+        _errar(1, ident="outro")
+        assert list(auth._falhas) == ["outro"]
+
+    def test_falha_dentro_da_janela_fica(self, contas, relogio_auth):
+        _errar(1, ident="fantasma")
+        relogio_auth.avancar(const.JANELA_FALHAS_S - 1)
+        _errar(1, ident="outro")
+        assert set(auth._falhas) == {"fantasma", "outro"}
+
+    def test_bloqueio_vencido_sai_e_o_vigente_fica(self, contas, relogio_auth):
+        _errar(const.MAX_FALHAS, ident="a")
+        relogio_auth.avancar(const.BLOQUEIO_S - 10)
+        _errar(const.MAX_FALHAS, ident="b")          # bloqueia 10 s depois de "a" passar a vencer
+        relogio_auth.avancar(11)                        # "a" venceu, "b" segue bloqueado
+        _errar(1, ident="c")
+        assert set(auth._bloqueado_ate) == {"b"}
+
+    def test_bloqueio_nao_deixa_entrada_vazia_em_falhas(self, contas, relogio_auth):
+        _errar(const.MAX_FALHAS, ident="a")
+        assert "a" not in auth._falhas and "a" in auth._bloqueado_ate
+
+    def test_poda_nao_muda_o_bloqueio_nem_a_contagem(self, contas, relogio_auth):
+        _errar(const.MAX_FALHAS - 1)
+        for i in range(20):
+            _errar(1, ident=f"x{i}")                  # outras falhas disparam a poda
+        _errar(1)                                       # a 5a falha de idoso1 ainda bloqueia
+        with pytest.raises(auth.Bloqueado):
+            _login_ok()
+
+    def test_falhas_respeitam_o_teto_e_saem_as_mais_antigas(self, contas, relogio_auth, monkeypatch):
+        monkeypatch.setattr(const, "MAX_IDENTIFICADORES_LOGIN", 5)
+        for i in range(8):
+            _errar(1, ident=f"id{i}")
+            relogio_auth.avancar(1)
+        assert len(auth._falhas) <= 5
+        assert "id7" in auth._falhas and "id0" not in auth._falhas
+
+    def test_bloqueios_respeitam_o_teto_e_saem_os_que_vencem_antes(self, contas, relogio_auth, monkeypatch):
+        monkeypatch.setattr(const, "MAX_IDENTIFICADORES_LOGIN", 3)
+        for i in range(6):
+            _errar(const.MAX_FALHAS, ident=f"id{i}")
+            relogio_auth.avancar(1)
+        _errar(1, ident="disparo")                     # a poda roda ao registrar uma falha
+        assert len(auth._bloqueado_ate) <= 3
+        assert "id5" in auth._bloqueado_ate and "id0" not in auth._bloqueado_ate
+
+
 # -------------------------------- login -------------------------------------
 class TestLogin:
     def test_ok_devolve_as_cinco_chaves(self, contas):

@@ -9,6 +9,7 @@ Contrato do evento (definido na Atividade 02):
     dispositivo, so para esse tipo de evento).
 """
 
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -37,14 +38,20 @@ class EstadoDispositivo:
 
 # Estado por (user_id, device_id) (em memoria; reinicia se o servidor reiniciar -
 # aceitavel nesta fase de prototipo, conforme decisao de simplicidade do grupo)
+# Como o device_id vem do cliente, a tabela tem teto (const.MAX_ESTADOS_LEGADOS): estoura, sai o menos usado
+# (a ordem do dict e a do ultimo uso).
 _estados: dict[tuple[int, str], EstadoDispositivo] = {}
+_estados_lock = threading.Lock()
 
 
 def _estado_do(user_id: int, device_id: str) -> EstadoDispositivo:
     chave = (user_id, device_id)
-    if chave not in _estados:
-        _estados[chave] = EstadoDispositivo()
-    return _estados[chave]
+    with _estados_lock:
+        estado = _estados.pop(chave, None) or EstadoDispositivo()
+        _estados[chave] = estado   # reinsere no fim: o primeiro do dict e sempre o menos usado
+        while len(_estados) > const.MAX_ESTADOS_LEGADOS:
+            del _estados[next(iter(_estados))]
+        return estado
 
 
 def validar_evento(evento: dict) -> None:

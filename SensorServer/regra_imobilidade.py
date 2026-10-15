@@ -15,6 +15,7 @@ duas regras do servidor sigam o mesmo padrao e fiquem faceis de explicar
 lado a lado na verificacao oral.
 """
 
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -73,14 +74,20 @@ class EstadoDispositivo:
 # Estado por (user_id, device_id) (em memoria; reinicia se o servidor reiniciar,
 # mesma decisao de simplicidade ja assumida em regra_luz.py). O user_id faz parte da chave: dois usuarios com o
 # mesmo device_id nao compartilham estado nem sequence.
+# Como o device_id vem do cliente, a tabela tem teto (const.MAX_ESTADOS_LEGADOS): estoura, sai o menos usado
+# (a ordem do dict e a do ultimo uso).
 _estados: dict[tuple[int, str], EstadoDispositivo] = {}
+_estados_lock = threading.Lock()
 
 
 def _estado_do(user_id: int, device_id: str) -> EstadoDispositivo:
     chave = (user_id, device_id)
-    if chave not in _estados:
-        _estados[chave] = EstadoDispositivo()
-    return _estados[chave]
+    with _estados_lock:
+        estado = _estados.pop(chave, None) or EstadoDispositivo()
+        _estados[chave] = estado   # reinsere no fim: o primeiro do dict e sempre o menos usado
+        while len(_estados) > const.MAX_ESTADOS_LEGADOS:
+            del _estados[next(iter(_estados))]
+        return estado
 
 
 def _agora_iso() -> str:
@@ -240,7 +247,8 @@ def obter_estado(device_id: str) -> dict | None:
     """Procura o device_id em todos os usuarios. Exposto via GET /estado/<device_id> em server.py - e a evidencia
     observavel de 'mudanca de estado' pedida no roteiro da apresentacao,
     em complemento ao log em dataUsers/usuario_<id>.jsonl."""
-    candidatos = [(uid, e) for (uid, dev), e in _estados.items() if dev == device_id]
+    with _estados_lock:
+        candidatos = [(uid, e) for (uid, dev), e in _estados.items() if dev == device_id]
     if not candidatos:
         return None
     # O mesmo device_id pode existir em mais de um usuario: devolve o do usuario atualizado por ultimo.

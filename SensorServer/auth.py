@@ -176,6 +176,21 @@ def _par_de_tokens(conta: dict, fonte, device_id, agora: float) -> dict:
 
 
 # ---------------------------------- login ----------------------------------
+def _podar_login(agora: float) -> None:
+    """Mantem _falhas e _bloqueado_ate pequenos: os identificadores vem do cliente (inclusive os que nao existem).
+    Sai o que ja venceu (bloqueio passado; falhas todas fora da janela). Se ainda passar de
+    const.MAX_IDENTIFICADORES_LOGIN, saem primeiro os de falha mais antiga e depois os de bloqueio que vence antes."""
+    for ident in [i for i, ate in _bloqueado_ate.items() if ate <= agora]:
+        del _bloqueado_ate[ident]
+    for ident in [i for i, fs in _falhas.items() if not fs or agora - fs[-1] >= const.JANELA_FALHAS_S]:
+        del _falhas[ident]
+    for tabela, chave in ((_falhas, lambda i: _falhas[i][-1]), (_bloqueado_ate, _bloqueado_ate.get)):
+        excesso = len(tabela) - const.MAX_IDENTIFICADORES_LOGIN
+        if excesso > 0:
+            for ident in sorted(tabela, key=chave)[:excesso]:
+                del tabela[ident]
+
+
 def _checar_bloqueio(ident: str, agora: float) -> None:
     if _bloqueado_ate.get(ident, 0) > agora:
         raise Bloqueado()
@@ -186,7 +201,8 @@ def _registrar_falha(ident: str, agora: float) -> None:
     _falhas[ident] = fs
     if len(fs) >= const.MAX_FALHAS:
         _bloqueado_ate[ident] = agora + const.BLOQUEIO_S
-        _falhas[ident] = []
+        del _falhas[ident]   # o bloqueio recomeca a contagem; nao deixa entrada vazia
+    _podar_login(agora)      # depois de registrar: a entrada nova e a mais recente e nunca e a que sai
 
 
 def device_id_valido(device_id) -> bool:

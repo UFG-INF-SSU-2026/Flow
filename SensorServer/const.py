@@ -42,6 +42,18 @@ MAX_EM_MEMORIA = 200
 # Fontes de telemetria aceitas. Definicao unica (antes em server.py e auth.py).
 FONTES_VALIDAS = {"app", "wokwi"}
 
+# Tamanho maximo (bytes) do corpo de qualquer requisicao. Acima disso o servidor responde 413 sem ler o
+# resto. O maior corpo legitimo e um envelope cifrado de telemetria (poucos KB); 64 KiB deixa folga.
+MAX_CONTENT_LENGTH = 64 * 1024
+
+# Teto de entradas das tabelas em memoria cujas chaves vem do cliente. Ao estourar, as mais antigas saem.
+# - auth: identificadores com falha de login registrada (_falhas) e identificadores bloqueados (_bloqueado_ate).
+# - regras legadas (imobilidade e luz): estados por (user_id, device_id), um teto para cada tabela.
+# Valores bem acima do uso real (poucos usuarios e dispositivos); servem so para o consumo de memoria
+# nao crescer sem limite.
+MAX_IDENTIFICADORES_LOGIN = 10_000
+MAX_ESTADOS_LEGADOS = 1_000
+
 # ===========================================================================
 # 2. AUTENTICACAO
 # ===========================================================================

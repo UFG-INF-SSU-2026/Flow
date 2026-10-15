@@ -168,3 +168,49 @@ class TestLuzRegra:
         import const
         r = [luz.avaliar_regra(1, ev_luz(seq=s, cct=const.CCT_LIMIAR_FRIO)) for s in (1, 2, 3)]
         assert r == [None, None, None]
+
+
+class TestTetoDeEstados:
+    """As tabelas de estado crescem com device_id vindo do cliente: passam de const.MAX_ESTADOS_LEGADOS, saem as menos usadas."""
+
+    @pytest.fixture(autouse=True)
+    def teto_pequeno(self, monkeypatch):
+        import const
+        monkeypatch.setattr(const, "MAX_ESTADOS_LEGADOS", 3)
+
+    def test_imobilidade_nao_passa_do_teto(self):
+        for i in range(10):
+            imob.eh_duplicado(1, ev_imob(seq=1, device=f"d{i}"))
+        assert len(imob._estados) == 3
+        assert set(imob._estados) == {(1, "d7"), (1, "d8"), (1, "d9")}
+
+    def test_luz_nao_passa_do_teto(self):
+        for i in range(10):
+            luz.eh_duplicado(1, ev_luz(seq=1, device=f"d{i}"))
+        assert len(luz._estados) == 3
+        assert set(luz._estados) == {(1, "d7"), (1, "d8"), (1, "d9")}
+
+    def test_imobilidade_usado_recentemente_nao_sai(self):
+        for d in ("a", "b", "c"):
+            imob.eh_duplicado(1, ev_imob(seq=1, device=d))
+        imob.eh_duplicado(1, ev_imob(seq=2, device="a"))     # "a" volta a ser o mais recente
+        imob.eh_duplicado(1, ev_imob(seq=1, device="d"))     # entra um novo: sai "b", nao "a"
+        assert set(imob._estados) == {(1, "c"), (1, "a"), (1, "d")}
+        assert imob._estados[(1, "a")].ultimo_sequence == 2  # o estado de "a" foi mantido
+
+    def test_luz_usado_recentemente_nao_sai(self):
+        for d in ("a", "b", "c"):
+            luz.eh_duplicado(1, ev_luz(seq=1, device=d))
+        luz.eh_duplicado(1, ev_luz(seq=2, device="a"))
+        luz.eh_duplicado(1, ev_luz(seq=1, device="d"))
+        assert set(luz._estados) == {(1, "c"), (1, "a"), (1, "d")}
+        assert luz._estados[(1, "a")].ultimo_seq_num == 2
+
+    def test_abaixo_do_teto_nada_sai(self):
+        for i in range(3):
+            imob.eh_duplicado(1, ev_imob(seq=1, device=f"d{i}"))
+        assert len(imob._estados) == 3
+
+    def test_obter_estado_continua_achando_o_device(self):
+        imob.processar_evento(1, ev_imob(seq=1, device="d1"))
+        assert imob.obter_estado("d1")["user_id"] == 1

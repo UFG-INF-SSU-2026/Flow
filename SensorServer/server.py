@@ -93,6 +93,7 @@ import regra_imobilidade
 CANAIS = [canal_app, canal_wokwi]
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = const.MAX_CONTENT_LENGTH   # corpo maior: 413 (ver errorhandler abaixo)
 app.register_blueprint(canal_app.bp)
 app.register_blueprint(canal_wokwi.bp)
 
@@ -327,6 +328,12 @@ def _vigia_loop() -> None:
             _vigia_iteracao()
         except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
             print(f"  [vigia] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
+
+
+@app.errorhandler(413)
+def _corpo_grande(_erro):
+    """Corpo acima de const.MAX_CONTENT_LENGTH (o Flask levanta ao ler o corpo). Entra na auditoria como as demais negacoes."""
+    return negar(413, "corpo_grande")
 
 
 def _decifrar_corpo():
