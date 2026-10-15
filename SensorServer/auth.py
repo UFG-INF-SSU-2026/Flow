@@ -238,10 +238,12 @@ def refresh(refresh_token: str) -> dict:
     h = hashlib.sha256(refresh_token.encode()).hexdigest()
     with _lock:
         sessoes = _ler_json(const.SESSOES_PATH, {})
-        s = sessoes.pop(h, None)  # uso unico: some sempre, valido ou nao
-        if s is None or s["exp"] <= agora:
-            raise TokenInvalido("refresh invalido ou expirado")
+        s = sessoes.pop(h, None)  # uso unico: se existia, sai do arquivo ja nesta chamada, valido ou expirado
+        if s is None:
+            raise TokenInvalido("refresh invalido ou expirado")   # desconhecido: nada mudou, nao regrava
         _gravar_json(const.SESSOES_PATH, sessoes)
+        if s["exp"] <= agora:
+            raise TokenInvalido("refresh invalido ou expirado")
         conta = _ler_json(const.CONTAS_PATH, {}).get(s["conta_id"])
         if conta is None:
             raise TokenInvalido("conta removida")

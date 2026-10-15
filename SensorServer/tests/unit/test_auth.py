@@ -1,4 +1,5 @@
 """auth.py: senhas, login, bloqueio, refresh rotativo, tokens e segredo."""
+import hashlib
 import time
 
 import jwt
@@ -180,6 +181,25 @@ class TestRefresh:
         relogio_auth.avancar(11)
         with pytest.raises(auth.TokenInvalido):
             auth.refresh(t["refresh_token"])
+
+    def test_expirado_some_do_arquivo_na_primeira_tentativa(self, contas, relogio_auth, monkeypatch):
+        monkeypatch.setattr(const, "REFRESH_TTL_S", 10)
+        t = _login_ok()
+        outro = auth.login("bridge1", "senha-bridge", "wokwi", "b")   # segunda sessao, nao deve ser afetada
+        assert len(auth._ler_json(const.SESSOES_PATH, {})) == 2
+        relogio_auth.avancar(11)
+        with pytest.raises(auth.TokenInvalido):
+            auth.refresh(t["refresh_token"])
+        restantes = auth._ler_json(const.SESSOES_PATH, {})
+        assert len(restantes) == 1
+        assert hashlib.sha256(outro["refresh_token"].encode()).hexdigest() in restantes
+
+    def test_desconhecido_nao_mexe_no_arquivo(self, contas):
+        _login_ok()
+        antes = auth._ler_json(const.SESSOES_PATH, {})
+        with pytest.raises(auth.TokenInvalido):
+            auth.refresh("nao-existe")
+        assert auth._ler_json(const.SESSOES_PATH, {}) == antes
 
     def test_dentro_da_validade_funciona(self, contas, relogio_auth, monkeypatch):
         monkeypatch.setattr(const, "REFRESH_TTL_S", 10)
