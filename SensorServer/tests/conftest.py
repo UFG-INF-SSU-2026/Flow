@@ -28,6 +28,16 @@ os.environ["FLOW_SESSOES_PATH"] = os.path.join(_TMP, "sessoes.json")
 
 import const  # noqa: E402
 
+
+def pytest_collection_modifyitems(items):
+    """Marca cada teste pela pasta (unit/integration), para `pytest -m unit` e `pytest -m integration`."""
+    for item in items:
+        partes = item.path.parts
+        if "unit" in partes:
+            item.add_marker("unit")
+        elif "integration" in partes:
+            item.add_marker("integration")
+
 const.DATA_DIR = os.path.join(_TMP, "dataUsers")
 
 import pytest  # noqa: E402
