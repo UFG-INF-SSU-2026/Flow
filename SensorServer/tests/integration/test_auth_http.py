@@ -1,4 +1,4 @@
-"""POST /auth/login e /auth/refresh pelo test_client, incluindo a regra de auditoria do login falho (P-02, R-03)."""
+"""POST /auth/login e /auth/refresh pelo test_client, incluindo a regra de auditoria do login falho."""
 import json
 
 import pytest

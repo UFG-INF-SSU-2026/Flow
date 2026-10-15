@@ -25,7 +25,7 @@ def _serializar(msg: dict) -> str | None:
 @exige("push:receber", fonte="app")
 def stream_app():
     p = g.principal
-    last = ler_last_event_id(request.headers.get("Last-Event-ID"))   # invalido vira 0 (DC-13)
+    last = ler_last_event_id(request.headers.get("Last-Event-ID"))   # invalido vira 0
     return HUB.resposta_sse(p.user_ids[0], CANAL, p.device_id or "app", p.exp, last, _serializar)
 
 

@@ -1,4 +1,4 @@
-"""auth.criar_conta: validacoes (P-05)."""
+"""auth.criar_conta: validacoes."""
 import pytest
 
 import auth

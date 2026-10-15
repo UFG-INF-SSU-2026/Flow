@@ -1,5 +1,6 @@
 """
-Criptografia do transporte (Marco 2).
+Criptografia do transporte: o mesmo envelope AES-GCM protege o que o cliente envia
+(telemetria, eventos, login) e o que o servidor empurra (push por SSE).
 
 Mecanismo escolhido: AES-256-GCM com chave simetrica pre-compartilhada.
 
@@ -31,7 +32,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 # SensorApp/.../CryptoUtils.kt (SHARED_KEY_B64).
 #
 # NOTA (nivel academico): esta chave e estatica e hardcoded de proposito,
-# apenas para viabilizar a demonstracao do Marco 2 dentro do prazo da
+# apenas para viabilizar a demonstracao dentro do prazo da
 # disciplina. Em um cenario de producao, ela NAO deveria ser fixa nem
 # compartilhada por todos os dispositivos - o correto seria cada
 # dispositivo (celular do idoso) gerar/receber sua propria chave durante

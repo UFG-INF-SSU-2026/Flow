@@ -456,7 +456,7 @@ No Wokwi, `ENTREGUE_AO_CANAL` significa apenas que o **bridge** está conectado;
 
 ### 10.5 Por que SSE e não WebSocket
 
-A escolha vem de uma pergunta: **o que o servidor precisa dizer ao dispositivo, e o que o dispositivo precisa dizer de volta?** O servidor precisa apenas *empurrar* mensagens pontuais e de baixa frequência (um pedido de confirmação de queda e o seu encerramento). Tudo que o dispositivo diz ao servidor (telemetria, `push.ack`, `confirmacao.resposta`) já tem um caminho próprio: `POST` autenticado, que existe independentemente do canal de push (decisão D3 de `docs/marco3-autenticacao-autorizacao-push.md`). Com a volta *unidirecional* resolvida, a bidirecionalidade do WebSocket não é necessária.
+A escolha vem de uma pergunta: **o que o servidor precisa dizer ao dispositivo, e o que o dispositivo precisa dizer de volta?** O servidor precisa apenas *empurrar* mensagens pontuais e de baixa frequência (um pedido de confirmação de queda e o seu encerramento). Tudo que o dispositivo diz ao servidor (telemetria, `push.ack`, `confirmacao.resposta`) já tem um caminho próprio: `POST` autenticado, que existe independentemente do canal de push. Com a volta *unidirecional* resolvida, a bidirecionalidade do WebSocket não é necessária.
 
 | Critério neste projeto | SSE (escolhido) | WebSocket |
 | --- | --- | --- |
@@ -475,7 +475,7 @@ A escolha vem de uma pergunta: **o que o servidor precisa dizer ao dispositivo, 
 
 - **Só um sentido.** Não pesa porque o retorno é pontual e já passa por `POST`; o desenho até se beneficia de um retorno que não depende de a conexão de push estar viva no instante da resposta.
 - **Uma conexão HTTP aberta por cliente**, e no Flask de desenvolvimento uma thread por stream. Não pesa na escala de uma residência (um app e um bridge por pessoa); é uma limitação já registrada em 13.2.
-- **Keepalive e reconexão manuais.** São poucas linhas em cada cliente e ficam documentadas e testadas nos roadmaps.
+- **Keepalive e reconexão manuais.** São poucas linhas em cada cliente e ficam documentadas e testadas.
 - **Sem binário.** O sistema trafega JSON cifrado em base64, que é texto.
 
 **Quando reavaliar WebSocket:** se o mesmo canal precisar carregar tráfego de **alta frequência nos dois sentidos** (por exemplo, telemetria contínua e comandos de latência crítica no mesmo socket), se surgirem **payloads binários**, ou se o número de clientes simultâneos exigir um servidor assíncrono em que o WebSocket seja o modelo natural. Como `sse_hub.py` isola o mecanismo de entrega e os canais (`canal_app.py`, `canal_wokwi.py`) expõem só `enviar(user_id, mensagem)`, trocar o transporte de um alvo não altera as regras nem o contrato da mensagem.

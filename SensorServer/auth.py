@@ -35,7 +35,7 @@ FONTE_DO_PAPEL = {"idoso": "app", "dispositivo": "wokwi"}
 class AuthError(Exception):
     codigo = "nao_autenticado"
     # So login() preenche: True quando o identificador e de uma conta que existe. A auditoria usa isto para
-    # gravar `conta` apenas de contas reais (R-03); senao o texto digitado pelo cliente iria para o log.
+    # gravar `conta` apenas de contas reais; senao o texto digitado pelo cliente iria para o log.
     conta_existe: bool = False
 
 

@@ -1,7 +1,7 @@
 """
 regra_queda: maquina do gatilho A e abertura de episodios.
 
-CARACTERIZACAO (R-01): fixa o comportamento atual do codigo. Se uma regra mudar, o teste muda de proposito.
+CARACTERIZACAO: fixa o comportamento atual do codigo. Se uma regra mudar, o teste muda de proposito.
 Todos os instantes sao passados em `agora`; nao ha sleep.
 """
 import const

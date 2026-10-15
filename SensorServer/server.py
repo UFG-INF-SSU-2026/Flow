@@ -36,7 +36,7 @@ por requisicao. Em vez disso:
        Se uma das fontes nao mandou nada naquela janela de 1s, a chave dela
        fica como null (nao repete o ultimo valor conhecido).
 
-Alem disso, o fluxo priorizado do Marco 2 (LeituraAmbiente -> regra de luz
+Alem disso, o fluxo priorizado (LeituraAmbiente -> regra de luz
 inadequada -> alerta simulado para o cuidador) continua funcionando
 normalmente para dados vindos do app, de forma independente do buffer acima
 (processado assim que o payload chega, sem esperar o flush de 1s).
@@ -190,7 +190,7 @@ def _flush_loop() -> None:
 
 
 def _processar_leitura_ambiente(user_id: int, payload: dict, device_id: str) -> None:
-    """Fluxo priorizado (Marco 2): LeituraAmbiente -> regra de luz -> alerta.
+    """Fluxo priorizado: LeituraAmbiente -> regra de luz -> alerta.
     So se aplica a payloads vindos do app (unico que emite esse evento)."""
     evento_ambiente = payload.get("leitura_ambiente")
     if evento_ambiente is None:
@@ -233,8 +233,7 @@ class ResultadoWokwi(NamedTuple):
 
 
 def _processar_evento_wokwi(user_id: int, payload: dict, device_id: str) -> ResultadoWokwi:
-    """Fecha a pendencia do relatorio (secao 'Consumidor'): cascata de
-    validacao por eventType + tabela de estado persistente + atuacao para
+    """Cascata de validacao por eventType + tabela de estado persistente + atuacao para
     imobilidade.decisao com state=ALERTA_IMOBILIDADE. Espelha o fluxo
     priorizado de _processar_leitura_ambiente, mas para eventos do wokwi.
 
@@ -351,7 +350,7 @@ def _decifrar_corpo():
 
 
 def _ler_user_id(valor) -> int | None:
-    """user_id aceito: somente inteiro JSON (nao booleano) (R-02). String (mesmo de digitos), decimal, null e
+    """user_id aceito: somente inteiro JSON (nao booleano). String (mesmo de digitos), decimal, null e
     ausente -> None (400). Evita que True vire 1, que 1.9 vire 1 e que "1" passe como 1 silenciosamente."""
     if isinstance(valor, int) and not isinstance(valor, bool):
         return valor
@@ -364,9 +363,9 @@ def _resposta_cifrada(obj: dict):
 
 
 def verificar_versao(payload: dict) -> int | None:
-    """Verifica `schemaVersion` (raiz do payload) ANTES de interpretar o resto (Marco 3, 10.2; DC-06/DC-07/DC-20).
+    """Verifica `schemaVersion` (raiz do payload) ANTES de interpretar o resto.
 
-    Funcao unica para todas as rotas, sem numero fixo: os limites vem de const.py, lidos na hora da chamada (DC-18).
+    Funcao unica para todas as rotas, sem numero fixo: os limites vem de const.py, lidos na hora da chamada.
     Retorna a versao (int) quando suportada, ou None quando nao suportada. Nunca levanta excecao.
       - ausente: vale const.SCHEMA_VERSION_PADRAO;
       - de const.SCHEMA_VERSION_MINIMA ate const.SCHEMA_VERSION_ATUAL: aceita (inclusive versao menor que a atual);
@@ -396,7 +395,7 @@ def login():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo) is None:   # ausente aceito (DC-07)
+    if verificar_versao(corpo) is None:   # ausente aceito
         return _versao_invalida_400()
     if not auth.device_id_valido(corpo.get("device_id")):
         return jsonify({"status": "erro", "mensagem": "device_id invalido"}), 400
@@ -404,7 +403,7 @@ def login():
     try:
         tokens = auth.login(ident, str(corpo.get("segredo", "")), corpo.get("fonte"), corpo.get("device_id"))
     except auth.Bloqueado as e:
-        return negar(429, "bloqueado", ident if e.conta_existe else None)   # R-03: so conta que existe
+        return negar(429, "bloqueado", ident if e.conta_existe else None)   # so conta que existe
     except auth.AuthError as e:
         return negar(401, e.codigo, ident if e.conta_existe else None)
     return _resposta_cifrada(tokens)
@@ -415,7 +414,7 @@ def refresh():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo) is None:   # ausente aceito (DC-07)
+    if verificar_versao(corpo) is None:   # ausente aceito
         return _versao_invalida_400()
     try:
         tokens = auth.refresh(str(corpo.get("refresh_token", "")))
@@ -445,7 +444,7 @@ def receber_evento():
         exigir_dispositivo(g.principal, corpo)
     except ForaDeEscopo:
         return negar(403, "fora_de_escopo", g.principal.conta_id)
-    # DC-06/DC-07: mesma regra de /dados. Ausente ou versao antiga e aceita; maior que a atual ou invalida
+    # Mesma regra de /dados. Ausente ou versao antiga e aceita; maior que a atual ou invalida
     # e descartada e logada, com 200 (conteudo invalido de requisicao autenticada, 10.1).
     if verificar_versao(corpo) is None:
         return _descartar_por_versao("eventos", corpo)
@@ -497,7 +496,7 @@ def receber_dados():
     except ForaDeEscopo:
         return negar(403, "fora_de_escopo", g.principal.conta_id)
 
-    # schemaVersion (10.2 / DC-06): nao suportada -> descartada e logada, NAO entra no buffer nem nas regras.
+    # schemaVersion: nao suportada -> descartada e logada, NAO entra no buffer nem nas regras.
     # Ausente vale como versao 1 (as regras avisam que esta desatualizada, como antes).
     versao = verificar_versao(payload)
     if versao is None:

@@ -112,12 +112,12 @@ AUDITORIA_MAX_BYTES = 5 * 1024 * 1024
 # 4. ESQUEMA E VALIDACAO
 # ===========================================================================
 
-# Versao MAIS RECENTE do contrato (docs/schemas.md) e unico lugar que escreve o numero (DC-20).
+# Versao MAIS RECENTE do contrato (docs/schemas.md) e unico lugar que escreve o numero.
 # Payload com versao maior e descartado e logado; versao menor e aceita. Definicao unica (antes em mensagens.py, regra_luz.py e
 # regra_imobilidade.py).
 SCHEMA_VERSION_ATUAL = 3
 
-# Menor versao do contrato que o servidor ainda aceita (DC-20). Abaixo disso o payload e descartado.
+# Menor versao do contrato que o servidor ainda aceita. Abaixo disso o payload e descartado.
 # Versao menor que a atual, mas >= esta, e aceita e usada.
 SCHEMA_VERSION_MINIMA = 1
 
@@ -178,7 +178,7 @@ LOG_DESATUALIZADA_INTERVALO_S = 60
 
 # Regressao (s) de timestamp_envio do app acima da qual se assume reajuste de
 # relogio do celular e a referencia da deduplicacao e reiniciada
-# (regra_queda.eh_duplicado_app, DC-08).
+# (regra_queda.eh_duplicado_app).
 TOLERANCIA_RELOGIO_S = 60
 
 # Tempo (s) que o mapa messageId -> episodio guarda cada entrada DEPOIS de a

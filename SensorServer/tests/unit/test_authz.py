@@ -133,7 +133,7 @@ class TestExige:
 
     def test_fonte_do_papel_errada(self, mini):
         c, _ = mini
-        # criar_conta (P-05) barra esta combinacao; grava direto para simular uma conta mal configurada
+        # criar_conta barra esta combinacao; grava direto para simular uma conta mal configurada
         cs = auth._ler_json(const.CONTAS_PATH, {})
         cs["idoso-x"] = {"id": "idoso-x", "papel": "idoso", "user_ids": [1], "fontes": ["app", "wokwi"],
                          "hash": auth.hash_senha("senha-x")}

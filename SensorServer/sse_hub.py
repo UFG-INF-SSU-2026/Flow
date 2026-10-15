@@ -15,7 +15,7 @@ _FIM = object()
 
 
 def ler_last_event_id(valor: str | None) -> int:
-    """Cabecalho Last-Event-ID -> int. Ausente, vazio, nao numerico ou negativo vira 0 (DC-13), nunca excecao."""
+    """Cabecalho Last-Event-ID -> int. Ausente, vazio, nao numerico ou negativo vira 0, nunca excecao."""
     try:
         return max(int(valor or 0), 0)
     except ValueError:

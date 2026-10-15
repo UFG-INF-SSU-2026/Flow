@@ -27,7 +27,7 @@ O projeto evolui por marcos, cada um registrado em `docs/`:
 | Marco | O que entregou | Documento |
 | --- | --- | --- |
 | 2 | Ciclo produtor → consumidor: dispositivo (app/wokwi) → gateway → servidor, com regras de decisão | `docs/arquitetura.md` |
-| 3 | **Autenticação, autorização e envio de mensagens do servidor** (servidor analisa → envia ao dispositivo) | `docs/marco3-autenticacao-autorizacao-push.md` |
+| 3 | **Autenticação, autorização e envio de mensagens do servidor** (servidor analisa → envia ao dispositivo) | `docs/arquitetura.md`, `docs/schemas.md` |
 
 Os formatos de dados (versão 3) estão em `docs/schemas.md` e o passo a passo para rodar tudo está em `INSTRUCOES.md`. Este README descreve o sistema no estado do Marco 3.
 
@@ -75,7 +75,7 @@ Ainda faltam dimensões importantes de contexto (localização dentro da casa, s
 - **ESP32 simulado (Wokwi) + WokwiBridge:** segundo produtor de dados (acelerômetro MPU6050), com um **buzzer** e um botão "Estou bem". O ESP32 só fala serial; a ponte (bridge) faz a comunicação de rede por ele, nos dois sentidos.
 - **Servidor local:** recebe os dados, autentica e autoriza quem os envia, analisa o acelerômetro e envia mensagens de volta aos dispositivos, na mesma rede Wi-Fi.
 - **Comunicação de ida (dispositivo → servidor):** HTTP, a cada 1 segundo (intervalo editável), dentro da mesma sub-rede, sem exposição à internet nesta fase.
-- **Comunicação de volta (servidor → dispositivo):** push por **SSE**. O dispositivo abre a conexão com o servidor e o servidor empurra as mensagens por ela, então nenhum dispositivo precisa abrir porta para receber. No celular o canal só existe enquanto o app está aberto em primeiro plano (limitação assumida, ver `docs/marco3-autenticacao-autorizacao-push.md`).
+- **Comunicação de volta (servidor → dispositivo):** push por **SSE**. O dispositivo abre a conexão com o servidor e o servidor empurra as mensagens por ela, então nenhum dispositivo precisa abrir porta para receber. No celular o canal só existe enquanto o app está aberto em primeiro plano (limitação assumida, ver `docs/arquitetura.md`, seção 13.2).
 - **Persistência, escalabilidade e acesso remoto por cuidadores** continuam fora do alcance desta fase.
 
 > **Nota sobre produção:** o servidor local usado nesta fase de protótipo é uma solução temporária, pensada apenas para validar a viabilidade técnica dentro da mesma rede local. Em um cenário de produção, esse servidor local **seria substituído por um servidor central**, capaz de atender múltiplos idosos/residências, permitir acesso remoto dos cuidadores (fora da rede local) e resolver as questões de persistência e escalabilidade ainda não tratadas nesta fase.
@@ -107,7 +107,7 @@ O projeto combina três mecanismos de segurança:
 - **Autenticação (Marco 3):** todo dispositivo entra com uma conta (login com senha, token de curta duração e renovação), em vez de apenas conhecer a chave de criptografia.
 - **Autorização (Marco 3):** cada conta tem um papel (hoje `idoso` e `dispositivo`; `cuidador` já reservado) e só envia ou recebe dados da **pessoa monitorada a que está vinculada**. O servidor confere a identidade pelo token, não pelo que o dispositivo declara. Rotas de depuração que expunham dados de todos exigem conta administrativa.
 
-Limitações assumidas: a chave de criptografia continua **compartilhada e fixa**, e o transporte continua HTTP sem TLS. Isso significa que quem captura o tráfego da rede local ainda consegue ler o token. Chave por dispositivo e TLS ficam como evolução (`docs/marco3-autenticacao-autorizacao-push.md`, seção 13).
+Limitações assumidas: a chave de criptografia continua **compartilhada e fixa**, e o transporte continua HTTP sem TLS. Isso significa que quem captura o tráfego da rede local ainda consegue ler o token. Chave por dispositivo e TLS ficam como evolução (`docs/arquitetura.md`, seção 13.2).
 
 Vale notar que, mesmo com a comunicação restrita à rede local (sem exposição à internet nesta fase), dados de movimento e uso do dispositivo, ainda que indiretos, revelam rotina e hábitos do idoso — o que reforça a necessidade de cuidado com o armazenamento e o acesso a esses dados.
 

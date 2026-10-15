@@ -1,4 +1,4 @@
-"""user_id em /dados e /eventos: somente inteiro JSON nao booleano (P-01, R-02)."""
+"""user_id em /dados e /eventos: somente inteiro JSON nao booleano."""
 import time
 
 import pytest

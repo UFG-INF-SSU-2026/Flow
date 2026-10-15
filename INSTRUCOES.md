@@ -133,7 +133,7 @@ Abra no Android Studio e gere o APK (ou instale o das releases). Depois de insta
 
 Observações importantes:
 
-- O app só envia dados **e só recebe o pedido de confirmação** enquanto está aberto e em primeiro plano. Com a tela bloqueada ou o app em segundo plano, ele não é alertado (limitação conhecida, ver `docs/marco3-autenticacao-autorizacao-push.md`, seção 13.2).
+- O app só envia dados **e só recebe o pedido de confirmação** enquanto está aberto e em primeiro plano. Com a tela bloqueada ou o app em segundo plano, ele não é alertado (limitação conhecida, ver `docs/arquitetura.md`, seção 13.2).
 - Este app aceita apenas contas do tipo `idoso`. Outros tipos de conta serão atendidos no futuro pelo mesmo login.
 
 ## Testando

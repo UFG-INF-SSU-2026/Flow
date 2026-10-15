@@ -1,6 +1,6 @@
 """
-Regra de negocio: decisao de imobilidade do wokwi (Marco 2/3 - fecha a
-pendencia do consumidor registrada em docs/relatorio.md, secao "Consumidor").
+Regra de negocio: decisao de imobilidade do wokwi (cascata de validacao,
+tabela de estado por dispositivo e atuacao para ALERTA_IMOBILIDADE).
 
 Fluxo: evento wokwi (imobilidade.leitura | imobilidade.decisao) ->
 validacao em cascata -> deduplicacao -> atualizacao de estado persistente
@@ -61,8 +61,7 @@ class EventoInvalido(Exception):
 class EstadoDispositivo:
     """Estado mantido em memoria por deviceId - ao contrario do buffer de
     agregacao de server.py (que e limpo a cada flush de 1s), esta tabela
-    persiste entre janelas e e o que resolve a pendencia "mudanca de
-    estado" do relatorio."""
+    persiste entre janelas e guarda a "mudanca de estado" do dispositivo."""
     ultimo_sequence: int | None = None
     estado_atual: str = "DESCONHECIDO"      # ultimo state de imobilidade.leitura (heartbeat)
     ultima_decisao: str | None = None       # ultimo state de imobilidade.decisao
@@ -95,7 +94,7 @@ def _agora_iso() -> str:
 
 
 def validar_evento(evento: dict) -> None:
-    """Cascata de validacao (planejada no relatorio, item "Consumidor"):
+    """Cascata de validacao:
 
         0. schemaVersion (apenas identificacao/aviso, nao rejeita)
         1. eventType pertence ao vocabulario conhecido
@@ -110,8 +109,8 @@ def validar_evento(evento: dict) -> None:
     Levanta EventoInvalido se qualquer passo falhar.
     """
     # 0. schemaVersion: primeiro passo da cascata (docs/arquitetura.md, 4.3).
-    #    Produtor atual sempre manda 2; se o campo nao vier (produtor mais
-    #    antigo), assume-se SCHEMA_VERSION_PADRAO (1). Uma versao desatualizada
+    #    Se o campo nao vier (produtor mais antigo), assume-se
+    #    SCHEMA_VERSION_PADRAO (1). Uma versao desatualizada
     #    nao invalida o evento - so gera um aviso explicito no console, para
     #    dar visibilidade de que ha um produtor fora da versao atual em campo.
     schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
@@ -245,7 +244,7 @@ def processar_evento(user_id: int, evento: dict) -> dict | None:
 
 def obter_estado(device_id: str) -> dict | None:
     """Procura o device_id em todos os usuarios. Exposto via GET /estado/<device_id> em server.py - e a evidencia
-    observavel de 'mudanca de estado' pedida no roteiro da apresentacao,
+    observavel de 'mudanca de estado',
     em complemento ao log em dataUsers/usuario_<id>.jsonl."""
     with _estados_lock:
         candidatos = [(uid, e) for (uid, dev), e in _estados.items() if dev == device_id]

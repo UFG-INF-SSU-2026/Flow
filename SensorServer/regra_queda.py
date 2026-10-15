@@ -115,7 +115,7 @@ def extrair_dinamica(fonte: str, dados: dict) -> tuple[float, float] | None:
     return None
 
 
-# ------------------- deduplicacao da telemetria do app (DC-08) -------------------
+# ------------------- deduplicacao da telemetria do app -------------------
 _ultimo_ts_app: dict[tuple, float] = {}   # (user_id, "app", device_id) -> ultimo timestamp_envio (epoch ms)
 
 

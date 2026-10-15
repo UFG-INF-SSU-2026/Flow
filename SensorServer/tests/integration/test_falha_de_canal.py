@@ -1,4 +1,4 @@
-"""Falha de canal e do aviso de encerramento nao derrubam o fluxo (P-04)."""
+"""Falha de canal e do aviso de encerramento nao derrubam o fluxo."""
 import const
 import canal_app
 import canal_wokwi
