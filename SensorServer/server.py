@@ -65,6 +65,8 @@ Como rodar:
     pip install -r requirements.txt
     FLOW_JWT_SECRET=<segredo> python server.py
     (sem FLOW_JWT_SECRET o servidor nao sobe; contas se criam com "python auth.py criar-conta")
+    Tambem vale "flask --app server run" ou WSGI: o segredo e as threads de fundo sao tratados no import
+    (FLOW_SEM_THREADS=1 desliga as threads, para os testes).
 """
 
 import json
@@ -576,16 +578,36 @@ def status():
     return jsonify({"status": "online"}), 200
 
 
-if __name__ == "__main__":
+# ---------------------------------------------------------------------------
+# Inicializacao. Roda no import, para valer tambem em "flask --app server run" e em servidores WSGI
+# (o "flask" CLI usa o "app" do modulo): sem FLOW_JWT_SECRET valido a importacao falha, e as threads
+# de flush e de vigia sobem. FLOW_SEM_THREADS=1 desliga as duas (usado pela suite de testes).
+# ---------------------------------------------------------------------------
+_threads_lock = threading.Lock()
+_threads_iniciadas = False
+
+
+def iniciar_threads() -> None:
+    """Sobe as threads de fundo uma unica vez: flush do buffer e vigia de episodios vencidos."""
+    global _threads_iniciadas
+    with _threads_lock:
+        if _threads_iniciadas:
+            return
+        threading.Thread(target=_flush_loop, name="flow-flush", daemon=True).start()
+        threading.Thread(target=_vigia_loop, name="flow-vigia", daemon=True).start()   # encerra episodios vencidos
+        _threads_iniciadas = True
+
+
+if os.environ.get("FLOW_SEM_THREADS") != "1":
     auth.exigir_segredo()   # sem FLOW_JWT_SECRET o servidor nao sobe
+    iniciar_threads()
+
+
+if __name__ == "__main__":
     print(f"Servidor iniciando na porta {const.PORT}...")
     print(f"Salvando dados recebidos em: {os.path.abspath(const.DATA_DIR)} (1 arquivo .jsonl por usuario)")
     print(f"Janela de agregacao app+wokwi: {const.JANELA_AGREGACAO_S}s")
     print("Transporte: AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")
-
-    flush_thread = threading.Thread(target=_flush_loop, daemon=True)
-    flush_thread.start()
-    threading.Thread(target=_vigia_loop, daemon=True).start()   # encerra episodios vencidos
 
     # host="0.0.0.0" para aceitar conexoes de outros dispositivos na mesma rede
     app.run(host="0.0.0.0", port=const.PORT, threaded=True)   # threaded: uma thread por stream SSE

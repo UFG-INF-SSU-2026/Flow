@@ -22,6 +22,7 @@ from _apoio import SEGREDO, ClienteFlask, ClienteReal  # noqa: E402
 # Antes de importar o servidor: segredo e caminhos fora da pasta real. server.py cria const.DATA_DIR ao importar.
 _TMP = tempfile.mkdtemp(prefix="flow_tests_")
 os.environ["FLOW_JWT_SECRET"] = SEGREDO
+os.environ["FLOW_SEM_THREADS"] = "1"   # importar server nao sobe flush nem vigia
 os.environ["FLOW_CONTAS_PATH"] = os.path.join(_TMP, "contas.json")
 os.environ["FLOW_SESSOES_PATH"] = os.path.join(_TMP, "sessoes.json")
 

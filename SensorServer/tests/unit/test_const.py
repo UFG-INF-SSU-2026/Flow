@@ -23,6 +23,7 @@ os.chdir(RAIZ)
 
 TMP = tempfile.mkdtemp(prefix="flow_test_const_")
 os.environ["FLOW_JWT_SECRET"] = "t" * 48
+os.environ["FLOW_SEM_THREADS"] = "1"
 os.environ["FLOW_CONTAS_PATH"] = os.path.join(TMP, "contas.json")
 os.environ["FLOW_SESSOES_PATH"] = os.path.join(TMP, "sessoes.json")
 
