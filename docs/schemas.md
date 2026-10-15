@@ -262,7 +262,7 @@ Requisição:
 | `schemaVersion` | inteiro | versão atual deste schema |
 | `identificador` | string | id da conta |
 | `segredo` | string | senha |
-| `fonte` | string | fontes atuais: `app` e `wokwi` (uma nova fonte entra aqui); deve estar nas `fontes` permitidas da conta |
+| `fonte` | string | fontes atuais: `app` e `wokwi` (uma nova fonte entra aqui); deve estar nas `fontes` permitidas da conta (a conta `admin` pode omiti-la) |
 | `device_id` | string | identifica o dispositivo (vai para a claim do token); até 64 caracteres, senão `400` |
 
 Resposta `200`:
@@ -308,15 +308,16 @@ Requisição: `schemaVersion` (versão atual deste schema; ausente é aceita) e 
 | `401` | token ausente, malformado, expirado ou com assinatura inválida; credencial de login inválida |
 | `400` | corpo que não é envelope ou não decifra para objeto JSON; `source` ausente ou inválido; `user_id` inválido; `device_id` inválido no login; `schemaVersion` inválido ou maior que a atual em login/refresh |
 | `403` | papel sem a permissão da rota; `fonte` do token diferente da exigida; `user_id`/`source`/`device_id` do payload divergem do token |
+| `413` | corpo da requisição acima de `MAX_CONTENT_LENGTH` (64 KiB), em qualquer rota com corpo; `codigo`: `corpo_grande` |
 | `429` | bloqueio temporário de login |
 
-Corpo: `{"status": "erro", "codigo": "<texto curto>"}`. Falhas de conteúdo de evento já autenticado continuam descartadas internamente com resposta `200` (inclui `schemaVersion` não suportado em `/dados` e `/eventos`, com `descartado: true`). Toda negação `401`/`403` vai para `auditoria.jsonl`, rotacionado por tamanho.
+Corpo: `{"status": "erro", "codigo": "<texto curto>"}`. Falhas de conteúdo de evento já autenticado continuam descartadas internamente com resposta `200` (inclui `schemaVersion` não suportado em `/dados` e `/eventos`, com `descartado: true`). Toda negação `401`/`403`/`413` vai para `auditoria.jsonl`, rotacionado por tamanho, sem o conteúdo da requisição.
 
 ### Backlog de mudanças
 
 | Versão | Mudança |
 | --- | --- |
-| v3 (criação) | Códigos `401`, `403` e `429` e formato do corpo de erro criados junto com a autenticação. |
+| v3 (criação) | Códigos `401`, `403` e `429` e formato do corpo de erro criados junto com a autenticação. Código `413` (`corpo_grande`) para corpo acima do limite, auditado como as demais negações. |
 
 ---
 

@@ -61,6 +61,8 @@ Módulos do servidor:
 | `regra_queda.py` | Análise do acelerômetro (fusão das fontes por usuário), episódios de confirmação, timeout, mapa `messageId` → episódio, armazenamento da resposta. |
 | `regra_luz.py`, `regra_imobilidade.py` | Regras de negócio (luz inadequada à noite; imobilidade prolongada). |
 | `crypto_utils.py` | Envelope AES-256-GCM. |
+| `simular_queda.py` | Utilitário (fora do servidor): simula um wokwi que sofre impacto e fica imóvel, para testar o push sem Wokwi nem celular. |
+| `tests/` | Suíte pytest (`unit/` e `integration/`); ver 14.1. |
 
 Dependências: `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; é `server.py` que cria a mensagem e a despacha); `auth` não conhece Flask. `const.py` é um módulo folha: não importa nada do projeto, e os demais fazem `import const` e leem `const.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
 
@@ -185,7 +187,7 @@ Dois estágios de verificação:
 
 Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do token; o cliente não escolhe de quem recebe.
 
-**Auditoria:** toda negação (`401`/`403`) vai para `dataUsers/auditoria.jsonl` (instante, rota, motivo, conta, IP), nunca o conteúdo da requisição. O arquivo é rotacionado por tamanho: ao passar de `AUDITORIA_MAX_BYTES` (5 MB) vira `auditoria.1.jsonl`, sobrescrevendo o anterior, e um novo começa; o espaço máximo fica em torno do dobro do limite. A rotação existe porque o estágio 1 roda antes de decifrar, e quem está na rede poderia encher o disco com negações sem conhecer a chave.
+**Auditoria:** toda negação (`401`/`403`, e também `413` por corpo grande, com o motivo `corpo_grande`) vai para `dataUsers/auditoria.jsonl` (instante, rota, motivo, conta, IP), nunca o conteúdo da requisição. O arquivo é rotacionado por tamanho: ao passar de `AUDITORIA_MAX_BYTES` (5 MB) vira `auditoria.1.jsonl`, sobrescrevendo o anterior, e um novo começa; o espaço máximo fica em torno do dobro do limite. A rotação existe porque o estágio 1 roda antes de decifrar, e quem está na rede poderia encher o disco com negações sem conhecer a chave.
 
 ---
 
@@ -250,7 +252,7 @@ Detalhe campo a campo em `docs/schemas.md`.
 | `/estado/<device_id>` | GET | `estado:ler` (admin) | Tabela de estado da imobilidade por dispositivo. |
 | `/`, `/health` | GET | pública | Disponibilidade. |
 
-O servidor escuta em `0.0.0.0:5000` e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`; conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
+O servidor escuta em `0.0.0.0:5000` e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`. **Corpo acima de `MAX_CONTENT_LENGTH` (64 KiB) é `413`** em qualquer rota com corpo (`/dados`, `/eventos`, `/auth/*`): o servidor não processa o conteúdo e a negação vai para a auditoria sem ele. O maior corpo legítimo é um envelope de telemetria, de poucos KB. Sem token, a resposta continua `401`, antes de o corpo ser lido. conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
 
 Entrada malformada **antes** de haver conteúdo interpretável é `400`: corpo decifrado que não é um objeto JSON, `source` ausente ou inválido, `user_id` inválido, `device_id` inválido no login (não string ou acima de 64 caracteres). `Last-Event-ID` inválido nunca é erro: vale `0`. `schemaVersion` não suportado em `/dados` e `/eventos` responde `200` com `descartado: true` e `motivo: "schemaVersion_nao_suportado"`, e o conteúdo não chega ao buffer nem às regras; em `/auth/login` e `/auth/refresh`, a versão maior que a atual ou inválida é `400` (a ausência é aceita).
 
@@ -304,7 +306,7 @@ As fontes medem coisas diferentes: no Wokwi o repouso é magnitude ≈ 0; no cel
 
 O pico existe porque uma amostra por segundo perderia o impacto, que dura frações de segundo: o firmware amostra o sensor a cada ~50 ms e o app a ~50 Hz, e ambos enviam o máximo da janela.
 
-**Só leitura válida e não repetida alimenta a regra.** A telemetria do wokwi passa antes pela validação e pela deduplicação de `regra_imobilidade` (evento inválido ou duplicado não chega a `regra_queda`). A do app é deduplicada pelo `timestamp_envio` (epoch ms, raiz do payload), por `(user_id, source, device_id)`: valor menor ou igual ao último aceito é duplicado; se regredir mais que `TOLERANCIA_RELOGIO_S` (60 s), considera-se reajuste de relógio do celular e o valor vira a nova referência, para não bloquear a análise. Payload sem `acelerometro` aproveitável, ou wokwi sem os campos de leitura, simplesmente não contribui.
+**Só leitura válida e não repetida alimenta a regra.** A telemetria do wokwi passa antes pela validação e pela deduplicação de `regra_imobilidade` (evento inválido ou duplicado não chega a `regra_queda`). A do app é deduplicada pelo `timestamp_envio` (epoch ms, raiz do payload), por `(user_id, source, device_id)`: valor menor ou igual ao último aceito é duplicado; se regredir mais que `TOLERANCIA_RELOGIO_S` (60 s), considera-se reajuste de relógio do celular e o valor vira a nova referência, para não bloquear a análise. Payload sem `acelerometro` aproveitável, ou wokwi sem os campos de leitura, simplesmente não contribui. Como o `device_id` vem do cliente, a tabela de referências da deduplicação é limitada a `MAX_REFERENCIAS_DEDUP` (1000): passando disso, sai a mais antiga.
 
 ### 9.2 Gatilhos
 
@@ -405,6 +407,8 @@ sequenceDiagram
 | `LOG_DESATUALIZADA_INTERVALO_S` | 60 | Frequência máxima do log de leitura desatualizada. |
 | `TOLERANCIA_RELOGIO_S` | 60 | Regressão de `timestamp_envio` acima da qual a deduplicação do app assume reajuste de relógio. |
 | `RETENCAO_MENSAGENS_S` | 3600 | Tempo que o mapa `messageId` → episódio guarda a entrada depois de a mensagem expirar. |
+| `TTL_ENCERRAMENTO_S` | 10 | Validade da mensagem `queda.confirmacao_encerrada`. Deve ser maior que `TIMEOUT_CONFIRMACAO_S` + `MARGEM_SERVIDOR_S`, para o encerramento sobreviver ao pedido no replay após reconexão. |
+| `MAX_REFERENCIAS_DEDUP` | 1000 | Dispositivos do app rastreados na deduplicação (9.1). |
 
 ### 9.5 Armazenamento
 
@@ -534,6 +538,8 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | Duas fontes ou dois gatilhos disparam | Um episódio só. |
 | Dispositivos de versões diferentes do mesmo usuário | Vale a maior versão presente; as menores ficam fora do sinal e são logadas (9.2.1). |
 | Credencial errada repetida | Bloqueio temporário; negação em `auditoria.jsonl`. |
+| Corpo de requisição acima de 64 KiB | `413` sem processar o conteúdo; negação em `auditoria.jsonl` (sem o corpo). |
+| Tabelas em memória com chave vinda do cliente | Limitadas (`MAX_IDENTIFICADORES_LOGIN`, `MAX_ESTADOS_LEGADOS`, `MAX_REFERENCIAS_DEDUP`): ao estourar, saem as mais antigas, para o consumo de memória não crescer sem limite. |
 | Dispositivo silencioso *(abstrato)* | Política registrada (alerta de "sem comunicação"), ainda sem rotina que a dispare; os dados para calculá-la existem (`null` no `.jsonl`, `ultima_atualizacao` na tabela de estado). |
 | Entrada inválida ou repetida | Descartada e logada; resposta `200`. |
 | MPU6050 não encontrado *(firmware)* | O firmware emite `sistema.erro` (`MPU_NAO_ENCONTRADO`); o servidor o descarta e loga, sem alerta ao cuidador. |
@@ -570,15 +576,28 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | --- | --- | --- |
 | `FLOW_JWT_SECRET` | ambiente do servidor | Obrigatório; ≥ 32 bytes. |
 | `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | ambiente do servidor | Opcionais; padrão `contas.json`, `sessoes.json`. |
-| `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_BRIDGE_DEVICE` | ambiente do bridge | Os dois primeiros são obrigatórios. |
+| `FLOW_SEM_THREADS` | ambiente do servidor | `1` desliga as threads de flush e vigia (e a exigência do segredo na subida); usado pela suíte de testes. |
+| `FLOW_SENHA` | ambiente da CLI `auth.py` | Opcional; senha sem prompt ao criar contas. |
+| `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_BRIDGE_DEVICE` | ambiente do bridge | Os dois primeiros são obrigatórios. `FLOW_BRIDGE_DEVICE` (padrão: o `DEVICE_ID` de `sketch.ino`) é registrado no login e deve ser igual ao `deviceId` dos eventos do firmware (`403` se diferir, 4.3). |
 | Usuário e senha, IP e porta | tela "Configurações" do app | |
 | Timeout do botão, limiares, cooldown, fusão de fontes, retenções | `SensorServer/const.py` | Sem recompilar app nem firmware. |
-| Porta, pasta de dados, validade dos tokens, bloqueio de login, rotação da auditoria, fila do SSE, versão atual do contrato | `SensorServer/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
+| Porta, pasta de dados, limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, rotação da auditoria, fila do SSE, versão atual do contrato | `SensorServer/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
 | Versão do core ESP32 | `arduino-cli core list` | 3.x (usa `tone`/`noTone`). |
 
 Ordem de subida: contas criadas → servidor → simulação Wokwi (aba visível, `rfc2217ServerPort = 4000`) → bridge → app. O firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
 
 Arquivos produzidos em `dataUsers/`: `usuario_<id>.jsonl` (agregado), `confirmacoes_usuario_<id>.jsonl`, `auditoria.jsonl` (e `auditoria.1.jsonl` depois da rotação), `alerta_*.json`, `alerta_imobilidade_*.json`. O `device_id` que entra no nome dos arquivos de alerta é sanitizado (só `A-Z a-z 0-9 _ . -`, até 64 caracteres).
+
+### 14.1 Testes
+
+| Alvo | Como | Observação |
+| --- | --- | --- |
+| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização e queda ponta a ponta). Usa segredo próprio, sem threads de fundo, e grava contas, sessões e `dataUsers/` em pasta temporária: não toca nos dados reais. |
+| Ponte | `WokwiBridge/tests/fake_firmware.py` | Substitui a serial por um firmware falso (impacto, `push.ack`, `ESTOU_BEM`). Exige servidor no ar e `FLOW_BRIDGE_DEVICE=esp32-falso`. Não é pytest. |
+| Firmware | `sketch/host_test/` | Lógica do firmware no PC, com um Arduino falso; opcional. |
+| Fim a fim sem hardware | `SensorServer/simular_queda.py` | Dispara o ciclo completo contra um servidor real. |
+
+O cooldown de 60 s entre episódios vale para os testes manuais: para repetir `simular_queda.py` ou `fake_firmware.py`, reinicie o servidor ou aguarde.
 
 ---
 

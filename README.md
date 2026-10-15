@@ -29,7 +29,7 @@ O projeto evolui por marcos, cada um registrado em `docs/`:
 | 2 | Ciclo produtor → consumidor: dispositivo (app/wokwi) → gateway → servidor, com regras de decisão | `docs/arquitetura.md` |
 | 3 | **Autenticação, autorização e envio de mensagens do servidor** (servidor analisa → envia ao dispositivo) | `docs/arquitetura.md`, `docs/schemas.md` |
 
-Os formatos de dados (versão 3) estão em `docs/schemas.md` e o passo a passo para rodar tudo está em `INSTRUCOES.md`. Este README descreve o sistema no estado do Marco 3.
+Os formatos de dados (versão 3) estão em `docs/schemas.md` e o passo a passo para rodar tudo, incluindo os testes automatizados do servidor (pytest), está em `INSTRUCOES.md`. Este README descreve o sistema no estado do Marco 3.
 
 Os sensores dos quais já foram obtidos dados são:
 
@@ -106,6 +106,7 @@ O projeto combina três mecanismos de segurança:
 - **Criptografia** (AES-256-GCM) de cada mensagem trocada com o servidor, nos dois sentidos, inclusive o push.
 - **Autenticação (Marco 3):** todo dispositivo entra com uma conta (login com senha, token de curta duração e renovação), em vez de apenas conhecer a chave de criptografia.
 - **Autorização (Marco 3):** cada conta tem um papel (hoje `idoso` e `dispositivo`; `cuidador` já reservado) e só envia ou recebe dados da **pessoa monitorada a que está vinculada**. O servidor confere a identidade pelo token, não pelo que o dispositivo declara. Rotas de depuração que expunham dados de todos exigem conta administrativa.
+- **Proteções do servidor (Marco 3):** negações (`401`/`403`) e corpos acima de 64 KiB (`413`) são registrados numa auditoria rotacionada por tamanho, sem o conteúdo da requisição; tentativas repetidas de login levam a bloqueio temporário.
 
 Limitações assumidas: a chave de criptografia continua **compartilhada e fixa**, e o transporte continua HTTP sem TLS. Isso significa que quem captura o tráfego da rede local ainda consegue ler o token. Chave por dispositivo e TLS ficam como evolução (`docs/arquitetura.md`, seção 13.2).
 

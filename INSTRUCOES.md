@@ -7,10 +7,15 @@ Este projeto une um app Android, uma simulação Wokwi (ESP32 + acelerômetro + 
 ```dir
 Flow/
 ├── SensorServer/       # servidor central (Flask): autenticação, autorização, análise e push
+│   ├── tests/          # suíte pytest do servidor (unit/ e integration/)
+│   └── simular_queda.py  # simula uma queda sem Wokwi nem celular
 ├── SensorApp/          # app Android (Kotlin): telemetria + recebe o pedido de confirmação
 ├── WokwiBridge/        # ponte Python bidirecional entre a simulação Wokwi e o servidor
+│   └── tests/          # fake_firmware.py: testa a ponte sem Wokwi
 ├── sketch/             # projeto Wokwi (ESP32 + MPU6050 + buzzer), simulado no VS Code
+│   └── host_test/      # teste opcional da lógica do firmware no PC
 ├── docs/               # arquitetura e schemas
+├── atividades/         # entregas das atividades da disciplina
 ├── INSTRUCOES.md       # este arquivo
 └── README.md           # análise e resumo do projeto
 ```
@@ -61,6 +66,8 @@ python auth.py criar-conta --id bridge1 --papel dispositivo --user-id 1 --fontes
 ```
 
 > O ID do usuário **não é mais digitado** no app nem no bridge: ele vem da conta. Para simular outra pessoa, crie outro par de contas com outro `--user-id`.
+>
+> Para criar contas sem o prompt de senha (scripts), defina `FLOW_SENHA` no ambiente antes de rodar o comando.
 
 Os arquivos `contas.json` e `sessoes.json` são criados em `SensorServer/` e não vão para o Git.
 
@@ -104,6 +111,9 @@ O bridge lê a configuração de variáveis de ambiente (nada de editar o `bridg
 | `FLOW_BRIDGE_ID` | `bridge1` | — (obrigatória) |
 | `FLOW_BRIDGE_SECRET` | senha da conta `bridge1` | — (obrigatória) |
 | `FLOW_SERVIDOR` | URL base do servidor | `http://localhost:5000` |
+| `FLOW_BRIDGE_DEVICE` | `deviceId` do firmware que o bridge repassa | `esp32-decisao-imobilidade-01` (o `DEVICE_ID` de `sketch.ino`) |
+
+O servidor exige que o `deviceId` dos eventos seja o mesmo informado no login do bridge (`403` se diferir). Só é preciso definir `FLOW_BRIDGE_DEVICE` se você mudar o `DEVICE_ID` do firmware.
 
 Linux/macOS:
 
@@ -136,7 +146,29 @@ Observações importantes:
 - O app só envia dados **e só recebe o pedido de confirmação** enquanto está aberto e em primeiro plano. Com a tela bloqueada ou o app em segundo plano, ele não é alertado (limitação conhecida, ver `docs/arquitetura.md`, seção 13.2).
 - Este app aceita apenas contas do tipo `idoso`. Outros tipos de conta serão atendidos no futuro pelo mesmo login.
 
-## Testando
+## Testes automatizados
+
+### Servidor (pytest)
+
+```bash
+cd SensorServer
+pip install -r requirements.txt   # inclui o pytest
+python -m pytest
+```
+
+A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados) e `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo e ciclo de queda ponta a ponta). Ela é independente do seu ambiente: define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`) e grava contas, sessões e `dataUsers/` numa pasta temporária, então **não usa nem altera** o seu `contas.json` real.
+
+### Fora do pytest (opcionais)
+
+| O quê | Como | Para que serve |
+| --- | --- | --- |
+| `SensorServer/simular_queda.py` | com o servidor rodando: `FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python simular_queda.py [URL_BASE]` | Simula um wokwi que sofre impacto e fica imóvel; o pedido de confirmação chega ao app e/ou ao bridge conectados, sem Wokwi. |
+| `WokwiBridge/tests/fake_firmware.py` | na pasta `WokwiBridge`, com servidor e conta do bridge, `FLOW_BRIDGE_DEVICE=esp32-falso` e as variáveis do bridge: `python tests/fake_firmware.py` | Substitui a serial por um "firmware falso" e confere o que o bridge escreve. O `FLOW_BRIDGE_DEVICE` precisa ser o `deviceId` que o firmware falso usa (`esp32-falso`). |
+| `sketch/host_test/` | ver `sketch/host_test/README.md` | Roda a lógica do firmware no PC. |
+
+O servidor mantém um **cooldown de 60 s** entre episódios do mesmo usuário (`COOLDOWN_S`): para repetir `simular_queda.py` ou `fake_firmware.py` em seguida, reinicie o servidor ou aguarde.
+
+## Testando manualmente
 
 ### Autenticação
 
@@ -146,7 +178,7 @@ Sem token, o servidor recusa:
 curl -i -X POST http://localhost:5000/dados -H "Content-Type: application/json" -d "{}"
 ```
 
-Esperado: `401`. Tentativas negadas ficam em `SensorServer/dataUsers/auditoria.jsonl`.
+Esperado: `401`. Tentativas negadas (`401`, `403` e `413`) ficam em `SensorServer/dataUsers/auditoria.jsonl`, sem o conteúdo da requisição.
 
 ### Agregação por usuário
 
@@ -188,6 +220,8 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 | Tempo do botão "Estou bem" (padrão 5 s) | `TIMEOUT_CONFIRMACAO_S` em `SensorServer/const.py` (vale para app e wokwi, sem recompilar nada) |
 | Limiares de impacto e de repouso | `LIMIAR_IMPACTO` e `LIMIAR_REPOUSO` em `SensorServer/const.py` (valores iniciais, a calibrar) |
 | Validade dos tokens | `ACCESS_TTL_S` e `REFRESH_TTL_S` em `SensorServer/const.py` |
+| Tamanho máximo do corpo de uma requisição (padrão 64 KiB) | `MAX_CONTENT_LENGTH` em `SensorServer/const.py` |
+| Intervalo mínimo entre episódios do mesmo usuário (padrão 60 s) | `COOLDOWN_S` em `SensorServer/const.py` |
 | Intervalo de envio do app | `SEND_INTERVAL_MS` em `MainActivity.kt` (padrão 1 s) |
 
 ## Problemas comuns
@@ -196,7 +230,9 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 | --- | --- |
 | Servidor não sobe e reclama de segredo | `FLOW_JWT_SECRET` não definido **no terminal em que o servidor foi iniciado** |
 | App ou bridge recebem `401` no login | usuário ou senha errados; após várias falhas há bloqueio temporário (`429`) |
-| `403` em `/dados` ou `/eventos` | a conta não tem a permissão ou a fonte da rota (app usa conta `idoso`, bridge usa conta `dispositivo`) |
+| `403` em `/dados` ou `/eventos` | a conta não tem a permissão ou a fonte da rota (app usa conta `idoso`, bridge usa conta `dispositivo`); ou o `deviceId` dos eventos difere do `FLOW_BRIDGE_DEVICE` usado no login do bridge |
+| `413` | corpo da requisição acima de `MAX_CONTENT_LENGTH` (64 KiB); o servidor não processa o conteúdo |
+| Pedido de confirmação não abre de novo logo após um teste | cooldown de 60 s entre episódios; reinicie o servidor ou aguarde |
 | App diz "tipo de conta ainda não suportado" | a conta usada não é do papel `idoso` |
 | Celular não alcança o servidor | IP/porta errados, redes diferentes ou firewall bloqueando a porta 5000 |
 | Bridge fica "tentando reconectar" | simulação não iniciada, ou aba do Wokwi oculta |
