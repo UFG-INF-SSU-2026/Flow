@@ -1,218 +1,247 @@
 """
-Testes de const.py como fonte unica e regressao das referencias quebradas.
+const.py como fonte unica de configuracao.
 
-Estilo do script: simples com ok(...), sem pytest.
-Rodar na pasta SensorServer:   python tests/test_const.py
-
-Cobre: T-CONST-1 (nenhuma constante duplicada), T-CONST-2 (ajuste em const.X vale para o modulo),
-T-MARGEM-1 (margem unica), e dois guardas que pegam a classe de erro "modulo.NOME nao existe mais"
-depois de mover constantes (ex.: server.py usando mensagens.SCHEMA_VERSION).
+Cobre: nenhuma constante duplicada fora de const.py (por nome e por valor), ninguem usa `from const import X`,
+const.py e modulo folha, relacoes entre constantes, ajuste em `const.X` valendo para os modulos que o leem,
+margem unica, e guardas contra a classe de erro "modulo.NOME nao existe mais" depois de mover constantes.
+A secao final garante que as rotas nao voltam 500 por referencia quebrada.
 """
 import ast
 import glob
 import importlib
+import operator
 import os
-import sys
-import tempfile
 import time
+from datetime import datetime, timezone
 
-AQUI = os.path.dirname(os.path.abspath(__file__))
-RAIZ = os.path.dirname(AQUI)               # SensorServer/
-sys.path.insert(0, RAIZ)
-os.chdir(RAIZ)
+import pytest
 
-TMP = tempfile.mkdtemp(prefix="flow_test_const_")
-os.environ["FLOW_JWT_SECRET"] = "t" * 48
-os.environ["FLOW_SEM_THREADS"] = "1"
-os.environ["FLOW_CONTAS_PATH"] = os.path.join(TMP, "contas.json")
-os.environ["FLOW_SESSOES_PATH"] = os.path.join(TMP, "sessoes.json")
+import const
+import mensagens
+import regra_queda
 
-import const  # noqa: E402
+RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # SensorServer/
 
-const.DATA_DIR = os.path.join(TMP, "dataUsers")   # nada do teste vai para a pasta real
-const.CONTAS_PATH = os.environ["FLOW_CONTAS_PATH"]
-const.SESSOES_PATH = os.environ["FLOW_SESSOES_PATH"]
-
-_falhas = 0
-
-
-def ok(cond: bool, nome: str, detalhe: str = "") -> None:
-    global _falhas
-    print(f"{'PASS' if cond else 'FAIL'}  {nome}" + (f"  -> {detalhe}" if detalhe and not cond else ""))
-    if not cond:
-        _falhas += 1
+_OPERADORES = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+               ast.Div: operator.truediv, ast.Pow: operator.pow}
+_arvores: dict[str, ast.Module] = {}
 
 
 def _modulos_do_servidor() -> list[str]:
     nomes = sorted(os.path.basename(f)[:-3] for f in glob.glob(os.path.join(RAIZ, "*.py")))
-    return [n for n in nomes if n != "simular_queda"]   # script de cliente, executa no import
+    return [n for n in nomes if n != "simular_queda"]        # script de cliente: executa ao ser importado
 
 
 def _arvore(nome: str) -> ast.Module:
-    with open(os.path.join(RAIZ, nome + ".py"), encoding="utf-8") as f:
-        return ast.parse(f.read())
+    if nome not in _arvores:
+        with open(os.path.join(RAIZ, nome + ".py"), encoding="utf-8") as f:
+            _arvores[nome] = ast.parse(f.read())
+    return _arvores[nome]
 
 
-# ---------------------------------------------------------------------------
-# T-CONST-1: existe uma unica definicao de cada constante, e ela esta em const.py
-# ---------------------------------------------------------------------------
-nomes_const = {n.targets[0].id for n in _arvore("const").body
-               if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)}
-nomes_const |= {n.target.id for n in _arvore("const").body if isinstance(n, ast.AnnAssign)}
-ok(len(nomes_const) > 30, "T-CONST-1a const.py define as constantes", f"achou {len(nomes_const)}")
-
-duplicadas = []
-for mod in _modulos_do_servidor():
-    if mod == "const":
-        continue
-    for n in _arvore(mod).body:                       # so nivel de modulo
-        alvos = []
+def _atribuicoes(nome: str) -> list[tuple[str, ast.expr]]:
+    """(nome, expressao) de cada atribuicao no nivel do modulo (so nomes simples)."""
+    saida = []
+    for n in _arvore(nome).body:
         if isinstance(n, ast.Assign):
-            alvos = [t.id for t in n.targets if isinstance(t, ast.Name)]
-        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
-            alvos = [n.target.id]
-        duplicadas += [f"{mod}.{a}" for a in alvos if a in nomes_const]
-ok(not duplicadas, "T-CONST-1b nenhum modulo redefine nome que existe em const.py", ", ".join(duplicadas))
+            saida += [(t.id, n.value) for t in n.targets if isinstance(t, ast.Name)]
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+            saida.append((n.target.id, n.value))
+    return saida
 
-obrigatorias = ["MARGEM_SERVIDOR_S", "DATA_DIR", "FONTES_VALIDAS", "SCHEMA_VERSION_ATUAL", "TOLERANCIA_RELOGIO_S"]
-ok(all(c in nomes_const for c in obrigatorias), "T-CONST-1c constantes-chave definidas em const.py")
 
-importa_errado = []
-for mod in _modulos_do_servidor():
-    for n in ast.walk(_arvore(mod)):
-        if isinstance(n, ast.ImportFrom) and n.module == "const":
-            importa_errado.append(mod)
-ok(not importa_errado, "T-CONST-1d ninguem usa 'from const import X'", ", ".join(importa_errado))
+def _numero(no: ast.expr):
+    """Valor de uma expressao numerica constante (literal, sinal e + - * / ** entre constantes), ou None."""
+    if isinstance(no, ast.Constant):
+        v = no.value
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    if isinstance(no, ast.UnaryOp) and isinstance(no.op, (ast.USub, ast.UAdd)):
+        v = _numero(no.operand)
+        return None if v is None else (-v if isinstance(no.op, ast.USub) else v)
+    if isinstance(no, ast.BinOp) and type(no.op) in _OPERADORES:
+        a, b = _numero(no.left), _numero(no.right)
+        return None if a is None or b is None else _OPERADORES[type(no.op)](a, b)
+    return None
 
-# const.py e modulo folha: nao importa nada do projeto
-imports_const = {a.name for n in ast.walk(_arvore("const")) if isinstance(n, ast.Import) for a in n.names}
-imports_const |= {n.module for n in ast.walk(_arvore("const")) if isinstance(n, ast.ImportFrom)}
-ok(imports_const <= {"os"}, "T-CONST-1e const.py nao importa nada do projeto (so 'os')", str(imports_const))
 
-# ---------------------------------------------------------------------------
-# Guardas: toda referencia `modulo.NOME` e `const.NOME` aponta para algo que existe
-# ---------------------------------------------------------------------------
-carregados = {}
-for mod in _modulos_do_servidor():
-    try:
-        carregados[mod] = importlib.import_module(mod)
-    except Exception as e:  # noqa: BLE001
-        ok(False, f"T-CONST-3 importar {mod}", f"{type(e).__name__}: {e}")
+NOMES_CONST = {nome for nome, _ in _atribuicoes("const")}
+MODULOS = _modulos_do_servidor()
 
-quebradas = []
-for mod in carregados:
-    for n in ast.walk(_arvore(mod)):
-        if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
-                and n.value.id in carregados and not hasattr(carregados[n.value.id], n.attr)):
-            quebradas.append(f"{mod}.py:{n.lineno} {n.value.id}.{n.attr}")
-ok(not quebradas, "T-CONST-3 toda referencia modulo.NOME existe", "; ".join(quebradas))
 
 # ---------------------------------------------------------------------------
-# T-MARGEM-1: margem unica. Um ajuste em const.MARGEM_SERVIDOR_S muda o expiresAt da mensagem E o prazo do episodio
+# Fonte unica
 # ---------------------------------------------------------------------------
-import mensagens   # noqa: E402
-import regra_queda  # noqa: E402
+class TestFonteUnica:
+    def test_const_define_as_constantes(self):
+        assert len(NOMES_CONST) > 30
 
-orig = (const.TIMEOUT_CONFIRMACAO_S, const.MARGEM_SERVIDOR_S, const.COOLDOWN_S, const.TOLERANCIA_RELOGIO_S)
-try:
-    const.TIMEOUT_CONFIRMACAO_S, const.MARGEM_SERVIDOR_S = 1, 1
+    def test_constantes_chave_existem(self):
+        obrigatorias = {"MARGEM_SERVIDOR_S", "DATA_DIR", "FONTES_VALIDAS", "SCHEMA_VERSION_ATUAL",
+                        "TOLERANCIA_RELOGIO_S", "TIMEOUT_CONFIRMACAO_S", "COOLDOWN_S", "TTL_ENCERRAMENTO_S"}
+        assert obrigatorias <= NOMES_CONST
+
+    def test_nenhum_modulo_redefine_nome_que_existe_em_const(self):
+        duplicadas = [f"{mod}.{nome}" for mod in MODULOS if mod != "const"
+                      for nome, _ in _atribuicoes(mod) if nome in NOMES_CONST]
+        assert not duplicadas, ", ".join(duplicadas)
+
+    def test_nenhuma_constante_numerica_de_modulo_duplica_valor_de_const(self):
+        """Pega a copia com outro nome (`PRAZO = 5` quando const.TIMEOUT_CONFIRMACAO_S ja vale 5).
+        Valores de modulo (abs <= 1 e 0 nao contam, por serem triviais). Se uma coincidencia for legitima,
+        o valor mora no modulo por decisao documentada (ex.: crypto_utils.NONCE_SIZE_BYTES): mude o valor ou
+        mova a constante para const.py."""
+        em_const: dict = {}
+        for nome, no in _atribuicoes("const"):
+            v = _numero(no)
+            if v is not None and abs(v) > 1:
+                em_const.setdefault(v, []).append(nome)
+        duplicadas = []
+        for mod in MODULOS:
+            if mod == "const":
+                continue
+            for nome, no in _atribuicoes(mod):
+                v = _numero(no)
+                if v is not None and v in em_const:
+                    duplicadas.append(f"{mod}.{nome} = {v!r} (mesmo valor de const.{', const.'.join(em_const[v])})")
+        assert not duplicadas, "; ".join(duplicadas)
+
+    def test_ninguem_usa_from_const_import(self):
+        importa_errado = sorted({mod for mod in MODULOS for n in ast.walk(_arvore(mod))
+                                 if isinstance(n, ast.ImportFrom) and n.module == "const"})
+        assert not importa_errado, ", ".join(importa_errado)
+
+    def test_const_e_modulo_folha(self):
+        arvore = _arvore("const")
+        importados = {a.name for n in ast.walk(arvore) if isinstance(n, ast.Import) for a in n.names}
+        importados |= {n.module for n in ast.walk(arvore) if isinstance(n, ast.ImportFrom)}
+        assert importados <= {"os"}, importados
+
+
+class TestRelacoesEntreConstantes:
+    def test_encerramento_sobrevive_ao_pedido_no_replay(self):
+        assert const.TTL_ENCERRAMENTO_S > const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S
+
+    def test_janela_de_fusao_cabe_no_intervalo_maximo_entre_leituras(self):
+        assert const.JANELA_FUSAO_S <= const.INTERVALO_MAX_ENTRE_LEITURAS_S
+
+
+# ---------------------------------------------------------------------------
+# Guardas contra referencia quebrada
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("mod", MODULOS)
+def test_modulo_importa(mod):
+    importlib.import_module(mod)
+
+
+def test_toda_referencia_modulo_nome_existe():
+    """`modulo.NOME` e `const.NOME` apontam para algo que existe (ex.: server.py usando mensagens.SCHEMA_VERSION
+    depois de a constante ter ido para const.py)."""
+    carregados = {mod: importlib.import_module(mod) for mod in MODULOS}
+    quebradas = [f"{mod}.py:{n.lineno} {n.value.id}.{n.attr}"
+                 for mod in carregados for n in ast.walk(_arvore(mod))
+                 if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                 and n.value.id in carregados and not hasattr(carregados[n.value.id], n.attr)]
+    assert not quebradas, "; ".join(quebradas)
+
+
+# ---------------------------------------------------------------------------
+# Um ajuste em const.X vale para o modulo que le const.X
+# ---------------------------------------------------------------------------
+def _abrir(user_id: int, agora: float):
+    return regra_queda.abrir_por_imobilidade(user_id, agora=agora)
+
+
+def test_margem_unica_vale_para_expiresat_e_para_o_prazo_do_episodio(monkeypatch):
+    monkeypatch.setattr(const, "TIMEOUT_CONFIRMACAO_S", 1)
+    monkeypatch.setattr(const, "MARGEM_SERVIDOR_S", 1)
     agora = 1_000_000.0
-    pedido = regra_queda.abrir_por_imobilidade(901, agora=agora)
-    ok(pedido is not None, "T-MARGEM-1a episodio aberto")
+
+    pedido = _abrir(901, agora)
+    assert pedido is not None and pedido.timeout_s == 1
     prazo = regra_queda._episodios[901].prazo - agora
-    msg = mensagens.criar_pedido_confirmacao(901, pedido.episode_id, pedido.timeout_s, pedido.motivo)
-    dur = (mensagens.parse_iso_z(msg["expiresAt"]) - mensagens.parse_iso_z(msg["issuedAt"])).total_seconds()
-    ok(prazo == 2 and abs(dur - 2) < 0.01, "T-MARGEM-1b expiresAt - issuedAt e prazo do episodio = 2 s",
-       f"prazo={prazo} expiresAt-issuedAt={dur}")
 
-    # -----------------------------------------------------------------------
-    # T-CONST-2: const.COOLDOWN_S = 0 -> o segundo episodio seguido e aceito (e com 60 e recusado)
-    # -----------------------------------------------------------------------
-    const.COOLDOWN_S = 60
-    regra_queda.vigiar(agora + 100)                                    # encerra 901 como EXPIRADO
-    ok(regra_queda.abrir_por_imobilidade(901, agora=agora + 101) is None,
-       "T-CONST-2a com COOLDOWN_S=60 o segundo episodio e recusado")
-    const.COOLDOWN_S = 0
-    ok(regra_queda.abrir_por_imobilidade(901, agora=agora + 101) is not None,
-       "T-CONST-2b com const.COOLDOWN_S=0 o segundo episodio e aceito (ajuste vale para o modulo)")
+    emissao = datetime.fromtimestamp(agora, tz=timezone.utc)
+    msg = mensagens.criar_pedido_confirmacao(901, pedido.episode_id, pedido.timeout_s, pedido.motivo, agora=emissao)
+    duracao = (mensagens.parse_iso_z(msg["expiresAt"]) - mensagens.parse_iso_z(msg["issuedAt"])).total_seconds()
+    assert prazo == 2 and duracao == 2
+    assert msg["payload"]["timeoutMs"] == 1000                  # o prazo do idoso nao inclui a margem
 
-    # -----------------------------------------------------------------------
-    # TOLERANCIA_RELOGIO_S: ajuste em const.X vale para a deduplicacao do app
-    # -----------------------------------------------------------------------
-    def leitura(ts):
-        return {"timestamp_envio": ts, "acelerometro": {"magnitude": 9.8, "magnitude_max_janela": 9.9}}
 
-    const.TOLERANCIA_RELOGIO_S = 60
-    regra_queda.eh_duplicado_app(902, "d1", leitura(1_000_000))
-    ok(regra_queda.eh_duplicado_app(902, "d1", leitura(990_000)) is True,
-       "T-CONST-2c regressao de 10 s com tolerancia 60 s: duplicata")
-    const.TOLERANCIA_RELOGIO_S = 5
-    ok(regra_queda.eh_duplicado_app(902, "d1", leitura(990_000)) is False,
-       "T-CONST-2d com const.TOLERANCIA_RELOGIO_S=5 a mesma regressao vira nova referencia")
-finally:
-    (const.TIMEOUT_CONFIRMACAO_S, const.MARGEM_SERVIDOR_S,
-     const.COOLDOWN_S, const.TOLERANCIA_RELOGIO_S) = orig
+def test_cooldown_ajustado_em_const_vale_para_o_modulo(monkeypatch):
+    monkeypatch.setattr(const, "TIMEOUT_CONFIRMACAO_S", 1)
+    monkeypatch.setattr(const, "MARGEM_SERVIDOR_S", 1)
+    agora = 1_000_000.0
+    assert _abrir(901, agora) is not None
+    regra_queda.vigiar(agora + 100)                             # encerra o episodio como EXPIRADO
+
+    monkeypatch.setattr(const, "COOLDOWN_S", 60)
+    assert _abrir(901, agora + 101) is None                     # 1 s depois do encerramento: dentro do cooldown
+    monkeypatch.setattr(const, "COOLDOWN_S", 0)
+    assert _abrir(901, agora + 101) is not None                 # mesmo instante, sem cooldown
+
+
+def _leitura_app(ts_ms: int) -> dict:
+    return {"timestamp_envio": ts_ms, "acelerometro": {"magnitude": 9.8, "magnitude_max_janela": 9.9}}
+
+
+def test_tolerancia_do_relogio_ajustada_em_const_vale_para_a_deduplicacao(monkeypatch):
+    monkeypatch.setattr(const, "TOLERANCIA_RELOGIO_S", 60)
+    regra_queda.eh_duplicado_app(902, "d1", _leitura_app(1_000_000))
+    assert regra_queda.eh_duplicado_app(902, "d1", _leitura_app(990_000)) is True     # regressao de 10 s <= 60 s
+
+    monkeypatch.setattr(const, "TOLERANCIA_RELOGIO_S", 5)
+    assert regra_queda.eh_duplicado_app(902, "d1", _leitura_app(990_000)) is False    # 10 s > 5 s: nova referencia
+
 
 # ---------------------------------------------------------------------------
-# Regressao E2E: as rotas nao podem dar 500 por referencia quebrada
+# Regressao: as rotas nao podem dar 500 por referencia quebrada
 # ---------------------------------------------------------------------------
-import json  # noqa: E402
-
-import auth  # noqa: E402
-import server  # noqa: E402
-from crypto_utils import decrypt_payload, encrypt_payload  # noqa: E402
-
-auth.criar_conta("idoso1", "idoso", [1], ["app"], "senha-idoso")
-cli = server.app.test_client()
-
-
-def post(rota, obj, token=None):
-    nonce, ct = encrypt_payload(json.dumps(obj))
-    cab = {"Authorization": f"Bearer {token}"} if token else {}
-    return cli.post(rota, json={"nonce": nonce, "ciphertext": ct}, headers=cab)
-
-
-def corpo(resp):
-    d = resp.get_json()
-    return json.loads(decrypt_payload(d["nonce"], d["ciphertext"]))
-
-
-r = post("/auth/login", {"identificador": "idoso1", "segredo": "senha-idoso", "fonte": "app", "device_id": "cel1"})
-ok(r.status_code == 200, "REG-1 /auth/login sem schemaVersion -> 200 (aceito)", f"status={r.status_code}")
-tokens = corpo(r) if r.status_code == 200 else {}
-acesso, refresh = tokens.get("access_token"), tokens.get("refresh_token")
-
-r = post("/auth/login", {"schemaVersion": 4, "identificador": "idoso1", "segredo": "senha-idoso", "fonte": "app"})
-ok(r.status_code == 400, "REG-2 /auth/login com schemaVersion 4 -> 400", f"status={r.status_code}")
-
-r = post("/auth/refresh", {"refresh_token": refresh or "x"})
-ok(r.status_code == 200, "REG-3 /auth/refresh sem schemaVersion -> 200", f"status={r.status_code}")
-
-app_dado = {"source": "app", "user_id": 1, "device_id": "cel1", "timestamp_envio": int(time.time() * 1000),
+def _app_dado() -> dict:
+    return {"source": "app", "user_id": 1, "device_id": "cel1", "timestamp_envio": int(time.time() * 1000),
             "acelerometro": {"magnitude": 9.8, "magnitude_max_janela": 9.9}}
-r = post("/dados", {**app_dado, "schemaVersion": 3}, acesso)
-ok(r.status_code == 200 and not r.get_json().get("descartado"), "REG-4 /dados v3 valido -> 200 aceito",
-   f"status={r.status_code} corpo={r.get_data(as_text=True)[:120]}")
 
-for rotulo, versao in (("4", 4), ("'3'", "3"), ("true", True)):
-    r = post("/dados", {**app_dado, "schemaVersion": versao}, acesso)
-    ok(r.status_code == 200 and r.get_json().get("descartado") is True,
-       f"REG-5 /dados schemaVersion {rotulo} -> 200 descartado", f"status={r.status_code}")
 
-r = post("/dados", dict(app_dado), acesso)
-ok(r.status_code == 200 and not r.get_json().get("descartado"), "REG-6 /dados sem schemaVersion -> aceito como v1",
-   f"status={r.status_code}")
+def _evento_app() -> dict:
+    return {"schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "cel1",
+            "event_time": "2026-01-01T00:00:00Z", "eventType": "push.ack", "state": "ATIVADO", "messageId": "m1"}
 
-ev = {"schemaVersion": 3, "source": "app", "user_id": 1, "device_id": "cel1", "event_time": "2026-01-01T00:00:00Z",
-      "eventType": "push.ack", "state": "ATIVADO", "messageId": "m1"}
-r = post("/eventos", ev, acesso)
-ok(r.status_code == 200, "REG-7 /eventos v3 -> 200", f"status={r.status_code}")
-r = post("/eventos", {k: v for k, v in ev.items() if k != "schemaVersion"}, acesso)
-ok(r.status_code == 200 and r.get_json().get("descartado") is True, "REG-8 /eventos sem schemaVersion -> descartado",
-   f"status={r.status_code}")
 
-print()
-if _falhas:
-    print(f"FALHOU: {_falhas} caso(s).")
-    sys.exit(1)
-print("Todos os casos passaram.")
+def _login(cli, **extra):
+    corpo = {"identificador": "idoso1", "segredo": "senha-idoso", "fonte": "app", "device_id": "cel1", **extra}
+    return cli.post("/auth/login", corpo)
+
+
+class TestRotasSemReferenciaQuebrada:
+    def test_login_sem_schemaversion_e_aceito(self, cli):
+        r = _login(cli)
+        assert r.status_code == 200
+        assert {"access_token", "refresh_token"} <= set(cli.corpo(r))
+
+    def test_login_com_schemaversion_maior_da_400(self, cli):
+        assert _login(cli, schemaVersion=const.SCHEMA_VERSION_ATUAL + 1).status_code == 400
+
+    def test_refresh_sem_schemaversion_e_aceito(self, cli):
+        sessao = cli.corpo(_login(cli))
+        assert cli.post("/auth/refresh", {"refresh_token": sessao["refresh_token"]}).status_code == 200
+
+    def test_dados_valido_e_aceito(self, cli, tokens):
+        r = cli.post("/dados", {**_app_dado(), "schemaVersion": const.SCHEMA_VERSION_ATUAL}, tokens["idoso"])
+        assert r.status_code == 200 and not r.get_json().get("descartado")
+
+    def test_dados_sem_schemaversion_e_aceito_como_versao_padrao(self, cli, tokens):
+        r = cli.post("/dados", _app_dado(), tokens["idoso"])
+        assert r.status_code == 200 and not r.get_json().get("descartado")
+
+    @pytest.mark.parametrize("versao", [const.SCHEMA_VERSION_ATUAL + 1, "3", True], ids=repr)
+    def test_dados_com_versao_nao_suportada_e_descartado_com_200(self, cli, tokens, versao):
+        r = cli.post("/dados", {**_app_dado(), "schemaVersion": versao}, tokens["idoso"])
+        assert r.status_code == 200 and r.get_json().get("descartado") is True
+
+    def test_eventos_valido_da_200(self, cli, tokens):
+        r = cli.post("/eventos", _evento_app(), tokens["idoso"])
+        assert r.status_code == 200 and r.get_json() == {"status": "ok"}
+
+    def test_eventos_sem_schemaversion_e_aceito_como_versao_padrao(self, cli, tokens):
+        corpo = {k: v for k, v in _evento_app().items() if k != "schemaVersion"}
+        r = cli.post("/eventos", corpo, tokens["idoso"])
+        assert r.status_code == 200 and r.get_json() == {"status": "ok"}

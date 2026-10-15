@@ -41,11 +41,6 @@ import regra_queda  # noqa: E402
 import server  # noqa: E402
 from sse_hub import HUB  # noqa: E402
 
-# tests/unit/test_const.py e um script do Marco anterior (executa no import, faz chdir e mexe em const).
-# Fica fora da coleta ate ser portado para pytest.
-collect_ignore = [os.path.join("unit", "test_const.py")]
-
-
 def _limpar_estado() -> None:
     auth._falhas.clear()
     auth._bloqueado_ate.clear()
