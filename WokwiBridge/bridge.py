@@ -43,7 +43,7 @@ from crypto_utils import decrypt_payload, encrypt_payload
 # --- Configuracoes ----------------------------------------------------------
 RFC2217_URL = "rfc2217://localhost:4000"
 BAUDRATE = 115200
-SERVIDOR = os.environ.get("FLOW_SERVIDOR", "http://localhost:5000").rstrip("/")
+SERVIDOR = os.environ.get("FLOW_SERVIDOR", "http://127.0.0.1:5000").rstrip("/")
 BRIDGE_ID = os.environ.get("FLOW_BRIDGE_ID", "")
 BRIDGE_SECRET = os.environ.get("FLOW_BRIDGE_SECRET", "")
 # O login registra este device_id no token e o servidor confere com o deviceId de cada evento (403 se diferir):
@@ -64,7 +64,7 @@ MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9-]{1,39}")
 
 
 def log(msg: str) -> None:
-    print(f"[bridge] {msg}", flush=True)
+    print(f"[bridge {time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 def _cifrar(obj: dict) -> dict:

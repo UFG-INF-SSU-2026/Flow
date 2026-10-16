@@ -155,7 +155,7 @@ GRAVIDADE = 9.81
 
 # FONTE UNICA do tempo (s) que o idoso tem para apertar "Estou bem". Vai na
 # mensagem como timeoutMs; os dispositivos nao tem constante propria.
-TIMEOUT_CONFIRMACAO_S = 5
+TIMEOUT_CONFIRMACAO_S = 20
 
 # Folga (s) entre o prazo do dispositivo e o prazo do servidor. Prazo do
 # episodio E expiresAt da mensagem = TIMEOUT_CONFIRMACAO_S + esta margem.
