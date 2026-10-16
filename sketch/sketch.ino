@@ -174,6 +174,7 @@ void emitirEventoRetorno(const char* eventType, const char* estadoTexto, const c
 void desligarBuzzer() {
   noTone(PIN_BUZZER);
   buzzerAtivo = false;
+  digitalWrite(PIN_LED_ALERTA, LOW);   // LED vermelho acompanha o pedido do servidor
 }
 
 void ligarBuzzer(const char* messageId, long timeoutMs) {
@@ -195,6 +196,7 @@ void ligarBuzzer(const char* messageId, long timeoutMs) {
   buzzerAtivo = true;
   pendingBuzzerConfirm = false;
   tone(PIN_BUZZER, BUZZER_FREQ_HZ);
+  digitalWrite(PIN_LED_ALERTA, HIGH);  // LED vermelho: so liga quando o servidor pede (BUZZER_ON)
   emitirEventoRetorno("push.ack", "ATIVADO", messageId);
 }
 
@@ -352,7 +354,6 @@ void loop() {
   switch (estado) {
     case NORMAL: {
       digitalWrite(PIN_LED_SUSPEITA, LOW);
-      digitalWrite(PIN_LED_ALERTA,   LOW);
 
       if (magnitude < LIMIAR_BAIXO) {
         if (!contandoPersistencia) {
@@ -388,8 +389,8 @@ void loop() {
       break;
     }
     case ALERTA_CONFIRMADO: {
-      digitalWrite(PIN_LED_SUSPEITA, LOW);
-      digitalWrite(PIN_LED_ALERTA,   HIGH);
+      // Alerta local: LED AMARELO (o vermelho so liga quando o servidor envia o comando)
+      digitalWrite(PIN_LED_SUSPEITA, HIGH);
       if (pressRearm) {
         estado = NORMAL;
         contandoPersistencia = false;
