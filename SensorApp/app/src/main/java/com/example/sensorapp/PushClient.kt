@@ -18,12 +18,13 @@ import java.util.concurrent.TimeUnit
  * O canal existe so enquanto o monitoramento esta ativo e o app em primeiro plano (conectar() em iniciarEnvio,
  * desconectar() em pararEnvio/onPause).
  *
- * Callbacks [onMensagem] e [onEstado] sao chamados na thread PRINCIPAL.
+ * Callbacks [onMensagem] e [onEstado] sao chamados na thread PRINCIPAL. [onMensagem] so recebe mensagem de forma
+ * valida ([validarPush]); o que estiver fora do formato e descartado aqui, em silencio.
  */
 class PushClient(
     private val auth: AuthClient,
     private val urlPush: () -> String,
-    private val onMensagem: (JSONObject) -> Unit,
+    private val onMensagem: (MensagemPush) -> Unit,
     private val onEstado: (String) -> Unit
 ) {
     private val main = Handler(Looper.getMainLooper())
@@ -40,9 +41,16 @@ class PushClient(
     private var eventSource: EventSource? = null
 
     @Volatile private var ativo = false
-    @Volatile private var lastEventId = 0
+    @Volatile private var lastEventId = 0L        // os ids do SSE passam de Int.MAX_VALUE em 2038 (docs/schemas.md, secao 6)
     @Volatile private var backoffMs = 1_000L
     private val vistos = ArrayDeque<String>()     // messageIds ja tratados (idempotencia na reconexao)
+
+    // Renovacao disparada por "reautenticar": a reconexao so abre DEPOIS que ela termina, para sair ja com o token novo.
+    // Sem isso, uma renovacao mais lenta que o atraso da reconexao (1 s) faria o app reconectar com o token antigo, o
+    // servidor responderia "reautenticar" de novo e fecharia, em laco, ate a renovacao acabar.
+    private val lockRenovacao = Any()
+    private var renovando = false                 // sob lockRenovacao
+    private var reconexaoPendente = false         // sob lockRenovacao: abrir() foi chamado enquanto renovava
 
     fun conectar() {
         if (ativo) return
@@ -61,6 +69,12 @@ class PushClient(
 
     private fun abrir() {
         if (!ativo) return
+        synchronized(lockRenovacao) {
+            if (renovando) {                      // espera a renovacao: ao terminar, ela chama abrir() de novo
+                reconexaoPendente = true
+                return
+            }
+        }
         estado("conectando")
         val b = Request.Builder().url(urlPush()).header("Accept", "text/event-stream")
         if (lastEventId > 0) b.header("Last-Event-ID", lastEventId.toString())
@@ -79,6 +93,27 @@ class PushClient(
         main.post { onEstado(texto) }
     }
 
+    /** Renova o token fora da thread do OkHttp; se abrir() foi chamado nesse meio tempo, reabre quando terminar. */
+    private fun renovarAntesDeReconectar() {
+        synchronized(lockRenovacao) {
+            if (renovando) return                 // ja ha uma renovacao em curso
+            renovando = true
+        }
+        Thread {
+            try {
+                auth.renovar(null)
+            } finally {
+                val reabrir = synchronized(lockRenovacao) {
+                    renovando = false
+                    val pendente = reconexaoPendente
+                    reconexaoPendente = false
+                    pendente
+                }
+                if (reabrir) main.post { abrir() }    // abrir() confere "ativo" (o app pode ter parado nesse meio tempo)
+            }
+        }.start()
+    }
+
     private val listener = object : EventSourceListener() {
         override fun onOpen(eventSource: EventSource, response: Response) {
             backoffMs = 1_000L
@@ -88,8 +123,9 @@ class PushClient(
         override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
             when (type) {
                 "push" -> tratarPush(id, data)
-                // Token perto de vencer: renova; o servidor fecha o stream em seguida (onClosed reconecta).
-                "reautenticar" -> Thread { auth.renovar(null) }.start()
+                // Token perto de vencer: renova; o servidor fecha o stream em seguida (onClosed reconecta, mas so
+                // abre depois que a renovacao terminar).
+                "reautenticar" -> renovarAntesDeReconectar()
             }
         }
 
@@ -99,7 +135,12 @@ class PushClient(
 
         override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
             when (response?.code) {
-                401 -> { ativo = false; estado("sessão expirada"); return }   // o authenticator ja tentou renovar
+                401 -> {
+                    // O authenticator ja tentou renovar. Sessao apagada = refresh RECUSADO (onSessaoExpirada ja avisou a
+                    // UI e parou o envio): nao adianta insistir. Sessao ainda la = a renovacao falhou por rede (servidor
+                    // fora do ar, por exemplo): falha transitoria, segue para o backoff abaixo e reconecta sozinho.
+                    if (auth.sessao == null) { ativo = false; estado("sessão expirada"); return }
+                }
                 403 -> { ativo = false; estado("sem permissão"); return }     // nao adianta insistir
             }
             val atraso = backoffMs
@@ -112,14 +153,16 @@ class PushClient(
         try {
             val env = JSONObject(data)
             val msg = JSONObject(CryptoUtils.decrypt(env.getString("nonce"), env.getString("ciphertext")))
-            id?.toIntOrNull()?.let { lastEventId = it }
+            id?.toLongOrNull()?.let { lastEventId = it }
             if (msg.optInt("schemaVersion") != 3) return
             if (msg.optInt("userId", -1) != auth.userId) return          // defesa em profundidade
-            val mid = msg.getString("messageId")
-            if (vistos.contains(mid)) return
-            vistos.addLast(mid)
+            // A forma e conferida AQUI, antes do post: depois dele o codigo roda na thread principal, onde uma
+            // JSONException (mensagem autentica, mas fora do formato) derrubaria o app.
+            val push = validarPush(msg) ?: return
+            if (vistos.contains(push.messageId)) return
+            vistos.addLast(push.messageId)
             if (vistos.size > 100) vistos.removeFirst()
-            main.post { onMensagem(msg) }
+            main.post { onMensagem(push) }
         } catch (e: Exception) {
             // mensagem malformada ou que nao decifra: descarta
         }

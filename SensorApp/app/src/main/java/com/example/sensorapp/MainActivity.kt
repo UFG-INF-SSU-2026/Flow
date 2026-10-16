@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.WindowManager
 import android.widget.EditText
 import android.widget.Toast
@@ -63,7 +64,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     /**
      * Versao do schema do payload LeituraAmbiente (mesma ideia aplicada ao
-     * contrato do wokwi, ver docs/arquitetura.md secao 4.3, e espelhada aqui
+     * contrato do wokwi, ver docs/schemas.md secao 1, e espelhada aqui
      * no lado do app: SensorServer/regra_luz.py sabe interpretar esta versao
      * e assume 1 quando o campo nao vem, sem rejeitar o evento por isso).
      */
@@ -429,6 +430,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
             override fun onResponse(call: Call, response: okhttp3.Response) {
                 response.close()
+                if (!response.isSuccessful) {
+                    // 401/403/400: o servidor recusou o retorno (autenticacao ou escopo). Sem retransmissao; deixa rastro.
+                    Log.w("MainActivity", "POST /eventos ($eventType $state) recusado: ${response.code}")
+                    runOnUiThread { atualizarStatus("Falha ao enviar $eventType ao servidor (código ${response.code})", false) }
+                }
             }
         })
     }

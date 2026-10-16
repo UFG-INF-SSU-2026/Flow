@@ -10,8 +10,9 @@ Flow/
 │   ├── tests/          # suíte pytest do servidor (unit/ e integration/)
 │   └── simular_queda.py  # simula uma queda sem Wokwi nem celular
 ├── SensorApp/          # app Android (Kotlin): telemetria + recebe o pedido de confirmação
+│   └── app/src/test/   # testes de unidade (JVM) da validação das mensagens de push
 ├── WokwiBridge/        # ponte Python bidirecional entre a simulação Wokwi e o servidor
-│   └── tests/          # fake_firmware.py: testa a ponte sem Wokwi
+│   └── tests/          # test_bridge.py (pytest) e fake_firmware.py (testa a ponte sem Wokwi)
 ├── sketch/             # projeto Wokwi (ESP32 + MPU6050 + buzzer), simulado no VS Code
 │   └── host_test/      # teste opcional da lógica do firmware no PC
 ├── docs/               # arquitetura e schemas
@@ -158,13 +159,27 @@ python -m pytest
 
 A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados) e `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo e ciclo de queda ponta a ponta). Ela é independente do seu ambiente: define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`) e grava contas, sessões e `dataUsers/` numa pasta temporária, então **não usa nem altera** o seu `contas.json` real.
 
+### Bridge (pytest)
+
+```bash
+cd WokwiBridge
+pip install -r requirements.txt   # inclui o pytest
+python -m pytest
+```
+
+A configuração está em `WokwiBridge/pytest.ini`. Os testes não usam rede nem serial: cobrem a validação e a tradução das mensagens de push, o roteamento das linhas que vêm do firmware, o leitor SSE e a renovação de sessão. O `tests/fake_firmware.py` (abaixo) não é coletado pelo pytest.
+
+### App Android (JVM)
+
+Os testes de `SensorApp/app/src/test/` (validação da forma das mensagens de push) rodam na JVM, sem emulador. No Android Studio, clique com o botão direito em `app/src/test` e escolha **Run Tests**; ou rode `gradle test` dentro de `SensorApp`. A primeira execução baixa o JUnit e o `org.json`.
+
 ### Fora do pytest (opcionais)
 
 | O quê | Como | Para que serve |
 | --- | --- | --- |
 | `SensorServer/simular_queda.py` | com o servidor rodando: `FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python simular_queda.py [URL_BASE]` | Simula um wokwi que sofre impacto e fica imóvel; o pedido de confirmação chega ao app e/ou ao bridge conectados, sem Wokwi. |
 | `WokwiBridge/tests/fake_firmware.py` | na pasta `WokwiBridge`, com servidor e conta do bridge, `FLOW_BRIDGE_DEVICE=esp32-falso` e as variáveis do bridge: `python tests/fake_firmware.py` | Substitui a serial por um "firmware falso" e confere o que o bridge escreve. O `FLOW_BRIDGE_DEVICE` precisa ser o `deviceId` que o firmware falso usa (`esp32-falso`). |
-| `sketch/host_test/` | ver `sketch/host_test/README.md` | Roda a lógica do firmware no PC. |
+| `sketch/host_test/` | ver `sketch/host_test/README.md` | Roda a lógica do firmware no PC (inclui o buzzer e a idempotência do `BUZZER_ON`). |
 
 O servidor mantém um **cooldown de 60 s** entre episódios do mesmo usuário (`COOLDOWN_S`): para repetir `simular_queda.py` ou `fake_firmware.py` em seguida, reinicie o servidor ou aguarde.
 

@@ -37,7 +37,7 @@ const int MPU_ADDR = 0x68;
 const char* DEVICE_ID = "esp32-decisao-imobilidade-01";
 const char* ENTITY_ID = "idoso-simulado-01";
 
-// ---- Versao do schema do payload (docs/arquitetura.md, secao 4.3) ----
+// ---- Versao do schema do payload (docs/schemas.md, secao 1) ----
 const int SCHEMA_VERSION = 3;
 
 // ---- Faixa do sensor (Marco 3) ----
@@ -53,6 +53,10 @@ const unsigned int  BUZZER_FREQ_HZ = 2000;
 const unsigned long BUZZER_MAX_MS  = 30000; // TETO DE SEGURANCA do firmware: o buzzer nunca passa disso,
                                             // mesmo que servidor/bridge morram. NAO e o timeout de confirmacao
                                             // (esse vem na mensagem, em timeoutMs).
+                                            // INVARIANTE: TIMEOUT_CONFIRMACAO_S * 1000 (SensorServer/const.py) precisa
+                                            // ser <= BUZZER_MAX_MS. Acima disso o firmware rejeita TODO pedido
+                                            // (push.ack REJEITADO) e o buzzer nunca toca. E a excecao a regra de que
+                                            // o timeout vem so do servidor: ajuste as duas juntas.
 
 // ---- Histerese em m/s² ----
 // Repouso no Wokwi: sliders zerados → magnitude ≈ 0 m/s²
@@ -173,6 +177,12 @@ void desligarBuzzer() {
 }
 
 void ligarBuzzer(const char* messageId, long timeoutMs) {
+  // Idempotencia (docs/schemas.md, secao 6: o dispositivo ignora messageId repetido): com o buzzer tocando, o MESMO
+  // messageId nao reinicia o tempo nem reemite push.ack. Um messageId DIFERENTE substitui o episodio em curso (vale o
+  // pedido mais novo): reinicia o tempo, emite push.ack ATIVADO para o novo e nao emite SEM_RESPOSTA para o anterior
+  // (o servidor ja encerra ou expira o episodio antigo por conta propria).
+  if (buzzerAtivo && strcmp(messageId, buzzerMsgId) == 0) return;
+
   // Valida: timeout em (0, BUZZER_MAX_MS] e messageId que cabe no buffer
   if (timeoutMs <= 0 || (unsigned long)timeoutMs > BUZZER_MAX_MS || strlen(messageId) == 0 || strlen(messageId) >= sizeof(buzzerMsgId)) {
     emitirEventoRetorno("push.ack", "REJEITADO", messageId);

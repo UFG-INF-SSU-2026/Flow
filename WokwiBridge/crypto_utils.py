@@ -1,5 +1,6 @@
 """
-Criptografia do transporte (Marco 2).
+Criptografia do transporte: o mesmo envelope AES-GCM protege o que o cliente envia
+(telemetria, eventos, login) e o que o servidor empurra (push por SSE).
 
 Mecanismo escolhido: AES-256-GCM com chave simetrica pre-compartilhada.
 
@@ -31,7 +32,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 # SensorApp/.../CryptoUtils.kt (SHARED_KEY_B64).
 #
 # NOTA (nivel academico): esta chave e estatica e hardcoded de proposito,
-# apenas para viabilizar a demonstracao do Marco 2 dentro do prazo da
+# apenas para viabilizar a demonstracao dentro do prazo da
 # disciplina. Em um cenario de producao, ela NAO deveria ser fixa nem
 # compartilhada por todos os dispositivos - o correto seria cada
 # dispositivo (celular do idoso) gerar/receber sua propria chave durante
@@ -75,8 +76,12 @@ def decrypt_payload(nonce_b64: str, ciphertext_b64: str) -> str:
 
 def encrypt_payload(plaintext: str) -> tuple[str, str]:
     """
-    Cifra um texto (usado apenas em testes/simulacoes no servidor).
-    Retorna (nonce_b64, ciphertext_b64).
+    Cifra um texto com a chave compartilhada (AES-256-GCM, nonce aleatorio novo a cada chamada).
+    Retorna (nonce_b64, ciphertext_b64), o mesmo formato que decrypt_payload recebe.
+
+    E o caminho de saida do servidor: cifra as respostas de /auth/login e /auth/refresh (server.py) e
+    cada mensagem de push enviada pelos canais (canal_app.py e canal_wokwi.py). Tambem e usada por
+    simular_queda.py e pelos testes para montar requisicoes como um cliente faria.
     """
     nonce = os.urandom(NONCE_SIZE_BYTES)
     ciphertext = _aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)

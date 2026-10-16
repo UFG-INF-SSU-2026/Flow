@@ -28,6 +28,7 @@ Uso:
 """
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -53,6 +54,12 @@ BACKOFF_MAX_S = 30
 READ_TIMEOUT_SSE_S = 40          # > keepalive do servidor (15 s): detecta conexao morta
 EVENTOS_RETORNO = {"push.ack", "confirmacao.resposta"}
 MENSAGENS_VISTAS_MAX = 100
+TIPO_SOLICITADA = "queda.confirmacao_solicitada"
+TIPO_ENCERRADA = "queda.confirmacao_encerrada"
+RESULTADOS_ENCERRAMENTO = {"CONFIRMADO", "EXPIRADO", "CANCELADO"}
+# messageId vira campo da linha serial: so caracteres de UUID e no maximo 39 (o buffer do firmware tem 40 bytes,
+# o UUID tem 36). Usado com fullmatch: '$' aceitaria uma quebra de linha no fim.
+MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9-]{1,39}")
 # -----------------------------------------------------------------------------
 
 
@@ -203,12 +210,47 @@ def laco_serial(sessao: Sessao, holder: SerialHolder, abrir_serial=conectar_seri
 
 
 # ------------------------------ servidor -> serial ---------------------------
+def _forma_invalida(msg: dict) -> str | None:
+    """Motivo pelo qual a mensagem NAO pode virar linha serial, ou None se a forma esta correta.
+
+    Protege o enquadramento da serial (CMD;...;<fim de linha>): um ';' ou quebra de linha no messageId, um timeoutMs
+    que nao e inteiro ou um resultado fora do contrato nunca chegam ao firmware. Tipo desconhecido passa (tratar_push
+    o ignora adiante, sem escrever nada).
+
+    NAO filtra a FAIXA do timeoutMs: o firmware responde push.ack REJEITADO fora de 0 < t <= BUZZER_MAX_MS, e esse
+    ack e a informacao util para o servidor.
+    """
+    mid = msg.get("messageId")
+    if not isinstance(mid, str) or MESSAGE_ID_RE.fullmatch(mid) is None:
+        return "messageId invalido"
+    tipo = msg.get("messageType")
+    if not isinstance(tipo, str):
+        return "messageType ausente ou nao e texto"
+    if tipo not in (TIPO_SOLICITADA, TIPO_ENCERRADA):
+        return None
+    payload = msg.get("payload")
+    if not isinstance(payload, dict):
+        return "payload ausente ou nao e objeto"
+    if tipo == TIPO_SOLICITADA:
+        t = payload.get("timeoutMs")
+        if not isinstance(t, int) or isinstance(t, bool):       # bool e int em Python: True nao e prazo
+            return "timeoutMs nao e inteiro"
+    else:
+        resultado = payload.get("resultado")
+        if not isinstance(resultado, str) or resultado not in RESULTADOS_ENCERRAMENTO:
+            return "resultado fora do contrato"
+    return None
+
+
 def traduzir(msg: dict) -> str | None:
-    """Mensagem de push (v3) -> linha de comando para o firmware. None se o tipo nao e suportado."""
+    """Mensagem de push (v3) -> linha de comando para o firmware. None se o tipo nao e suportado.
+
+    Espera uma mensagem que ja passou por _forma_invalida (tratar_push garante); sozinha, nao valida nada.
+    """
     tipo, p = msg["messageType"], msg["payload"]
-    if tipo == "queda.confirmacao_solicitada":
+    if tipo == TIPO_SOLICITADA:
         return f"CMD;BUZZER_ON;{msg['messageId']};{int(p['timeoutMs'])}"
-    if tipo == "queda.confirmacao_encerrada":
+    if tipo == TIPO_ENCERRADA:
         return f"CMD;BUZZER_OFF;{msg['messageId']};{p['resultado']}"
     return None
 
@@ -225,6 +267,10 @@ def tratar_push(sessao: Sessao, holder: SerialHolder, vistas: deque, msg: dict) 
     if msg.get("userId") != sessao.user_id:
         log("push descartado: userId diferente do deste bridge")
         return
+    motivo = _forma_invalida(msg)
+    if motivo is not None:
+        log(f"push descartado: {motivo}")                    # sem eco do conteudo: o texto veio da rede
+        return
     if msg["messageId"] in vistas:
         return                                           # idempotencia (reconexao pode reenviar)
     vistas.append(msg["messageId"])
@@ -237,6 +283,23 @@ def tratar_push(sessao: Sessao, holder: SerialHolder, vistas: deque, msg: dict) 
         return
     ok = holder.escrever(cmd)
     log(f"push {msg['messageType']} -> serial {'OK' if ok else 'FALHOU'}: {cmd}")
+
+
+def _ler_eventos(linhas):
+    """Parser SSE puro: recebe as linhas (sem o fim de linha) e gera um dict por evento COMPLETO.
+
+    Um evento termina na linha em branco; comentarios (':keepalive') sao ignorados; um evento que ficou sem a linha em
+    branco final (conexao cortada no meio) nao e gerado.
+    """
+    ev: dict = {}
+    for linha in linhas:
+        if linha == "":                                  # fim de um evento SSE
+            if ev:
+                yield ev
+            ev = {}
+        elif not linha.startswith(":"):                  # ':' = comentario/keepalive
+            k, _, v = linha.partition(":")
+            ev[k] = v.strip()
 
 
 def laco_push(sessao: Sessao, holder: SerialHolder) -> None:
@@ -263,27 +326,22 @@ def laco_push(sessao: Sessao, holder: SerialHolder) -> None:
                 r.raise_for_status()
                 log("Canal de push aberto (/push/wokwi)")
                 espera = 1
-                ev: dict = {}
-                for linha in r.iter_lines(decode_unicode=True):
-                    if linha == "":                      # fim de um evento SSE
-                        if ev.get("event") == "push":
-                            last_id = int(ev.get("id", last_id))
-                            try:
-                                msg = _decifrar(json.loads(ev["data"]))
-                                tratar_push(sessao, holder, vistas, msg)
-                            except Exception as e:       # uma mensagem ruim nao derruba o canal
-                                log(f"push invalido descartado ({type(e).__name__}: {e})")
-                        elif ev.get("event") == "reautenticar":
-                            log("Servidor pediu reautenticacao; renovando token e reconectando")
-                            sessao.renovar(usado)
-                            break
-                        ev = {}
-                    elif not linha.startswith(":"):      # ':' = comentario/keepalive
-                        k, _, v = linha.partition(":")
-                        ev[k] = v.strip()
+                for ev in _ler_eventos(r.iter_lines(decode_unicode=True)):
+                    if ev.get("event") == "push":
+                        last_id = int(ev.get("id", last_id))
+                        try:
+                            msg = _decifrar(json.loads(ev["data"]))
+                            tratar_push(sessao, holder, vistas, msg)
+                        except Exception as e:           # uma mensagem ruim nao derruba o canal
+                            log(f"push invalido descartado ({type(e).__name__}: {e})")
+                    elif ev.get("event") == "reautenticar":
+                        log("Servidor pediu reautenticacao; renovando token e reconectando")
+                        sessao.renovar(usado)
+                        break
         except requests.ConnectionError as e:
-            # Servidor fora do ar: ao voltar, os ids do SSE podem ter recomecado do 1 (contador em memoria).
-            # Zerar o Last-Event-ID e seguro: repetidas caem em 'vistas' e expiradas nao sao enviadas.
+            # Servidor fora do ar. Zerar o Last-Event-ID e inofensivo (nao e necessario): o contador do servidor parte
+            # do instante de subida e nunca fica atras do que o bridge guardou. O que o servidor reenviar cai em
+            # 'vistas' (repetidas) ou nao e enviado (expiradas).
             last_id = 0
             log(f"Canal de push caiu ({e}). Reconectando em {espera}s...")
         except Exception as e:                           # timeout, HTTP != 2xx, falha de renovacao, etc.

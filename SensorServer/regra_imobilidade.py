@@ -15,6 +15,7 @@ duas regras do servidor sigam o mesmo padrao e fiquem faceis de explicar
 lado a lado na verificacao oral.
 """
 
+import itertools
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -68,6 +69,8 @@ class EstadoDispositivo:
     alerta_ativo: bool = False              # evita reemitir arquivo de alerta para o mesmo episodio
     ultima_atualizacao: str | None = None   # ISO 8601, para saber ha quanto tempo o device fala com o servidor
     ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const.SCHEMA_VERSION_PADRAO, se ausente)
+    ordem_atualizacao: int = 0              # contador monotonico: desempata o "atualizado por ultimo" (o relogio do Windows
+                                            # tem ~15 ms de resolucao e duas atualizacoes seguidas podem ter o mesmo ISO)
 
 
 # Estado por (user_id, device_id) (em memoria; reinicia se o servidor reiniciar,
@@ -77,6 +80,7 @@ class EstadoDispositivo:
 # (a ordem do dict e a do ultimo uso).
 _estados: dict[tuple[int, str], EstadoDispositivo] = {}
 _estados_lock = threading.Lock()
+_contador_atualizacoes = itertools.count(1)
 
 
 def _estado_do(user_id: int, device_id: str) -> EstadoDispositivo:
@@ -196,6 +200,7 @@ def processar_evento(user_id: int, evento: dict) -> dict | None:
     device_id = str(evento["deviceId"])
     estado = _estado_do(user_id, device_id)
     estado.ultima_atualizacao = _agora_iso()
+    estado.ordem_atualizacao = next(_contador_atualizacoes)
     estado.ultimo_schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
 
     event_type = evento["eventType"]
@@ -251,7 +256,7 @@ def obter_estado(device_id: str) -> dict | None:
     if not candidatos:
         return None
     # O mesmo device_id pode existir em mais de um usuario: devolve o do usuario atualizado por ultimo.
-    user_id, estado = max(candidatos, key=lambda c: c[1].ultima_atualizacao or "")
+    user_id, estado = max(candidatos, key=lambda c: c[1].ordem_atualizacao)
     return {
         "device_id": device_id,
         "user_id": user_id,

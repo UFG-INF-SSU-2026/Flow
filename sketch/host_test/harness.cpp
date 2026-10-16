@@ -6,6 +6,12 @@ static int fails = 0;
 #define CHECK(c, m) do { if (c) std::cout << "PASS " << m << "\n"; else { std::cout << "FAIL " << m << "\n"; fails++; } } while (0)
 static bool has(const char* t) { return Serial.out.find(t) != std::string::npos; }
 static void avanca(unsigned long ms) { for (unsigned long i = 0; i < ms; i += 10) { g_millis += 10; loop(); } }
+// Todos os valores de "sequence" que o firmware imprimiu, na ordem.
+static std::vector<unsigned long> sequencias() {
+  std::vector<unsigned long> r; const std::string chave = "\"sequence\":"; size_t pos = 0;
+  while ((pos = Serial.out.find(chave, pos)) != std::string::npos) { pos += chave.size(); r.push_back(strtoul(Serial.out.c_str() + pos, nullptr, 10)); }
+  return r;
+}
 int main() {
   g_pin[PIN_BTN_CONFIRM] = HIGH; g_pin[PIN_BTN_REARM] = HIGH;
   setup();
@@ -53,6 +59,47 @@ int main() {
   Serial.out.clear();
   g_pin[PIN_BTN_CONFIRM] = LOW; avanca(120); g_pin[PIN_BTN_CONFIRM] = HIGH; avanca(60);
   CHECK(!has("confirmacao.resposta"), "clique sem buzzer ativo nao emite resposta");
+  // BUZZER_ON repetido (mesmo messageId) com o buzzer tocando: ignorado, sem reemitir ack nem reiniciar o tempo
+  Serial.out.clear();
+  Serial.feed("CMD;BUZZER_ON;msg-dup;1500\n"); avanca(30);
+  CHECK(g_tone_pin == PIN_BUZZER && has("\"messageId\":\"msg-dup\""), "BUZZER_ON de teste de idempotencia liga");
+  avanca(900);
+  Serial.out.clear();
+  Serial.feed("CMD;BUZZER_ON;msg-dup;1500\n"); avanca(30);
+  CHECK(!has("push.ack"), "BUZZER_ON repetido (mesmo id) nao reemite push.ack");
+  avanca(700);   // ~1660 ms desde o pedido original: venceu o prazo de 1500 ms; se o tempo tivesse reiniciado, ainda tocaria
+  CHECK(g_tone_pin == -1 && has("\"state\":\"SEM_RESPOSTA\"") && has("msg-dup"), "BUZZER_ON repetido (mesmo id) nao reinicia o tempo");
+  // BUZZER_ON com messageId DIFERENTE com o buzzer tocando: substitui o episodio (decisao fixada em ligarBuzzer)
+  Serial.out.clear();
+  Serial.feed("CMD;BUZZER_ON;msg-A;5000\n"); avanca(30);
+  Serial.out.clear();
+  Serial.feed("CMD;BUZZER_ON;msg-B;5000\n"); avanca(30);
+  CHECK(g_tone_pin == PIN_BUZZER && has("\"state\":\"ATIVADO\"") && has("\"messageId\":\"msg-B\""), "BUZZER_ON com id diferente substitui: push.ack ATIVADO para o novo");
+  CHECK(!has("SEM_RESPOSTA") && !has("msg-A"), "substituicao nao emite SEM_RESPOSTA para o id anterior");
+  Serial.out.clear();
+  g_pin[PIN_BTN_CONFIRM] = LOW; avanca(120); g_pin[PIN_BTN_CONFIRM] = HIGH; avanca(60);
+  CHECK(g_tone_pin == -1 && has("\"state\":\"ESTOU_BEM\"") && has("msg-B") && !has("msg-A"), "resposta depois da substituicao usa o id novo");
+  // linha maior que o buffer (96 bytes): descartada, nao liga o buzzer, e o canal continua utilizavel
+  Serial.out.clear();
+  Serial.feed(std::string("CMD;BUZZER_ON;") + std::string(100, 'a') + ";5000\n"); avanca(30);
+  CHECK(g_tone_pin == -1 && !has("push.ack"), "linha de comando maior que o buffer e descartada e nao liga o buzzer");
+  Serial.feed("CMD;BUZZER_ON;msg-pos-longa;5000\n"); avanca(30);
+  CHECK(g_tone_pin == PIN_BUZZER && has("msg-pos-longa"), "apos linha longa demais, comando valido volta a funcionar");
+  Serial.feed("CMD;BUZZER_OFF;msg-off2;CANCELADO\n"); avanca(30);
+  // BUZZER_OFF com o buzzer ja desligado: nada a fazer, nenhum evento de retorno
+  Serial.out.clear();
+  Serial.feed("CMD;BUZZER_OFF;msg-off3;EXPIRADO\n"); avanca(30);
+  CHECK(g_tone_pin == -1 && !has("push.ack") && !has("confirmacao.resposta"), "BUZZER_OFF com o buzzer desligado nao emite evento de retorno");
+  // sequence: contador unico, estritamente crescente entre leitura e eventos de retorno
+  Serial.out.clear();
+  avanca(1100);
+  Serial.feed("CMD;BUZZER_ON;msg-seq;5000\n"); avanca(30);
+  g_pin[PIN_BTN_CONFIRM] = LOW; avanca(120); g_pin[PIN_BTN_CONFIRM] = HIGH; avanca(60);
+  avanca(1100);
+  { std::vector<unsigned long> q = sequencias(); bool cresce = q.size() >= 4;
+    for (size_t i = 1; i < q.size(); i++) if (q[i] <= q[i - 1]) cresce = false;
+    CHECK(has("imobilidade.leitura") && has("push.ack") && has("confirmacao.resposta"), "o trecho de sequence tem leitura, push.ack e confirmacao.resposta");
+    CHECK(cresce, "sequence estritamente crescente entre imobilidade.leitura e eventos de retorno"); }
   // fora de faixa
   Serial.out.clear(); Wire.az = 32767; Wire.ax = 32767; Wire.ay = 32767; avanca(1100);
   CHECK(!has("LEITURA_FORA_DE_FAIXA"), "~136 m/s2 (fundo de escala +-8g) < teto 160: nao e fora de faixa");

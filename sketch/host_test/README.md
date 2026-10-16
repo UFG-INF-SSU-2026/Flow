@@ -7,4 +7,4 @@ cp ../sketch.ino sketch_host.cpp
 g++ -std=c++17 -I. -o harness harness.cpp && ./harness
 ```
 
-Esperado: 18 linhas `PASS` e `FIRMWARE OK 0`. Apague `sketch_host.cpp` e `harness` depois.
+Esperado: 29 linhas `PASS` e `FIRMWARE OK 0`. Apague `sketch_host.cpp` e `harness` depois.

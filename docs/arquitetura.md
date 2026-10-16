@@ -493,7 +493,7 @@ Os dois dispositivos concretos são o **app Android** (11.1) e o **dispositivo W
 ### 11.1 App Android
 
 - **Ciclo de vida:** o canal de push e o envio de telemetria existem enquanto o monitoramento está ativo e o app em primeiro plano (`Iniciar` abre ambos; `Parar` e `onPause` fecham). A tela fica acesa enquanto monitora.
-- **Componentes:** `AuthClient` (login, renovação, interceptor e authenticator do OkHttp), `PushClient` (SSE com reconexão), `AlertaController` (alarme, botão e contagem regressiva), `MainActivity` (sensores, montagem do payload na versão atual do schema, orquestração).
+- **Componentes:** `AuthClient` (login, renovação, interceptor e authenticator do OkHttp), `PushClient` (SSE com reconexão; confere a **forma** da mensagem antes de entregá-la, e mensagem fora do formato é descartada em silêncio), `MensagemPush` (validação pura da mensagem de push, testável na JVM), `AlertaController` (alarme, botão e contagem regressiva; o encerramento só vale para o episódio em curso), `MainActivity` (sensores, montagem do payload na versão atual do schema, orquestração).
 - **Acelerômetro:** registrado a ~50 Hz; a cada envio informa a magnitude da última amostra e o **máximo** desde o envio anterior.
 - **Alerta:** toca no stream de alarme do sistema (volume elevado e restaurado ao fim), mostra o botão "Estou bem" com contagem regressiva de `timeoutMs`, envia `push.ack` ao apresentar e `confirmacao.resposta` ao tocar ou ao esgotar o tempo.
 - **Credenciais:** usuário e senha só no login; o aparelho guarda os tokens. Aceita apenas o papel `idoso`; outros papéis recebem "tipo de conta ainda não suportado", que é o ponto de entrada do login único por tipo de conta.
@@ -502,9 +502,9 @@ Os dois dispositivos concretos são o **app Android** (11.1) e o **dispositivo W
 
 - MPU6050 em **±8 g** (`ACCEL_CONFIG = 0x10`, 4096 LSB/g), teto plausível 160 m/s²; amostragem a cada ~50 ms para o `valueMax` do ciclo de 1 s.
 - Lê comandos da serial sem bloquear: `CMD;BUZZER_ON;<messageId>;<timeoutMs>` e `CMD;BUZZER_OFF;<messageId>;<motivo>`.
-- **Buzzer** (pino D13, `tone`/`noTone`): liga com timeout válido (`0 < t ≤ BUZZER_MAX_MS`), responde `push.ack`. O botão "Estou bem" o desliga e emite `confirmacao.resposta ESTOU_BEM`; o fim do tempo emite `SEM_RESPOSTA`.
+- **Buzzer** (pino D13, `tone`/`noTone`): liga com timeout válido (`0 < t ≤ BUZZER_MAX_MS`), responde `push.ack`. Com o buzzer tocando, um `BUZZER_ON` com o **mesmo** `messageId` é ignorado (não reinicia o tempo nem repete o `push.ack`); com `messageId` **diferente**, substitui o episódio em curso. O botão "Estou bem" o desliga e emite `confirmacao.resposta ESTOU_BEM`; o fim do tempo emite `SEM_RESPOSTA`.
 - **Diagnóstico:** se não encontra o MPU6050, emite `sistema.erro` (`MPU_NAO_ENCONTRADO`); o evento segue pela ponte até `/dados` e o servidor o descarta e loga (6.2).
-- **Teto de segurança** `BUZZER_MAX_MS` (30 s): independente do servidor, impede que o buzzer fique ligado se o bridge ou o servidor falharem.
+- **Teto de segurança** `BUZZER_MAX_MS` (30 s): independente do servidor, impede que o buzzer fique ligado se o bridge ou o servidor falharem. É a única exceção a "o timeout vem só do servidor": `TIMEOUT_CONFIRMACAO_S` (em ms) precisa ser `≤ BUZZER_MAX_MS`, senão o firmware rejeita todo pedido (`push.ack REJEITADO`).
 - O botão "Estou bem" tem o mesmo significado na máquina de imobilidade do Marco 2 e no pedido do servidor: um clique vale para os dois, com efeitos independentes. O "Rearme" continua sendo o único que rearma a máquina local.
 
 ### 11.3 Dispositivo Wokwi: ponte (`bridge.py`)
@@ -512,7 +512,8 @@ Os dois dispositivos concretos são o **app Android** (11.1) e o **dispositivo W
 A ponte liga o firmware à rede. É bidirecional, com duas atividades concorrentes que compartilham a sessão e a conexão serial:
 
 - **Serial → servidor:** anexa `user_id` (vindo do login) e `source`, roteia por `eventType` (`imobilidade.*` → `/dados`; `push.ack` e `confirmacao.resposta` → `/eventos`), cifra e envia com Bearer; em `401` renova e repete uma vez; sem fila de retransmissão.
-- **Servidor → serial:** mantém `GET /push/wokwi`, decifra, confere `userId`, `schemaVersion` e validade, ignora `messageId` repetido e traduz a mensagem em comando de texto escrito na serial (escrita protegida por lock; a conexão serial pode ser recriada pela reconexão).
+- **Servidor → serial:** mantém `GET /push/wokwi`, decifra, confere `userId`, `schemaVersion` e validade, ignora `messageId` repetido, **valida a forma** do que vira linha serial (`messageId` só com `A-Z a-z 0-9 -` e até 39 caracteres; `payload` objeto; `timeoutMs` inteiro; `resultado` entre `CONFIRMADO`, `EXPIRADO` e `CANCELADO`; mensagem fora disso é descartada com log e nada é escrito) e traduz a mensagem em comando de texto escrito na serial (escrita protegida por lock; a conexão serial pode ser recriada pela reconexão).
+- A ponte não filtra a **faixa** do `timeoutMs`: quem rejeita valor fora de `0 < t ≤ BUZZER_MAX_MS` é o firmware, e o `push.ack REJEITADO` é a informação que chega ao servidor.
 - A ponte não toma decisões: decifra, valida, traduz, escreve.
 
 ---
@@ -593,8 +594,10 @@ Arquivos produzidos em `dataUsers/`: `usuario_<id>.jsonl` (agregado), `confirmac
 | Alvo | Como | Observação |
 | --- | --- | --- |
 | Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização e queda ponta a ponta). Usa segredo próprio, sem threads de fundo, e grava contas, sessões e `dataUsers/` em pasta temporária: não toca nos dados reais. |
-| Ponte | `WokwiBridge/tests/fake_firmware.py` | Substitui a serial por um firmware falso (impacto, `push.ack`, `ESTOU_BEM`). Exige servidor no ar e `FLOW_BRIDGE_DEVICE=esp32-falso`. Não é pytest. |
+| Ponte | `cd WokwiBridge && python -m pytest` (`pytest.ini`) | `tests/test_bridge.py`: tradução e validação das mensagens de push, roteamento das linhas da serial, parser SSE e renovação de sessão. Sem rede e sem serial. |
+| Ponte, ponta a ponta | `WokwiBridge/tests/fake_firmware.py` | Substitui a serial por um firmware falso (impacto, `push.ack`, `ESTOU_BEM`). Exige servidor no ar e `FLOW_BRIDGE_DEVICE=esp32-falso`. Não é pytest. |
 | Firmware | `sketch/host_test/` | Lógica do firmware no PC, com um Arduino falso; opcional. |
+| App | `SensorApp/app/src/test/` | Testes de unidade na JVM da validação das mensagens de push (`validarPush`). O restante do app (sensores, som, rede) não tem teste automatizado. |
 | Fim a fim sem hardware | `SensorServer/simular_queda.py` | Dispara o ciclo completo contra um servidor real. |
 
 O cooldown de 60 s entre episódios vale para os testes manuais: para repetir `simular_queda.py` ou `fake_firmware.py`, reinicie o servidor ou aguarde.

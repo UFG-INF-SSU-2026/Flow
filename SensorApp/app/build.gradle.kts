@@ -44,4 +44,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Marco 3: SSE (canal de push servidor -> app). MESMA versao do okhttp acima.
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
+
+    // Testes de unidade (JVM): validarPush. O org.json do Android nao existe na JVM, entao vem a implementacao de referencia.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
