@@ -10,10 +10,12 @@ Gateway bidirecional entre a simulacao Wokwi (VS Code) e o servidor (Marco 3).
 
 O bridge NAO decide nada: decifra, valida, traduz, escreve.
 
-Configuracao por variaveis de ambiente (nada de editar este arquivo):
+Configuracao (nada de editar este arquivo): WokwiBridge/.env (modelo: .env.example) ou variaveis de ambiente.
+Variavel de ambiente ja definida no terminal VENCE o arquivo. Chaves:
   FLOW_BRIDGE_ID      conta do bridge (papel 'dispositivo')          [obrigatoria]
   FLOW_BRIDGE_SECRET  senha da conta                                   [obrigatoria]
-  FLOW_SERVIDOR       URL base do servidor (padrao http://localhost:5000)
+  FLOW_SERVIDOR       URL base do servidor (padrao http://127.0.0.1:5000; evite 'localhost' no Windows: tenta IPv6
+                      primeiro e cada conexao nova espera ~1-2 s)
   FLOW_BRIDGE_DEVICE  deviceId do firmware que este bridge repassa (padrao esp32-decisao-imobilidade-01,
                       o DEVICE_ID de sketch.ino). O servidor exige que seja igual ao deviceId dos eventos.
 
@@ -34,11 +36,28 @@ import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 import serial
+from dotenv import load_dotenv
 
 from crypto_utils import decrypt_payload, encrypt_payload
+
+
+def _carregar_dotenv(caminho: Path) -> bool:
+    """Carrega `caminho` (um .env) para os.environ SEM sobrescrever o que ja esta definido: variavel de ambiente do
+    terminal vence o arquivo. Retorna True se o arquivo foi lido; arquivo ausente nao e erro.
+
+    utf-8-sig tolera BOM (Bloco de Notas); interpolate=False deixa `$` literal na senha; FLOW_SEM_DOTENV=1 desliga
+    a leitura (usado pelos testes)."""
+    if os.environ.get("FLOW_SEM_DOTENV") == "1" or not caminho.is_file():
+        return False
+    return load_dotenv(caminho, override=False, interpolate=False, encoding="utf-8-sig")
+
+
+DOTENV_ARQUIVO = Path(__file__).resolve().with_name(".env")
+DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO)   # antes de ler as variaveis logo abaixo
 
 # --- Configuracoes ----------------------------------------------------------
 RFC2217_URL = "rfc2217://localhost:4000"
@@ -64,7 +83,7 @@ MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9-]{1,39}")
 
 
 def log(msg: str) -> None:
-    print(f"[bridge {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+    print(f"[bridge] {msg}", flush=True)
 
 
 def _cifrar(obj: dict) -> dict:
@@ -353,7 +372,11 @@ def laco_push(sessao: Sessao, holder: SerialHolder) -> None:
 # ----------------------------------- main -----------------------------------
 def main(abrir_serial=conectar_serial) -> None:
     if not BRIDGE_ID or not BRIDGE_SECRET:
-        sys.exit("Defina FLOW_BRIDGE_ID e FLOW_BRIDGE_SECRET (ver INSTRUCOES.md).")
+        sys.exit("Defina FLOW_BRIDGE_ID e FLOW_BRIDGE_SECRET em WokwiBridge/.env (modelo: .env.example) "
+                 "ou no ambiente (ver INSTRUCOES.md).")
+    log(f"Configuracao (.env): {DOTENV_ARQUIVO} "
+        + ("carregado" if DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente"))
+    log(f"Servidor: {SERVIDOR} | conta: {BRIDGE_ID} | deviceId: {BRIDGE_DEVICE}")
     sessao = Sessao()
     while True:
         try:

@@ -16,7 +16,7 @@
     { "type": "wokwi-led", "id": "ledSuspeita", "top": -280, "left": 460, "attrs": { "color": "yellow", "label": "Suspeita" } },
     { "type": "wokwi-led", "id": "ledAlerta",   "top": -180, "left": 460, "attrs": { "color": "red",    "label": "Alerta"   } },
 
-    { "type": "wokwi-buzzer", "id": "buzzer1", "top": -60, "left": 460, "attrs": { "volume": "0.5" } }
+    { "type": "wokwi-buzzer", "id": "buzzer1", "top": -60, "left": 460, "attrs": { "volume": "0.1" } }
   ],
   "connections": [
     ["esp:TX0", "$serialMonitor:RX", "", []],

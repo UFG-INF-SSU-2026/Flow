@@ -7,11 +7,13 @@ Este projeto une um app Android, uma simulação Wokwi (ESP32 + acelerômetro + 
 ```dir
 Flow/
 ├── SensorServer/       # servidor central (Flask): autenticação, autorização, análise e push
+│   ├── .env.example    # modelo da configuração do servidor (copie para .env)
 │   ├── tests/          # suíte pytest do servidor (unit/ e integration/)
 │   └── simular_queda.py  # simula uma queda sem Wokwi nem celular
 ├── SensorApp/          # app Android (Kotlin): telemetria + recebe o pedido de confirmação
 │   └── app/src/test/   # testes de unidade (JVM) da validação das mensagens de push
 ├── WokwiBridge/        # ponte Python bidirecional entre a simulação Wokwi e o servidor
+│   ├── .env.example    # modelo da configuração do bridge (copie para .env)
 │   └── tests/          # test_bridge.py (pytest) e fake_firmware.py (testa a ponte sem Wokwi)
 ├── sketch/             # projeto Wokwi (ESP32 + MPU6050 + buzzer), simulado no VS Code
 │   └── host_test/      # teste opcional da lógica do firmware no PC
@@ -37,25 +39,40 @@ Flow/
 | Android Studio | gerar o APK, ou usar o APK das releases |
 | Computador e celular na **mesma rede Wi-Fi** | o celular acessa o IP do computador |
 
-## 0. Segredo e contas (uma vez)
+## 0. Configuração (`.env`), segredo e contas (uma vez)
 
-O servidor **não sobe** sem o segredo de assinatura dos tokens. Gere um e exporte antes de iniciar o servidor:
+A configuração do servidor e a do bridge ficam em arquivos **`.env`**, um em cada pasta (nada de redefinir variáveis em cada terminal). Cada pasta traz um modelo, o `.env.example`; copie-o para `.env` e preencha:
+
+```powershell
+# Windows (PowerShell)
+Copy-Item SensorServer\.env.example SensorServer\.env
+Copy-Item WokwiBridge\.env.example WokwiBridge\.env
+```
+
+```bash
+# Linux/macOS
+cp SensorServer/.env.example SensorServer/.env
+cp WokwiBridge/.env.example WokwiBridge/.env
+```
+
+Regras:
+
+- Os `.env` **não vão para o Git** (só os `.env.example`, sem segredos).
+- Uma variável de ambiente já definida no terminal **vence** o arquivo (útil para um teste pontual, como `FLOW_BRIDGE_DEVICE=esp32-falso`).
+- Valores com espaço ou `#` (uma senha, por exemplo) vão entre aspas: `FLOW_BRIDGE_SECRET="minha#senha"`. O `$` é literal.
+- Arquivo ausente não é erro: nesse caso valem só as variáveis de ambiente. Ao subir, o servidor e o bridge informam se leram o `.env`.
+
+**Servidor.** O servidor **não sobe** sem o segredo de assinatura dos tokens. Gere um e coloque em `SensorServer/.env`:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Linux/macOS:
-
-```bash
-export FLOW_JWT_SECRET="<valor gerado>"
+```ini
+FLOW_JWT_SECRET=<valor gerado>
 ```
 
-Windows (PowerShell):
-
-```powershell
-$env:FLOW_JWT_SECRET="<valor gerado>"
-```
+(Sem `.env`, é possível exportar `FLOW_JWT_SECRET` no terminal, como antes.)
 
 Crie as duas contas do protótipo (a senha é pedida no terminal). Ambas apontam para a **mesma pessoa** (`--user-id 1`), e é isso que faz o servidor juntar app e wokwi:
 
@@ -68,13 +85,13 @@ python auth.py criar-conta --id bridge1 --papel dispositivo --user-id 1 --fontes
 
 > O ID do usuário **não é mais digitado** no app nem no bridge: ele vem da conta. Para simular outra pessoa, crie outro par de contas com outro `--user-id`.
 >
-> Para criar contas sem o prompt de senha (scripts), defina `FLOW_SENHA` no ambiente antes de rodar o comando.
+> Para criar contas sem o prompt de senha (scripts), defina `FLOW_SENHA` no ambiente antes de rodar o comando. A senha das contas **não** fica no `.env` do servidor.
 
 Os arquivos `contas.json` e `sessoes.json` são criados em `SensorServer/` e não vão para o Git.
 
 ## 1. Servidor (`SensorServer/`)
 
-Com `FLOW_JWT_SECRET` definido no mesmo terminal:
+Com `FLOW_JWT_SECRET` no `SensorServer/.env` (ou definido no mesmo terminal):
 
 ```bash
 cd SensorServer
@@ -105,32 +122,34 @@ cd WokwiBridge
 pip install -r requirements.txt
 ```
 
-O bridge lê a configuração de variáveis de ambiente (nada de editar o `bridge.py`):
+O bridge lê a configuração do `WokwiBridge/.env` (nada de editar o `bridge.py`):
 
-| Variável | Valor | Padrão |
+| Chave | Valor | Padrão |
 | --- | --- | --- |
 | `FLOW_BRIDGE_ID` | `bridge1` | — (obrigatória) |
 | `FLOW_BRIDGE_SECRET` | senha da conta `bridge1` | — (obrigatória) |
-| `FLOW_SERVIDOR` | URL base do servidor | `http://localhost:5000` |
+| `FLOW_SERVIDOR` | URL base do servidor | `http://127.0.0.1:5000` |
 | `FLOW_BRIDGE_DEVICE` | `deviceId` do firmware que o bridge repassa | `esp32-decisao-imobilidade-01` (o `DEVICE_ID` de `sketch.ino`) |
 
 O servidor exige que o `deviceId` dos eventos seja o mesmo informado no login do bridge (`403` se diferir). Só é preciso definir `FLOW_BRIDGE_DEVICE` se você mudar o `DEVICE_ID` do firmware.
 
-Linux/macOS:
+> No Windows, prefira `127.0.0.1` a `localhost` em `FLOW_SERVIDOR`: o `localhost` tenta IPv6 primeiro e cada conexão nova do bridge espera 1-2 s, o que atrasa a telemetria e as respostas ao servidor (o pedido de confirmação pode expirar antes de a resposta chegar).
+
+Exemplo de `WokwiBridge/.env`:
+
+```ini
+FLOW_BRIDGE_ID=bridge1
+FLOW_BRIDGE_SECRET=<senha da conta bridge1>
+FLOW_SERVIDOR=http://127.0.0.1:5000
+```
+
+Depois é só rodar:
 
 ```bash
-export FLOW_BRIDGE_ID=bridge1
-export FLOW_BRIDGE_SECRET="<senha da conta bridge1>"
 python bridge.py
 ```
 
-Windows (PowerShell):
-
-```powershell
-$env:FLOW_BRIDGE_ID="bridge1"
-$env:FLOW_BRIDGE_SECRET="<senha da conta bridge1>"
-python bridge.py
-```
+(Sem `.env`, as mesmas chaves podem ser definidas no terminal, como antes: `export FLOW_BRIDGE_ID=bridge1` no Linux/macOS, ou `$env:FLOW_BRIDGE_ID='bridge1'` no PowerShell, com aspas simples.)
 
 O bridge faz login, abre o canal de push do servidor, repassa a telemetria da simulação e escreve na serial os comandos do buzzer. Se a simulação ainda não estiver de pé, ele fica tentando reconectar.
 
@@ -157,7 +176,7 @@ pip install -r requirements.txt   # inclui o pytest
 python -m pytest
 ```
 
-A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados) e `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo e ciclo de queda ponta a ponta). Ela é independente do seu ambiente: define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`) e grava contas, sessões e `dataUsers/` numa pasta temporária, então **não usa nem altera** o seu `contas.json` real.
+A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados) e `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo e ciclo de queda ponta a ponta). Ela é independente do seu ambiente: **não lê o seu `.env`** (`FLOW_SEM_DOTENV=1`), define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`) e grava contas, sessões e `dataUsers/` numa pasta temporária, então **não usa nem altera** o seu `contas.json` real.
 
 ### Bridge (pytest)
 
@@ -167,7 +186,7 @@ pip install -r requirements.txt   # inclui o pytest
 python -m pytest
 ```
 
-A configuração está em `WokwiBridge/pytest.ini`. Os testes não usam rede nem serial: cobrem a validação e a tradução das mensagens de push, o roteamento das linhas que vêm do firmware, o leitor SSE e a renovação de sessão. O `tests/fake_firmware.py` (abaixo) não é coletado pelo pytest.
+A configuração está em `WokwiBridge/pytest.ini`. Os testes não usam rede nem serial, e não leem o seu `.env`: cobrem a validação e a tradução das mensagens de push, o roteamento das linhas que vêm do firmware, o leitor SSE e a renovação de sessão. O `tests/fake_firmware.py` (abaixo) não é coletado pelo pytest.
 
 ### App Android (JVM)
 
@@ -177,8 +196,8 @@ Os testes de `SensorApp/app/src/test/` (validação da forma das mensagens de pu
 
 | O quê | Como | Para que serve |
 | --- | --- | --- |
-| `SensorServer/simular_queda.py` | com o servidor rodando: `FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python simular_queda.py [URL_BASE]` | Simula um wokwi que sofre impacto e fica imóvel; o pedido de confirmação chega ao app e/ou ao bridge conectados, sem Wokwi. |
-| `WokwiBridge/tests/fake_firmware.py` | na pasta `WokwiBridge`, com servidor e conta do bridge, `FLOW_BRIDGE_DEVICE=esp32-falso` e as variáveis do bridge: `python tests/fake_firmware.py` | Substitui a serial por um "firmware falso" e confere o que o bridge escreve. O `FLOW_BRIDGE_DEVICE` precisa ser o `deviceId` que o firmware falso usa (`esp32-falso`). |
+| `SensorServer/simular_queda.py` | com o servidor rodando: `FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python simular_queda.py [URL_BASE]` (ainda lê essas duas do terminal; não usa o `.env` do bridge) | Simula um wokwi que sofre impacto e fica imóvel; o pedido de confirmação chega ao app e/ou ao bridge conectados, sem Wokwi. |
+| `WokwiBridge/tests/fake_firmware.py` | na pasta `WokwiBridge`, com servidor e conta do bridge, o `WokwiBridge/.env` preenchido e `FLOW_BRIDGE_DEVICE=esp32-falso` (variável do terminal, que vence o `.env`): `python tests/fake_firmware.py` | Substitui a serial por um "firmware falso" e confere o que o bridge escreve. O `FLOW_BRIDGE_DEVICE` precisa ser o `deviceId` que o firmware falso usa (`esp32-falso`). |
 | `sketch/host_test/` | ver `sketch/host_test/README.md` | Roda a lógica do firmware no PC (inclui o buzzer e a idempotência do `BUZZER_ON`). |
 
 O servidor mantém um **cooldown de 60 s** entre episódios do mesmo usuário (`COOLDOWN_S`): para repetir `simular_queda.py` ou `fake_firmware.py` em seguida, reinicie o servidor ou aguarde.
@@ -243,8 +262,9 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 
 | Sintoma | Causa provável |
 | --- | --- |
-| Servidor não sobe e reclama de segredo | `FLOW_JWT_SECRET` não definido **no terminal em que o servidor foi iniciado** |
-| App ou bridge recebem `401` no login | usuário ou senha errados; após várias falhas há bloqueio temporário (`429`) |
+| Servidor não sobe e reclama de segredo | `FLOW_JWT_SECRET` ausente (ou com menos de 32 bytes) em `SensorServer/.env`, e não definido no terminal em que o servidor foi iniciado. Ao subir, o servidor mostra se leu o `.env` |
+| App ou bridge recebem `401` no login | usuário ou senha errados (no bridge: `FLOW_BRIDGE_SECRET` do `.env`, ou uma variável do terminal que sobrepõe o arquivo); após várias falhas há bloqueio temporário (`429`) |
+| Bridge lento: eventos atrasados, pedido de confirmação `EXPIRADO` antes do ack | `FLOW_SERVIDOR` usando `localhost` no Windows (IPv6 primeiro); use `http://127.0.0.1:5000` |
 | `403` em `/dados` ou `/eventos` | a conta não tem a permissão ou a fonte da rota (app usa conta `idoso`, bridge usa conta `dispositivo`); ou o `deviceId` dos eventos difere do `FLOW_BRIDGE_DEVICE` usado no login do bridge |
 | `413` | corpo da requisição acima de `MAX_CONTENT_LENGTH` (64 KiB); o servidor não processa o conteúdo |
 | Pedido de confirmação não abre de novo logo após um teste | cooldown de 60 s entre episódios; reinicie o servidor ou aguarde |

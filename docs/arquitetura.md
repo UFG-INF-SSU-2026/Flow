@@ -555,7 +555,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 - **Autenticação** por conta (senha com scrypt, tokens de curta duração, refresh rotativo, bloqueio por tentativas).
 - **Autorização** negando por padrão, em dois estágios, com a identidade vinda do token e nunca do que o cliente declara.
 - **Auditoria** de negações.
-- **Segredos fora do repositório:** `FLOW_JWT_SECRET` por variável de ambiente; `contas.json` e `sessoes.json` ignorados pelo Git; sem o segredo o servidor não sobe.
+- **Segredos fora do repositório:** `FLOW_JWT_SECRET` em `SensorServer/.env` (fora do Git) ou variável de ambiente; `contas.json` e `sessoes.json` ignorados pelo Git; sem o segredo o servidor não sobe.
 
 ### 13.2 Limitações assumidas (projeto acadêmico)
 
@@ -575,11 +575,12 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 
 | Item | Onde | Observação |
 | --- | --- | --- |
-| `FLOW_JWT_SECRET` | ambiente do servidor | Obrigatório; ≥ 32 bytes. |
-| `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | ambiente do servidor | Opcionais; padrão `contas.json`, `sessoes.json`. |
-| `FLOW_SEM_THREADS` | ambiente do servidor | `1` desliga as threads de flush e vigia (e a exigência do segredo na subida); usado pela suíte de testes. |
+| `FLOW_JWT_SECRET` | `SensorServer/.env` ou ambiente | Obrigatório; ≥ 32 bytes. |
+| `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | `SensorServer/.env` ou ambiente | Opcionais; padrão `contas.json`, `sessoes.json`. |
+| `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de flush e vigia (e a exigência do segredo na subida); usado pela suíte de testes. |
 | `FLOW_SENHA` | ambiente da CLI `auth.py` | Opcional; senha sem prompt ao criar contas. |
-| `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_BRIDGE_DEVICE` | ambiente do bridge | Os dois primeiros são obrigatórios. `FLOW_BRIDGE_DEVICE` (padrão: o `DEVICE_ID` de `sketch.ino`) é registrado no login e deve ser igual ao `deviceId` dos eventos do firmware (`403` se diferir, 4.3). |
+| `FLOW_SEM_DOTENV` | ambiente (testes) | `1` impede a leitura dos `.env` reais; a suíte do servidor e a do bridge o definem. Variável de ambiente já definida sempre vence o `.env`. |
+| `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_BRIDGE_DEVICE` | `WokwiBridge/.env` ou ambiente | Os dois primeiros são obrigatórios. `FLOW_BRIDGE_DEVICE` (padrão: o `DEVICE_ID` de `sketch.ino`) é registrado no login e deve ser igual ao `deviceId` dos eventos do firmware (`403` se diferir, 4.3). |
 | Usuário e senha, IP e porta | tela "Configurações" do app | |
 | Timeout do botão, limiares, cooldown, fusão de fontes, retenções | `SensorServer/const.py` | Sem recompilar app nem firmware. |
 | Porta, pasta de dados, limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, rotação da auditoria, fila do SSE, versão atual do contrato | `SensorServer/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
