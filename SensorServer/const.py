@@ -3,6 +3,8 @@ Constantes do SensorServer (fonte unica de configuracao).
 
 Regras de uso:
   - Este modulo NAO importa nada do projeto (e um modulo folha).
+  - Ao ser importado, carrega SensorServer/.env (ao lado deste arquivo) para o ambiente do processo; variavel
+    de ambiente ja definida no terminal VENCE o arquivo. Ver .env.example e _carregar_dotenv().
   - Os demais modulos fazem `import const` e leem `const.X` NA HORA DO USO
     (nunca `from const import X`), para que um unico ajuste em `const.X` valha
     para todos os pontos de uso, inclusive em testes.
@@ -13,6 +15,26 @@ Regras de uso:
     EVENTOS_RETORNO, tipos de mensagem) ficam nos modulos que os usam.
 """
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+def _carregar_dotenv(caminho: Path) -> bool:
+    """Carrega `caminho` (um .env) para os.environ SEM sobrescrever o que ja esta definido: variavel de ambiente do
+    terminal vence o arquivo. Retorna True se o arquivo foi lido; arquivo ausente nao e erro (o ambiente pode bastar).
+
+    - utf-8-sig: um .env salvo com BOM (Bloco de Notas do Windows) nao estraga o nome da primeira chave;
+    - interpolate=False: `$` e `${...}` num segredo ou senha ficam literais;
+    - FLOW_SEM_DOTENV=1 desliga a leitura (usado pela suite de testes, para nao ler o .env real).
+    """
+    if os.environ.get("FLOW_SEM_DOTENV") == "1" or not caminho.is_file():
+        return False
+    return load_dotenv(caminho, override=False, interpolate=False, encoding="utf-8-sig")
+
+
+DOTENV_ARQUIVO = Path(__file__).resolve().with_name(".env")
+DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO)
 
 # ===========================================================================
 # 1. SERVIDOR E AGREGACAO
@@ -155,7 +177,7 @@ GRAVIDADE = 9.81
 
 # FONTE UNICA do tempo (s) que o idoso tem para apertar "Estou bem". Vai na
 # mensagem como timeoutMs; os dispositivos nao tem constante propria.
-TIMEOUT_CONFIRMACAO_S = 20
+TIMEOUT_CONFIRMACAO_S = 5
 
 # Folga (s) entre o prazo do dispositivo e o prazo do servidor. Prazo do
 # episodio E expiresAt da mensagem = TIMEOUT_CONFIRMACAO_S + esta margem.

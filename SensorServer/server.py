@@ -621,6 +621,8 @@ if os.environ.get("FLOW_SEM_THREADS") != "1":
 
 if __name__ == "__main__":
     print(f"Servidor iniciando na porta {const.PORT}...")
+    print(f"Configuracao (.env): {const.DOTENV_ARQUIVO} " + ("carregado" if const.DOTENV_CARREGADO
+          else "nao encontrado; usando so as variaveis de ambiente"))
     print(f"Salvando dados recebidos em: {os.path.abspath(const.DATA_DIR)} (1 arquivo .jsonl por usuario)")
     print(f"Janela de agregacao app+wokwi: {const.JANELA_AGREGACAO_S}s")
     print("Transporte: AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")

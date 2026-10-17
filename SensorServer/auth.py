@@ -66,8 +66,8 @@ def _segredo() -> str:
     s = os.environ.get("FLOW_JWT_SECRET", "")
     if len(s.encode()) < 32:
         raise RuntimeError(
-            "FLOW_JWT_SECRET ausente ou com menos de 32 bytes. "
-            "Gere um com: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            "FLOW_JWT_SECRET ausente ou com menos de 32 bytes. Defina em SensorServer/.env "
+            "(modelo: .env.example) ou no ambiente. Gere um com: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
         )
     return s
 

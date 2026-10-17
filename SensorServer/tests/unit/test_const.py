@@ -115,7 +115,9 @@ class TestFonteUnica:
         arvore = _arvore("const")
         importados = {a.name for n in ast.walk(arvore) if isinstance(n, ast.Import) for a in n.names}
         importados |= {n.module for n in ast.walk(arvore) if isinstance(n, ast.ImportFrom)}
-        assert importados <= {"os"}, importados
+        # Folha = nao importa NENHUM modulo do projeto. pathlib e python-dotenv entram para carregar o .env na
+        # importacao (as constantes de caminho leem o ambiente ao serem definidas).
+        assert importados <= {"os", "pathlib", "dotenv"}, importados
 
 
 class TestRelacoesEntreConstantes:

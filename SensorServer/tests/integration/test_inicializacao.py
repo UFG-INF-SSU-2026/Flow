@@ -18,6 +18,7 @@ _SONDA = (
 def _rodar(args, tmp_path, **extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith("FLOW_")}
     env.update({
+        "FLOW_SEM_DOTENV": "1",   # o .env real de SensorServer/ nao pode dar segredo aos testes "sem segredo"
         "FLOW_CONTAS_PATH": str(tmp_path / "contas.json"),
         "FLOW_SESSOES_PATH": str(tmp_path / "sessoes.json"),
         "PYTHONPATH": RAIZ,
