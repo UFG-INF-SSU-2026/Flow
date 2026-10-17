@@ -478,7 +478,7 @@ A escolha vem de uma pergunta: **o que o servidor precisa dizer ao dispositivo, 
 **O que se aceita ao escolher SSE** (e por que não pesa aqui):
 
 - **Só um sentido.** Não pesa porque o retorno é pontual e já passa por `POST`; o desenho até se beneficia de um retorno que não depende de a conexão de push estar viva no instante da resposta.
-- **Uma conexão HTTP aberta por cliente**, e no Flask de desenvolvimento uma thread por stream. Não pesa na escala de uma residência (um app e um bridge por pessoa); é uma limitação já registrada em 13.2.
+- **Uma conexão HTTP aberta por cliente**, e no Flask de desenvolvimento uma thread por stream. Não pesa na escala de uma residência.
 - **Keepalive e reconexão manuais.** São poucas linhas em cada cliente e ficam documentadas e testadas.
 - **Sem binário.** O sistema trafega JSON cifrado em base64, que é texto.
 
@@ -567,7 +567,6 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 - **App só em primeiro plano:** o pedido de confirmação não chega com a tela bloqueada ou o app em segundo plano. Produção: Foreground Service e/ou FCM no `canal_app.py`, sem mudar o contrato.
 - **Tokens no aparelho** em `SharedPreferences` privado; produção: Android Keystore.
 - **Detecção de queda** por limiares iniciais, sem validação com dados reais.
-- **Estado em memória** (regras, episódios, hub): atende uma residência.
 
 ---
 
