@@ -35,6 +35,11 @@ Por padrão o servidor grava o banco **e** os arquivos de hoje. `FLOW_GRAVAR_ARQ
 (`const.MAX_FILA_LEITURAS`) e são gravadas em lote pela thread de descarga; se o banco cair, o servidor segue
 aceitando dados e as mais antigas saem ao estourar o teto.
 
+## Leitura da análise: lacunas de id e ciclo atômico
+
+- **Lacunas de id** (`flow_db/_lacunas.py`): colunas `IDENTITY` reservam o id no `INSERT`, não no `COMMIT`; por isso pode haver commit fora de ordem e buracos permanentes (`ROLLBACK`). A análise deve ler com `ler_leituras_seguras` / `ler_respostas_seguras` / `ler_entregas_seguras` (e não com `*_novas`): um buraco cuja linha seguinte tem menos de `config.ESPERA_LACUNA_S` (2 s) faz a leitura parar antes dele; passado o prazo o buraco é tratado como permanente e somado em `cursor_analise.metricas.lacunas_ignoradas`. Com `instante_minimo`, linhas antigas filtradas também aparecem como buraco (só atrasam até o prazo e entram na contagem).
+- **Ciclo** (`flow_db/ciclo_analise.py`): `processar_lote(repo, processar)` lê o lote, chama `processar(tx, linhas)` e avança o cursor numa única transação. Exceção em `processar` desfaz saídas e cursor; o lote é reprocessado (at-least-once), então `processar` deve ser idempotente por `episodio_id`/`message_id`. Sem leituras novas, só renova o batimento.
+
 ## Testes
 
 - `pytest` — padrão. Usa o banco falso em memória (`FLOW_DB_FAKE=1`); não precisa de Docker.
