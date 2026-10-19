@@ -320,9 +320,22 @@ def _podar_mensagens(agora: float) -> None:
 
 
 # ------------------------------- armazenamento -----------------------------
+# Ouvinte opcional de cada registro (server.py instala o que leva o registro ao banco). regra_queda continua sem
+# conhecer banco: so avisa "registrei isto". Uma falha do ouvinte nunca impede nem desfaz o registro em arquivo.
+OUVINTE_REGISTRO = None
+
+
 def registrar(user_id: int, tipo: str, dados: dict) -> None:
-    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl. E tudo que o servidor faz com a resposta."""
-    os.makedirs(const.DATA_DIR, exist_ok=True)
+    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (enquanto const.GRAVAR_ARQUIVOS) e o aviso ao ouvinte
+    (banco). E tudo que o servidor faz com a resposta."""
     linha = {"timestamp": datetime.now(timezone.utc).isoformat(), "tipo": tipo, **dados}
-    with _lock, open(os.path.join(const.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+    if const.GRAVAR_ARQUIVOS:
+        os.makedirs(const.DATA_DIR, exist_ok=True)
+        with _lock, open(os.path.join(const.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+    ouvinte = OUVINTE_REGISTRO     # chamado FORA do _lock: o ouvinte pode demorar (banco)
+    if ouvinte is not None:
+        try:
+            ouvinte(user_id, tipo, linha)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [registrar] falha no ouvinte (ignorada) tipo={tipo} user={user_id}: {type(e).__name__}: {str(e)[:200]}")

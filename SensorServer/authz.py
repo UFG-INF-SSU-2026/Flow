@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from flask import g, jsonify, request
 
 import auth
-import const   # DATA_DIR (e AUDITORIA_MAX_BYTES)
+import const
+import repositorios   # DATA_DIR (e AUDITORIA_MAX_BYTES)
 
 POLITICA: dict[str, set[str]] = {
     "idoso":       {"dados:enviar", "eventos:enviar", "push:receber"},
@@ -30,10 +31,16 @@ _auditoria_lock = threading.Lock()   # Flask roda com uma thread por requisicao:
 
 
 def auditar(rota: str, status: int, codigo: str, conta: str | None = None) -> None:
-    """Registra negacoes (401/403). Nunca grava o conteudo da requisicao."""
-    os.makedirs(const.DATA_DIR, exist_ok=True)
+    """Registra negacoes (401/403). Nunca grava o conteudo da requisicao.
+    Vai ao banco (borda) e, enquanto const.GRAVAR_ARQUIVOS, tambem ao auditoria.jsonl."""
     linha = {"timestamp": datetime.now(timezone.utc).isoformat(), "rota": rota,
              "status": status, "motivo": codigo, "conta": conta, "ip": request.remote_addr}
+    repositorios.tentar_borda("auditoria", lambda b: b.gravar_auditoria({
+        "instante": datetime.fromisoformat(linha["timestamp"]), "rota": rota, "status": status,
+        "motivo": codigo, "conta": conta, "ip": linha["ip"]}))
+    if not const.GRAVAR_ARQUIVOS:
+        return
+    os.makedirs(const.DATA_DIR, exist_ok=True)
     caminho = os.path.join(const.DATA_DIR, "auditoria.jsonl")
     with _auditoria_lock:
         # Rotacao por tamanho: o estagio 1 roda antes de decifrar, entao quem esta na rede pode gerar negacoes
