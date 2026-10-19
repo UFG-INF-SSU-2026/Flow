@@ -1,0 +1,49 @@
+# Banco do SensorServer (PostgreSQL + TimescaleDB). SO o servidor conversa com ele.
+#
+#   Subir:      docker compose up -d
+#   Ver estado: docker compose ps          (aguarde "healthy")
+#   Logs:       docker compose logs -f db
+#   Console:    docker compose exec db psql -U $FLOW_DB_USER -d $FLOW_DB_NAME
+#   Parar:      docker compose down        (os dados ficam no volume)
+#   APAGAR TUDO (dados inclusive): docker compose down -v
+#
+# As variaveis FLOW_DB_* vem do arquivo ".env" desta pasta (o mesmo do servidor; ver .env.example).
+# ATENCAO: usuario, senha e nome do banco so valem na PRIMEIRA subida (volume vazio). Mudar o .env depois
+# nao altera o banco ja criado; para recomecar do zero, use "down -v".
+
+name: flow
+
+services:
+  db:
+    # Imagem oficial com a extensao TimescaleDB ja instalada e habilitada no banco criado.
+    # A versao MAIOR do Postgres (17) fica fixa: trocar exige dump/restore do volume.
+    image: timescale/timescaledb:latest-pg17
+    container_name: flow-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${FLOW_DB_USER:-flow}
+      POSTGRES_PASSWORD: ${FLOW_DB_PASSWORD:?defina FLOW_DB_PASSWORD no .env}
+      POSTGRES_DB: ${FLOW_DB_NAME:-flow}
+
+    # Sem telemetria de uso para a Timescale (os dados sao de saude/rotina de uma pessoa).
+    command: ["postgres", "-c", "timescaledb.telemetry_level=off"]
+
+    # Publicada SO no loopback: o servidor (rodando no host) alcanca em localhost:FLOW_DB_PORT, e nada
+    # da rede local alcanca o banco. NAO remova o "127.0.0.1:" (sem ele a porta abre para toda a rede).
+    ports:
+      - "127.0.0.1:${FLOW_DB_PORT:-5432}:5432"
+
+    volumes:
+      - flow_db_data:/var/lib/postgresql/data
+
+    # O servidor deve esperar este estado antes de conectar (o container "sobe" antes de aceitar conexoes).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  flow_db_data:
