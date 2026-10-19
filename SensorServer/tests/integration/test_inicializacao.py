@@ -22,6 +22,7 @@ def _rodar(args, tmp_path, **extra):
         "FLOW_CONTAS_PATH": str(tmp_path / "contas.json"),
         "FLOW_SESSOES_PATH": str(tmp_path / "sessoes.json"),
         "PYTHONPATH": RAIZ,
+        "FLOW_DB_FAKE": "1",      # sem Docker: banco falso (o teste abaixo, de banco ausente, sobrescreve)
     })
     env.update(extra)
     # cwd = tmp_path: server.py cria const.DATA_DIR relativo ao diretorio atual
@@ -58,3 +59,12 @@ def test_flask_cli_sem_segredo_recusa(tmp_path):
     r = _rodar(["-m", "flask", "--app", "server", "routes"], tmp_path)
     assert r.returncode != 0
     assert "FLOW_JWT_SECRET" in r.stderr
+
+
+def test_import_sem_banco_recusa_com_mensagem_clara(tmp_path):
+    """Com o segredo mas sem banco no ar (porta fechada), a subida falha explicando o que fazer, sem vazar senha."""
+    r = _rodar(["-c", _SONDA], tmp_path, FLOW_JWT_SECRET=SEGREDO, FLOW_DB_FAKE="0", FLOW_DB_PORT="1",
+               FLOW_DB_BORDA_PASSWORD="b" * 20, FLOW_DB_ANALISE_PASSWORD="a" * 20)
+    assert r.returncode != 0
+    assert "banco" in r.stderr.lower()
+    assert "b" * 20 not in r.stderr and "a" * 20 not in r.stderr

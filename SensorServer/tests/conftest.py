@@ -24,6 +24,7 @@ _TMP = tempfile.mkdtemp(prefix="flow_tests_")
 os.environ["FLOW_SEM_DOTENV"] = "1"    # os testes nunca leem o SensorServer/.env real
 os.environ["FLOW_JWT_SECRET"] = SEGREDO
 os.environ["FLOW_SEM_THREADS"] = "1"   # importar server nao sobe flush nem vigia
+os.environ["FLOW_DB_FAKE"] = "1"       # banco falso em memoria: os testes nunca falam com PostgreSQL (so tests/banco)
 os.environ["FLOW_CONTAS_PATH"] = os.path.join(_TMP, "contas.json")
 os.environ["FLOW_SESSOES_PATH"] = os.path.join(_TMP, "sessoes.json")
 
@@ -49,6 +50,7 @@ import mensagens  # noqa: E402
 import regra_imobilidade  # noqa: E402
 import regra_luz  # noqa: E402
 import regra_queda  # noqa: E402
+import repositorios  # noqa: E402
 import server  # noqa: E402
 from sse_hub import HUB  # noqa: E402
 
@@ -60,6 +62,10 @@ def _limpar_estado() -> None:
               regra_luz._estados, server._buffer):
         d.clear()
     server._registros_recentes.clear()
+    server._fila_leituras.clear()
+    server._estado_gravado.clear()
+    server._descartes_leituras = 0
+    repositorios.usar_fake()      # banco falso novo (vazio) a cada teste
     HUB._conns.clear()
     HUB._anel.clear()
     HUB._contador.clear()
@@ -77,6 +83,13 @@ def ambiente(tmp_path, monkeypatch):
     _limpar_estado()
     yield
     _limpar_estado()
+
+
+@pytest.fixture
+def banco():
+    """O BancoFalso do teste atual (borda e analise enxergam o mesmo). Use .borda()/.analise() para ler pelos repositorios
+    ou .tabelas[...] para inspecionar."""
+    return repositorios.banco_falso()
 
 
 @pytest.fixture
