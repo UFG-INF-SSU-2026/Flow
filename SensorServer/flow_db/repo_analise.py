@@ -8,7 +8,10 @@ Escreve: comandos_push, alertas, confirmacoes, episodios, estado_dispositivo, cu
 """
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
-from datetime import datetime
+from datetime import datetime, timezone
+
+from . import config
+from ._lacunas import aplicar_regra_lacunas
 
 
 class RepoAnalise(ABC):
@@ -26,6 +29,31 @@ class RepoAnalise(ABC):
     def ler_entregas_novas(self, depois_de_id: int, instante_minimo: datetime | None = None,
                            limite: int = 500) -> list[dict]:
         ...
+
+    def _agora(self) -> datetime:
+        """Relogio da regra de lacunas (o banco falso sobrescreve com o proprio relogio injetavel)."""
+        return datetime.now(timezone.utc)
+
+    def _ler_seguras(self, ler, coluna_instante, depois_de_id, instante_minimo, limite, espera_lacuna_s):
+        linhas = ler(depois_de_id, instante_minimo, limite)
+        return aplicar_regra_lacunas(linhas, depois_de_id, coluna_instante, self._agora(), espera_lacuna_s)
+
+    def ler_leituras_seguras(self, depois_de_id: int, instante_minimo: datetime | None = None, limite: int = 500,
+                             espera_lacuna_s: float = config.ESPERA_LACUNA_S) -> tuple[list[dict], int]:
+        """Como ler_leituras_novas, mas respeitando a regra de lacunas de id (ver _lacunas.py).
+        Devolve (linhas, lacunas_ignoradas). A analise deve usar estas e nao as `*_novas`."""
+        return self._ler_seguras(self.ler_leituras_novas, "instante_ingestao", depois_de_id, instante_minimo, limite,
+                                 espera_lacuna_s)
+
+    def ler_respostas_seguras(self, depois_de_id: int, instante_minimo: datetime | None = None, limite: int = 500,
+                              espera_lacuna_s: float = config.ESPERA_LACUNA_S) -> tuple[list[dict], int]:
+        return self._ler_seguras(self.ler_respostas_novas, "instante_ingestao", depois_de_id, instante_minimo, limite,
+                                 espera_lacuna_s)
+
+    def ler_entregas_seguras(self, depois_de_id: int, instante_minimo: datetime | None = None, limite: int = 500,
+                             espera_lacuna_s: float = config.ESPERA_LACUNA_S) -> tuple[list[dict], int]:
+        return self._ler_seguras(self.ler_entregas_novas, "instante", depois_de_id, instante_minimo, limite,
+                                 espera_lacuna_s)
 
     @abstractmethod
     def gravar_comando(self, comando: dict) -> int:

@@ -181,6 +181,9 @@ class FachadaAnalise(RepoAnalise):
     def __init__(self, banco: BancoFalso):
         self._b = banco
 
+    def _agora(self):
+        return self._b.relogio()
+
     def ler_leituras_novas(self, depois_de_id, instante_minimo=None, limite=500):
         return self._b._ler_novas(self.PAPEL, "leituras", "instante_ingestao", depois_de_id, instante_minimo, limite)
 

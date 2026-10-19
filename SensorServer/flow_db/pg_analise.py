@@ -7,6 +7,13 @@ from .repo_analise import RepoAnalise
 
 
 class PgAnalise(PgBase, RepoAnalise):
+    def __init__(self, pool, conn=None, relogio=None):
+        super().__init__(pool, conn)
+        self._relogio = relogio       # injetavel nos testes; None = relogio real
+
+    def _agora(self):
+        return self._relogio() if self._relogio else RepoAnalise._agora(self)
+
     def _ler_novas(self, tabela: str, coluna_instante: str, depois_de_id: int, instante_minimo, limite: int) -> list[dict]:
         params: list = [depois_de_id]
         filtro = _clausula_instante(coluna_instante, instante_minimo, params)
@@ -102,4 +109,4 @@ class PgAnalise(PgBase, RepoAnalise):
             yield self
             return
         with self._pool.connection() as conn:   # commit ao sair; rollback se a excecao subir
-            yield PgAnalise(self._pool, conn)
+            yield PgAnalise(self._pool, conn, self._relogio)
