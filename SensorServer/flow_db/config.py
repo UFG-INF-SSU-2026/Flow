@@ -26,6 +26,11 @@ FOLGA_CONEXOES = 3
 TIMEOUT_CONSULTA_S = {PAPEL_BORDA: 5, PAPEL_ANALISE: 10}
 TIMEOUT_TRANSACAO_OCIOSA_S = 10
 
+# Regra de lacunas de id (leitura da analise): quanto esperar por um id ausente antes de trata-lo como buraco
+# permanente. Maior que a duracao de uma transacao de lote (o statement_timeout da borda e 5 s).
+ESPERA_LACUNA_S = 2.0
+LIMITE_LOTE = 500
+
 TIMEOUT_CONEXAO_S = 3        # connect_timeout do driver
 TIMEOUT_POOL_S = 2.0         # espera maxima por uma conexao livre do pool
 TIMEOUT_ABERTURA_POOL_S = 5.0  # espera maxima para o pool abrir na subida do servico
