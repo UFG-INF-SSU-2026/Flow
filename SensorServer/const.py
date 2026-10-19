@@ -273,3 +273,25 @@ HORA_FIM_NOITE = 6
 
 # Debounce: leituras consecutivas com a condicao presente para gerar alerta.
 LEITURAS_CONSECUTIVAS_PARA_ALERTA = 3
+
+# ===========================================================================
+# 8. BANCO (PostgreSQL + TimescaleDB). Conexao e senhas: flow_db/config.py e .env.
+# ===========================================================================
+
+# Dupla escrita (fase de transicao): enquanto 1, o servidor continua gravando os arquivos de hoje (usuario_*.jsonl,
+# alerta_*.json, confirmacoes_*.jsonl, auditoria.jsonl) ALEM do banco. Desligue com FLOW_GRAVAR_ARQUIVOS=0 quando o
+# banco for a unica fonte. FLOW_GRAVAR_TELEMETRIA_LEGADO=0 para de gravar a tabela `telemetria` (1 linha/usuario/janela).
+GRAVAR_ARQUIVOS = os.environ.get("FLOW_GRAVAR_ARQUIVOS", "1") != "0"
+GRAVAR_TELEMETRIA_LEGADO = os.environ.get("FLOW_GRAVAR_TELEMETRIA_LEGADO", "1") != "0"
+
+# Descarga das leituras: a thread de fundo grava em LOTES a cada INTERVALO_DESCARGA_S, ate TAMANHO_LOTE_LEITURAS por vez.
+INTERVALO_DESCARGA_S = 0.25
+TAMANHO_LOTE_LEITURAS = 500
+
+# Fila de leituras em memoria (limitada). Com o banco fora do ar a borda segue aceitando dados; ao estourar o teto,
+# as leituras MAIS ANTIGAS saem (e o descarte e contado e logado). 20 mil leituras = bem mais que minutos de uso real.
+MAX_FILA_LEITURAS = 20_000
+
+# Apos uma falha do banco, as escritas (fora a descarga em lote) sao puladas por este tempo (s), para a requisicao
+# nao esperar o tempo limite do pool a cada chamada durante uma queda.
+DB_PAUSA_APOS_FALHA_S = 5.0
