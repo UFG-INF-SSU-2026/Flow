@@ -7,6 +7,10 @@ Contrato do evento (definido na Atividade 02):
     schemaVersion, device_id, event_time (ISO 8601 com timezone),
     luminosidade (lux), cct (Kelvin), seq_num (contador incremental por
     dispositivo, so para esse tipo de evento).
+
+RELOGIO E ESTADO EXPLICITOS (S2a do split): esta regra nao le o relogio (a hora vem do `event_time` do proprio
+evento) e o estado mora num `EstadoLuz` (parametro `estado=`; sem ele vale o `PADRAO` do modulo, de que `_estados`
+e apelido).
 """
 
 import threading
@@ -40,18 +44,27 @@ class EstadoDispositivo:
 # aceitavel nesta fase de prototipo, conforme decisao de simplicidade do grupo)
 # Como o device_id vem do cliente, a tabela tem teto (const.MAX_ESTADOS_LEGADOS): estoura, sai o menos usado
 # (a ordem do dict e a do ultimo uso).
-_estados: dict[tuple[int, str], EstadoDispositivo] = {}
-_estados_lock = threading.Lock()
+@dataclass
+class EstadoLuz:
+    """A tabela de estados da regra (uma instancia por 'mundo': servidor, sombra, simulacao, teste)."""
+    estados: dict[tuple[int, str], EstadoDispositivo] = field(default_factory=dict)
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
-def _estado_do(user_id: int, device_id: str) -> EstadoDispositivo:
+PADRAO = EstadoLuz()
+_estados = PADRAO.estados     # apelido da tabela do PADRAO (limpar uma limpa a outra)
+_estados_lock = PADRAO.lock
+
+
+def _estado_do(user_id: int, device_id: str, estado: "EstadoLuz | None" = None) -> EstadoDispositivo:
+    tab = PADRAO if estado is None else estado
     chave = (user_id, device_id)
-    with _estados_lock:
-        estado = _estados.pop(chave, None) or EstadoDispositivo()
-        _estados[chave] = estado   # reinsere no fim: o primeiro do dict e sempre o menos usado
-        while len(_estados) > const.MAX_ESTADOS_LEGADOS:
-            del _estados[next(iter(_estados))]
-        return estado
+    with tab.lock:
+        atual = tab.estados.pop(chave, None) or EstadoDispositivo()
+        tab.estados[chave] = atual   # reinsere no fim: o primeiro do dict e sempre o menos usado
+        while len(tab.estados) > const.MAX_ESTADOS_LEGADOS:
+            del tab.estados[next(iter(tab.estados))]
+        return atual
 
 
 def validar_evento(evento: dict) -> None:
@@ -82,13 +95,13 @@ def validar_evento(evento: dict) -> None:
         raise EventoInvalido(f"event_time invalido: {evento['event_time']}") from e
 
 
-def eh_duplicado(user_id: int, evento: dict) -> bool:
+def eh_duplicado(user_id: int, evento: dict, estado: EstadoLuz | None = None) -> bool:
     """Deduplicacao por (user_id, device_id) + seq_num (idempotencia)."""
-    estado = _estado_do(user_id, evento["device_id"])
+    do_device = _estado_do(user_id, evento["device_id"], estado)
     seq = evento["seq_num"]
-    if estado.ultimo_seq_num is not None and seq <= estado.ultimo_seq_num:
+    if do_device.ultimo_seq_num is not None and seq <= do_device.ultimo_seq_num:
         return True
-    estado.ultimo_seq_num = seq
+    do_device.ultimo_seq_num = seq
     return False
 
 
@@ -97,7 +110,7 @@ def _eh_noite(event_time: datetime) -> bool:
     return hora >= const.HORA_INICIO_NOITE or hora < const.HORA_FIM_NOITE
 
 
-def avaliar_regra(user_id: int, evento: dict) -> dict | None:
+def avaliar_regra(user_id: int, evento: dict, estado: EstadoLuz | None = None) -> dict | None:
     """
     Aplica a regra de luz inadequada (noite + CCT frio, com debounce).
 
@@ -106,25 +119,25 @@ def avaliar_regra(user_id: int, evento: dict) -> dict | None:
     e "alerta ja estava ativo, nao repete").
     """
     device_id = evento["device_id"]
-    estado = _estado_do(user_id, device_id)
+    do_device = _estado_do(user_id, device_id, estado)
     event_time = datetime.fromisoformat(evento["event_time"])
 
     condicao_presente = _eh_noite(event_time) and evento["cct"] > const.CCT_LIMIAR_FRIO
 
     if not condicao_presente:
         # condicao nao se sustenta -> reseta contador e permite novo episodio no futuro
-        estado.leituras_consecutivas_condicao = 0
-        estado.alerta_ativo = False
+        do_device.leituras_consecutivas_condicao = 0
+        do_device.alerta_ativo = False
         return None
 
-    estado.leituras_consecutivas_condicao += 1
+    do_device.leituras_consecutivas_condicao += 1
 
-    if estado.alerta_ativo:
+    if do_device.alerta_ativo:
         # ja alertamos para este episodio, nao repete a cada 10s
         return None
 
-    if estado.leituras_consecutivas_condicao >= const.LEITURAS_CONSECUTIVAS_PARA_ALERTA:
-        estado.alerta_ativo = True
+    if do_device.leituras_consecutivas_condicao >= const.LEITURAS_CONSECUTIVAS_PARA_ALERTA:
+        do_device.alerta_ativo = True
         return {
             "tipo": "alerta_luz_inadequada",
             "device_id": device_id,

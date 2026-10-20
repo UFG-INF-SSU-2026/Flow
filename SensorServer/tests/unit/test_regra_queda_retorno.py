@@ -117,10 +117,10 @@ class TestVigia:
         abrir(uid=2)
         original = regra_queda.registrar
 
-        def registrar_com_falha(uid, tipo, dados):
+        def registrar_com_falha(uid, tipo, dados, agora=None):
             if uid == 1 and tipo == "episodio.encerrado":
                 raise OSError("disco cheio")
-            return original(uid, tipo, dados)
+            return original(uid, tipo, dados, agora)
 
         monkeypatch.setattr(regra_queda, "registrar", registrar_com_falha)
         enc = regra_queda.vigiar(agora=T0 + PRAZO)

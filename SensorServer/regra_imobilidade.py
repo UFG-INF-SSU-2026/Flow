@@ -13,11 +13,15 @@ Este modulo espelha deliberadamente a estrutura de regra_luz.py (mesma
 separacao validar_evento / eh_duplicado / avaliar-e-atuar), para que as
 duas regras do servidor sigam o mesmo padrao e fiquem faceis de explicar
 lado a lado na verificacao oral.
+
+RELOGIO E ESTADO EXPLICITOS (S2a do split): `processar_evento` recebe o instante (`agora`, segundos desde a epoca)
+em vez de ler o relogio, e o estado mora num `EstadoImobilidade` (parametro `estado=`; sem ele vale o `PADRAO` do
+modulo, de que `_estados` e apelido). O nucleo (nucleo.py) sempre passa os dois.
 """
 
 import itertools
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import const   # ACEL_MIN/MAX_PLAUSIVEL, SCHEMA_VERSION_WOKWI/PADRAO (ver const.py)
@@ -61,22 +65,37 @@ class EstadoDispositivo:
 # mesmo device_id nao compartilham estado nem sequence.
 # Como o device_id vem do cliente, a tabela tem teto (const.MAX_ESTADOS_LEGADOS): estoura, sai o menos usado
 # (a ordem do dict e a do ultimo uso).
-_estados: dict[tuple[int, str], EstadoDispositivo] = {}
-_estados_lock = threading.Lock()
-_contador_atualizacoes = itertools.count(1)
+@dataclass
+class EstadoImobilidade:
+    """A tabela de estados da regra (uma instancia por 'mundo': servidor, sombra, simulacao, teste)."""
+    estados: dict[tuple[int, str], EstadoDispositivo] = field(default_factory=dict)
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    contador: "itertools.count" = field(default_factory=lambda: itertools.count(1), repr=False)
 
 
-def _estado_do(user_id: int, device_id: str) -> EstadoDispositivo:
+PADRAO = EstadoImobilidade()
+_estados = PADRAO.estados     # apelido da tabela do PADRAO (limpar uma limpa a outra)
+_estados_lock = PADRAO.lock
+_contador_atualizacoes = PADRAO.contador
+
+
+def _tabela(estado: "EstadoImobilidade | None") -> EstadoImobilidade:
+    return PADRAO if estado is None else estado
+
+
+def _estado_do(user_id: int, device_id: str, estado: "EstadoImobilidade | None" = None) -> EstadoDispositivo:
+    tab = _tabela(estado)
     chave = (user_id, device_id)
-    with _estados_lock:
-        estado = _estados.pop(chave, None) or EstadoDispositivo()
-        _estados[chave] = estado   # reinsere no fim: o primeiro do dict e sempre o menos usado
-        while len(_estados) > const.MAX_ESTADOS_LEGADOS:
-            del _estados[next(iter(_estados))]
-        return estado
+    with tab.lock:
+        atual = tab.estados.pop(chave, None) or EstadoDispositivo()
+        tab.estados[chave] = atual   # reinsere no fim: o primeiro do dict e sempre o menos usado
+        while len(tab.estados) > const.MAX_ESTADOS_LEGADOS:
+            del tab.estados[next(iter(tab.estados))]
+        return atual
 
 
 def _agora_iso() -> str:
+    """Padrao para quem NAO passa `agora` (testes, chamadas avulsas). O nucleo sempre passa o instante da leitura."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -119,23 +138,24 @@ def validar_evento(evento: dict) -> None:
             )
 
 
-def eh_duplicado(user_id: int, evento: dict) -> bool:
+def eh_duplicado(user_id: int, evento: dict, estado: EstadoImobilidade | None = None) -> bool:
     """Deduplicacao/idempotencia: sequence deve ser maior que o ultimo
     conhecido para aquele (user_id, deviceId) (sequence e global por dispositivo no
     firmware, nao por eventType - um unico contador incrementa a cada
     emitirEvento(), seja leitura ou decisao)."""
     device_id = str(evento["deviceId"])
-    estado = _estado_do(user_id, device_id)
+    do_device = _estado_do(user_id, device_id, estado)
     seq = evento["sequence"]
 
-    if estado.ultimo_sequence is not None and seq <= estado.ultimo_sequence:
+    if do_device.ultimo_sequence is not None and seq <= do_device.ultimo_sequence:
         return True
 
-    estado.ultimo_sequence = seq
+    do_device.ultimo_sequence = seq
     return False
 
 
-def processar_evento(user_id: int, evento: dict) -> dict | None:
+def processar_evento(user_id: int, evento: dict, agora: float | None = None,
+                     estado: EstadoImobilidade | None = None) -> dict | None:
     """Atualiza a tabela de estado persistente e, quando aplicavel, produz
     a atuacao observavel (alerta) para state == "ALERTA_IMOBILIDADE".
 
@@ -143,12 +163,16 @@ def processar_evento(user_id: int, evento: dict) -> dict | None:
     registrada nesta chamada, ou None caso contrario (inclui os casos
     "e so o heartbeat", "decisao nao critica" e "alerta ja estava ativo
     para este episodio").
+
+    `agora` e o instante da ingestao do evento (segundos desde a epoca); vira `ultima_atualizacao`.
     """
+    tab = _tabela(estado)
     device_id = str(evento["deviceId"])
-    estado = _estado_do(user_id, device_id)
-    estado.ultima_atualizacao = _agora_iso()
-    estado.ordem_atualizacao = next(_contador_atualizacoes)
-    estado.ultimo_schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
+    do_device = _estado_do(user_id, device_id, tab)
+    do_device.ultima_atualizacao = (_agora_iso() if agora is None
+                                    else datetime.fromtimestamp(agora, tz=timezone.utc).isoformat())
+    do_device.ordem_atualizacao = next(tab.contador)
+    do_device.ultimo_schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
 
     event_type = evento["eventType"]
     state = evento["state"]
@@ -156,20 +180,20 @@ def processar_evento(user_id: int, evento: dict) -> dict | None:
     if event_type == "imobilidade.leitura":
         # Heartbeat: so atualiza o "ultimo estado conhecido da maquina",
         # nao produz atuacao por si so.
-        estado.estado_atual = state
+        do_device.estado_atual = state
         return None
 
     # event_type == "imobilidade.decisao"
-    estado.ultima_decisao = state
+    do_device.ultima_decisao = state
 
     if state in ESTADOS_QUE_ENCERRAM_ALERTA:
-        estado.alerta_ativo = False
+        do_device.alerta_ativo = False
         return None
 
     if state != "ALERTA_IMOBILIDADE":
         return None
 
-    if estado.alerta_ativo:
+    if do_device.alerta_ativo:
         # Mesmo episodio ja alertado (nao deveria acontecer, ja que o
         # firmware so emite ALERTA_IMOBILIDADE uma vez por episodio via
         # sua propria maquina de estados - mas o servidor nao confia
@@ -177,7 +201,7 @@ def processar_evento(user_id: int, evento: dict) -> dict | None:
         # ESTADOS_QUE_ENCERRAM_ALERTA chegar).
         return None
 
-    estado.alerta_ativo = True
+    do_device.alerta_ativo = True
     return {
         "tipo": "alerta_imobilidade",
         "device_id": device_id,
@@ -194,23 +218,24 @@ def processar_evento(user_id: int, evento: dict) -> dict | None:
     }
 
 
-def obter_estado(device_id: str) -> dict | None:
+def obter_estado(device_id: str, estado: EstadoImobilidade | None = None) -> dict | None:
     """Procura o device_id em todos os usuarios. Exposto via GET /estado/<device_id> em server.py - e a evidencia
     observavel de 'mudanca de estado',
     em complemento ao log em dataUsers/usuario_<id>.jsonl."""
-    with _estados_lock:
-        candidatos = [(uid, e) for (uid, dev), e in _estados.items() if dev == device_id]
+    tab = _tabela(estado)
+    with tab.lock:
+        candidatos = [(uid, e) for (uid, dev), e in tab.estados.items() if dev == device_id]
     if not candidatos:
         return None
     # O mesmo device_id pode existir em mais de um usuario: devolve o do usuario atualizado por ultimo.
-    user_id, estado = max(candidatos, key=lambda c: c[1].ordem_atualizacao)
+    user_id, do_device = max(candidatos, key=lambda c: c[1].ordem_atualizacao)
     return {
         "device_id": device_id,
         "user_id": user_id,
-        "estado_atual": estado.estado_atual,
-        "ultima_decisao": estado.ultima_decisao,
-        "alerta_ativo": estado.alerta_ativo,
-        "ultimo_sequence": estado.ultimo_sequence,
-        "ultima_atualizacao": estado.ultima_atualizacao,
-        "ultimo_schema_version": estado.ultimo_schema_version,
+        "estado_atual": do_device.estado_atual,
+        "ultima_decisao": do_device.ultima_decisao,
+        "alerta_ativo": do_device.alerta_ativo,
+        "ultimo_sequence": do_device.ultimo_sequence,
+        "ultima_atualizacao": do_device.ultima_atualizacao,
+        "ultimo_schema_version": do_device.ultimo_schema_version,
     }

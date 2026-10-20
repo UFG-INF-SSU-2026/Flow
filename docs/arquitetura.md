@@ -60,11 +60,13 @@ Módulos do servidor:
 | `canal_wokwi.py` | **Servidor → Wokwi.** Rota `GET /push/wokwi` e envio ao alvo `wokwi`. |
 | `regra_queda.py` | Análise do acelerômetro (fusão das fontes por usuário), episódios de confirmação, timeout, mapa `messageId` → episódio, armazenamento da resposta. |
 | `regra_luz.py`, `regra_imobilidade.py` | Regras de negócio (luz inadequada à noite; imobilidade prolongada). |
+| `nucleo.py` | **Núcleo das regras:** `Leitura`/`Resposta` com o instante da ingestão entram, `Decisoes` (comandos de push com a mudança de episódio, alertas, registros de confirmação, resumos de estado, descartes) saem. Sem relógio global, sem I/O, sem thread; o estado é um `EstadoRegras` explícito (`PADRAO` = tabelas dos módulos de regra; `novo_estado()` = mundo limpo). O vigia é um passo à parte (`nucleo.vigiar`). |
+| `tempo.py` | Único ponto de leitura do relógio na borda (`tempo.agora_utc()`): o instante da ingestão por requisição e o relógio do vigia. Os testes o congelam (fixture `relogio`). |
 | `crypto_utils.py` | Envelope AES-256-GCM. |
 | `simular_queda.py` | Utilitário (fora do servidor): simula um wokwi que sofre impacto e fica imóvel, para testar o push sem Wokwi nem celular. |
 | `tests/` | Suíte pytest (`unit/` e `integration/`); ver 14.1. |
 
-Dependências: `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; é `server.py` que cria a mensagem e a despacha); `auth` não conhece Flask. `const.py` é um módulo folha: não importa nada do projeto, e os demais fazem `import const` e leem `const.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
+Dependências: `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; o `nucleo.py` monta a mensagem e `server.py`, como adaptador, aplica as decisões e a despacha). `nucleo.py` importa as regras, `mensagens` e `validacao`; nenhuma regra importa o núcleo; `auth` não conhece Flask. `const.py` é um módulo folha: não importa nada do projeto, e os demais fazem `import const` e leem `const.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
 
 ### 2.3 Elementos abstratos (visão do sistema)
 

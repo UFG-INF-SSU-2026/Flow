@@ -6,6 +6,7 @@ import time
 import pytest
 
 import const
+import nucleo
 import regra_queda
 import server
 
@@ -152,7 +153,7 @@ class TestWokwiInvalidoOuDuplicado:
                                                                               chamadas_de_avaliar):
         def quebra(*a, **k):
             raise RuntimeError("bug")
-        monkeypatch.setattr(server, "_processar_evento_wokwi", quebra)
+        monkeypatch.setattr(nucleo, "_regra_de_imobilidade", quebra)
         assert cli.post("/dados", _wokwi(), tokens["dispositivo"]).status_code == 200
         assert chamadas_de_avaliar == []
 
@@ -163,7 +164,7 @@ class TestFluxoLegadoDoApp:
                                                                   chamadas_de_avaliar):
         def quebra(*a, **k):
             raise RuntimeError("bug no fluxo de luz")
-        monkeypatch.setattr(server, "_processar_leitura_ambiente", quebra)
+        monkeypatch.setattr(nucleo, "_regra_de_luz", quebra)
         r = cli.post("/dados", _app(), tokens["idoso"])
         assert r.status_code == 200 and r.get_json()["status"] == "ok"
         assert len(chamadas_de_avaliar) == 1
@@ -171,7 +172,7 @@ class TestFluxoLegadoDoApp:
     def test_falha_ao_avaliar_a_queda_nao_vira_500_e_a_telemetria_e_gravada(self, cli, tokens, monkeypatch):
         def quebra(*a, **k):
             raise RuntimeError("bug na regra de queda")
-        monkeypatch.setattr(server, "_avaliar_queda", quebra)
+        monkeypatch.setattr(nucleo, "_regra_de_queda", quebra)
         assert cli.post("/dados", _app(), tokens["idoso"]).status_code == 200
         server._flush_iteracao()
         assert len(_linhas()) == 1

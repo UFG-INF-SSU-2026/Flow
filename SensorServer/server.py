@@ -50,11 +50,14 @@ user_id e a source declarados sao os do token (estagio 2). O que nao esta na pol
 
 Caminho de volta (servidor -> dispositivo), tambem do Marco 3:
 
-    1. Cada leitura de aceleracao aceita alimenta regra_queda. Ao concluir QUEDA PROVAVEL (impacto seguido
-       de imobilidade, ou imobilidade prolongada), regra_queda devolve um PedidoConfirmacao.
-    2. server.py cria a mensagem (mensagens.py) e a despacha a TODOS os canais: GET /push/app (SSE para o
-       app) e GET /push/wokwi (SSE para o bridge). Cada mensagem vai cifrada com a mesma chave e passa
-       pelo hub de conexoes (sse_hub.py), que guarda as mensagens ainda validas para quem reconectar.
+    1. Cada leitura aceita vira uma `nucleo.Leitura`, com o instante da ingestao, e o nucleo das regras (nucleo.py:
+       regra de luz, imobilidade e queda) a transforma em DECISOES, sem relogio, sem I/O e sem threads. Ao concluir
+       QUEDA PROVAVEL (impacto seguido de imobilidade, ou imobilidade prolongada), uma das decisoes e um Comando
+       de push, com a mensagem (mensagens.py) ja montada.
+    2. server.py e o ADAPTADOR do caminho direto: aplica as decisoes (arquivos, banco) e despacha cada mensagem a
+       TODOS os canais: GET /push/app (SSE para o app) e GET /push/wokwi (SSE para o bridge). Cada mensagem vai
+       cifrada com a mesma chave e passa pelo hub de conexoes (sse_hub.py), que guarda as mensagens ainda validas
+       para quem reconectar.
     3. O dispositivo responde com POST /eventos: "push.ack" (ativou ou rejeitou o push) e
        "confirmacao.resposta" (ESTOU_BEM ou SEM_RESPOSTA). O servidor valida o evento, associa a
        messageId ao episodio e, se for ESTOU_BEM de um episodio aberto, encerra o episodio.
@@ -74,22 +77,21 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
-from typing import NamedTuple
+from datetime import datetime, timezone
 from flask import Flask, request, jsonify, g
 
 import auth
 import const   # PORT, DATA_DIR, JANELA_AGREGACAO_S, FONTES_VALIDAS... (ver const.py)
-import mensagens
-import regra_queda
+import nucleo
+import regra_queda   # so o registro de confirmacoes (arquivo + ouvinte do banco) e os tipos Pedido/Encerramento
 import repositorios
+import tempo
 import validacao
 import canal_app
 import canal_wokwi
 from authz import exige, exigir_dispositivo, exigir_escopo, ForaDeEscopo, negar
 from crypto_utils import decrypt_payload, encrypt_payload, DecryptionError
-from regra_luz import validar_evento, eh_duplicado, avaliar_regra, EventoInvalido
-import regra_imobilidade
+import regra_imobilidade   # so /estado/<device_id> (nucleo.PADRAO.imobilidade): a leitura de estado e debug
 
 # Canais de push (servidor -> dispositivo). Todos expoem CANAL e enviar(user_id, mensagem).
 CANAIS = [canal_app, canal_wokwi]
@@ -141,7 +143,9 @@ def _instante_origem(source: str, dados: dict) -> datetime | None:
         return None
 
 
-def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, versao: int, conta_id: str | None) -> None:
+def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, versao: int, conta_id: str | None,
+                        instante: datetime) -> None:
+    """`instante` e o instante da ingestao (lido UMA vez em receber_dados): o mesmo que o nucleo das regras usa."""
     global _descartes_leituras
     if repositorios.borda() is None:
         return
@@ -149,7 +153,7 @@ def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, 
         tipo = dados.get("eventType")
     else:
         tipo = "leitura_ambiente" if "leitura_ambiente" in dados else "telemetria"
-    leitura = {"instante_ingestao": datetime.now(timezone.utc), "user_id": user_id, "device_id": device_id,
+    leitura = {"instante_ingestao": instante, "user_id": user_id, "device_id": device_id,
                "fonte": source, "tipo_evento": tipo if isinstance(tipo, str) else None, "schema_version": versao,
                "instante_origem": _instante_origem(source, dados), "conta_id": conta_id, "payload": dados}
     with _fila_lock:
@@ -205,62 +209,33 @@ def _registro_para_banco(user_id: int, tipo: str, linha: dict) -> None:
 regra_queda.OUVINTE_REGISTRO = _registro_para_banco
 
 
-def _gravar_alerta_banco(user_id: int, device_id: str, tipo: str, alerta: dict, schema_version: int) -> None:
+def _gravar_alerta_banco(user_id: int, device_id: str, tipo: str, alerta: dict, schema_version: int,
+                         instante: datetime | None = None) -> None:
     repositorios.tentar_analise("alerta", lambda a: a.gravar_alerta({
-        "instante": datetime.now(timezone.utc), "user_id": user_id, "device_id": device_id, "tipo": tipo,
+        "instante": instante or tempo.agora_utc(), "user_id": user_id, "device_id": device_id, "tipo": tipo,
         "mensagem": alerta.get("mensagem"), "dados": alerta, "schema_version": schema_version}))
 
 
-def _gravar_pedido_banco(user_id: int, pedido: "regra_queda.PedidoConfirmacao", msg: dict, device_id: str | None) -> None:
-    """Episodio (aguardando confirmacao) e o comando de push, na MESMA transacao."""
-    agora = datetime.now(timezone.utc)
-    expira = agora + timedelta(seconds=pedido.timeout_s + const.MARGEM_SERVIDOR_S)
-
+def _gravar_comando_banco(cmd: "nucleo.Comando") -> None:
+    """Episodio (aguardando confirmacao ou encerrado) e o comando de push, na MESMA transacao (DS5/DS6).
+    Se o episodio nao chegou ao banco (queda na abertura), a linha de encerramento o cria com tipo DESCONHECIDO."""
     def grava(a):
         with a.transacao() as tx:
-            tx.gravar_episodio({"episodio_id": pedido.episode_id, "user_id": user_id, "device_id": device_id,
-                                "tipo": pedido.motivo, "estado": "aguardando_confirmacao", "aberto_em": agora,
-                                "atualizado_em": agora, "encerrado_em": None, "motivo_encerramento": None,
-                                "dados": {"timeout_s": pedido.timeout_s}})
-            tx.gravar_comando({"criado_em": agora, "user_id": user_id, "device_id": None, "canal": "todos",
-                               "message_id": msg["messageId"], "tipo": msg["messageType"], "payload": msg,
-                               "expira_em": expira, "episodio_id": pedido.episode_id})
-    repositorios.tentar_analise("pedido", grava)
+            tx.gravar_episodio(cmd.episodio.como_linha())
+            tx.gravar_comando(cmd.como_linha())
+    repositorios.tentar_analise("comando", grava)
 
 
-def _gravar_encerramento_banco(enc: "regra_queda.Encerramento", msg: dict) -> None:
-    agora = datetime.now(timezone.utc)
-
-    def grava(a):
-        with a.transacao() as tx:
-            # Se o episodio nao chegou ao banco (queda na abertura), esta linha o cria com tipo DESCONHECIDO.
-            tx.gravar_episodio({"episodio_id": enc.episode_id, "user_id": enc.user_id, "device_id": None,
-                                "tipo": "DESCONHECIDO", "estado": "encerrado", "aberto_em": agora,
-                                "atualizado_em": agora, "encerrado_em": agora, "motivo_encerramento": enc.resultado,
-                                "dados": {}})
-            tx.gravar_comando({"criado_em": agora, "user_id": enc.user_id, "device_id": None, "canal": "todos",
-                               "message_id": msg["messageId"], "tipo": msg["messageType"], "payload": msg,
-                               "expira_em": None, "episodio_id": enc.episode_id})
-    repositorios.tentar_analise("encerramento", grava)
-
-
-def _gravar_estado_banco(user_id: int, device_id: str) -> None:
+def _gravar_estado_banco(resumo: "nucleo.ResumoEstado") -> None:
     """Estado persistente da regra de imobilidade -> estado_dispositivo. So grava quando algo relevante mudou."""
     try:
-        estado = regra_imobilidade.obter_estado(device_id)
-        if estado is None or estado.get("user_id") != user_id:
+        chave = (resumo.user_id, resumo.device_id)
+        if _estado_gravado.get(chave) == resumo.assinatura:
             return
-        chave = (user_id, device_id)
-        assinatura = (estado.get("estado_atual"), estado.get("ultima_decisao"), estado.get("alerta_ativo"))
-        if _estado_gravado.get(chave) == assinatura:
-            return
-        gravou = repositorios.tentar_analise("estado", lambda a: a.gravar_estado_dispositivo({
-            "user_id": user_id, "device_id": device_id, "atualizado_em": datetime.now(timezone.utc),
-            "versao_regra": estado.get("ultimo_schema_version") or 1, "estado": estado}))
-        if gravou:
-            _estado_gravado[chave] = assinatura
+        if repositorios.tentar_analise("estado", lambda a: a.gravar_estado_dispositivo(resumo.como_linha())):
+            _estado_gravado[chave] = resumo.assinatura
     except Exception as e:  # noqa: BLE001
-        print(f"  [db] falha ao preparar estado_dispositivo user={user_id}: {type(e).__name__}: {str(e)[:200]}")
+        print(f"  [db] falha ao preparar estado_dispositivo user={resumo.user_id}: {type(e).__name__}: {str(e)[:200]}")
 
 
 def _agora_iso() -> str:
@@ -354,88 +329,43 @@ def _flush_loop() -> None:
                 print(f"  [flush] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
-def _processar_leitura_ambiente(user_id: int, payload: dict, device_id: str) -> None:
-    """Fluxo priorizado: LeituraAmbiente -> regra de luz -> alerta.
-    So se aplica a payloads vindos do app (unico que emite esse evento)."""
-    evento_ambiente = payload.get("leitura_ambiente")
-    if evento_ambiente is None:
-        return
+# ---------------------------------------------------------------------------
+# Adaptador do caminho direto: aplica as DECISOES do nucleo (nucleo.py). O nucleo decide sem relogio e sem I/O;
+# aqui estao os efeitos (arquivos, banco, canais) e a protecao de cada um: a falha de um nao impede os demais e
+# nunca vira 500 (a telemetria ja foi aceita).
+# ---------------------------------------------------------------------------
+def _aplicar_alerta(alerta: "nucleo.Alerta") -> None:
+    """Arquivo alerta_*.json (enquanto const.GRAVAR_ARQUIVOS), tabela `alertas` e log."""
+    prefixo = "alerta" if alerta.tipo == "luz_inadequada" else "alerta_imobilidade"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")   # so o nome do arquivo (dupla escrita de transicao)
+    filename = f"{prefixo}_{_nome_seguro(alerta.device_id)}_{timestamp}.json"
+    if const.GRAVAR_ARQUIVOS:
+        with open(os.path.join(const.DATA_DIR, filename), "w", encoding="utf-8") as f:
+            json.dump(alerta.dados, f, ensure_ascii=False, indent=2)
+    _gravar_alerta_banco(alerta.user_id, alerta.device_id, alerta.tipo, alerta.dados, alerta.schema_version,
+                         alerta.instante)
+    print(f"  >>> ALERTA gerado: {filename} -> {alerta.dados['mensagem']}")
 
-    erros = validacao.erros_leitura_ambiente(evento_ambiente)
-    if erros:
-        print(f"  [leitura_ambiente] descartada (estrutura invalida): {'; '.join(erros[:3])}")
-        return
+
+def _isolar(nome: str, fn) -> None:
     try:
-        validar_evento(evento_ambiente)
-    except EventoInvalido as e:
-        print(f"  [leitura_ambiente] descartada (invalida): {e}")
-        return
-
-    if eh_duplicado(user_id, evento_ambiente):
-        print(f"  [leitura_ambiente] descartada (duplicada, seq_num={evento_ambiente['seq_num']})")
-        return
-
-    resultado_regra = avaliar_regra(user_id, evento_ambiente)
-    if resultado_regra is not None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"alerta_{_nome_seguro(device_id)}_{timestamp}.json"
-        filepath = os.path.join(const.DATA_DIR, filename)
-        if const.GRAVAR_ARQUIVOS:
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(resultado_regra, f, ensure_ascii=False, indent=2)
-        _gravar_alerta_banco(user_id, device_id, "luz_inadequada", resultado_regra, const.SCHEMA_VERSION_APP)
-        print(f"  >>> ALERTA gerado: {filename} -> {resultado_regra['mensagem']}")
+        fn()
+    except Exception as e:  # noqa: BLE001
+        print(f"  [{nome}] falha ao aplicar a decisao (ignorada): {type(e).__name__}: {str(e)[:200]}")
 
 
-def _falha_fluxo_legado(nome: str, e: Exception) -> None:
-    """Falha inesperada num fluxo legado (payload malformado ou bug): so loga. A resposta segue 200."""
-    print(f"  [{nome}] falha no fluxo legado (ignorada): {type(e).__name__}: {str(e)[:200]}")
-
-
-WOKWI_INVALIDO = "INVALIDO"
-WOKWI_DUPLICADO = "DUPLICADO"
-WOKWI_ACEITO = "ACEITO"
-
-
-class ResultadoWokwi(NamedTuple):
-    """Resultado de _processar_evento_wokwi. So ACEITO pode alimentar regra_queda (Marco 3, 9.1)."""
-    estado: str                    # WOKWI_INVALIDO | WOKWI_DUPLICADO | WOKWI_ACEITO
-    alerta: dict | None = None     # alerta de imobilidade (so quando ACEITO)
-
-
-def _processar_evento_wokwi(user_id: int, payload: dict, device_id: str) -> ResultadoWokwi:
-    """Cascata de validacao por eventType + tabela de estado persistente + atuacao para
-    imobilidade.decisao com state=ALERTA_IMOBILIDADE. Espelha o fluxo
-    priorizado de _processar_leitura_ambiente, mas para eventos do wokwi.
-
-    Devolve o estado explicito (INVALIDO | DUPLICADO | ACEITO) para que o chamador nao confunda
-    'descartado' com 'aceito, sem alerta'."""
-    erros = validacao.erros_telemetria_wokwi(payload)
-    if erros:
-        print(f"  [wokwi] evento descartado (estrutura invalida): {'; '.join(erros[:3])}")
-        return ResultadoWokwi(WOKWI_INVALIDO)
-    try:
-        regra_imobilidade.validar_evento(payload)
-    except regra_imobilidade.EventoInvalido as e:
-        print(f"  [wokwi] evento descartado (invalido): {e}")
-        return ResultadoWokwi(WOKWI_INVALIDO)
-
-    if regra_imobilidade.eh_duplicado(user_id, payload):
-        print(f"  [wokwi] evento descartado (duplicado/atrasado, sequence={payload.get('sequence')})")
-        return ResultadoWokwi(WOKWI_DUPLICADO)
-
-    alerta = regra_imobilidade.processar_evento(user_id, payload)
-    if alerta is not None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"alerta_imobilidade_{_nome_seguro(device_id)}_{timestamp}.json"
-        filepath = os.path.join(const.DATA_DIR, filename)
-        if const.GRAVAR_ARQUIVOS:
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(alerta, f, ensure_ascii=False, indent=2)
-        _gravar_alerta_banco(user_id, device_id, "imobilidade", alerta, const.SCHEMA_VERSION_WOKWI)
-        print(f"  >>> ALERTA gerado: {filename} -> {alerta['mensagem']}")
-
-    return ResultadoWokwi(WOKWI_ACEITO, alerta)
+def _aplicar(decisoes: "nucleo.Decisoes") -> None:
+    """Efeitos das decisoes, na ordem de sempre: registros de confirmacao, alertas, estado e, por ultimo, cada
+    comando de push (episodio + comando no banco, depois a entrega aos canais)."""
+    for c in decisoes.confirmacoes:
+        _isolar("confirmacao", c.aplicar)
+    for a in decisoes.alertas:
+        _isolar("alerta", lambda a=a: _aplicar_alerta(a))
+    for r in decisoes.estados:
+        _isolar("estado", lambda r=r: _gravar_estado_banco(r))
+    for cmd in decisoes.comandos:
+        _isolar(f"comando episodeId={cmd.episodio.episodio_id} user={cmd.user_id}",
+                lambda cmd=cmd: _entregar_comando(cmd))
 
 
 # ---------------------------------------------------------------------------
@@ -464,40 +394,29 @@ def _despachar(user_id: int, msg: dict) -> None:
         print(f"  [push] {msg['messageType']} user={user_id} canal={canal.CANAL} -> {resultado}")
 
 
+def _entregar_comando(cmd: "nucleo.Comando") -> None:
+    """Episodio + comando no banco (antes da entrega) e depois o despacho a todos os canais."""
+    _gravar_comando_banco(cmd)
+    _despachar(cmd.user_id, cmd.mensagem)
+
+
 def _emitir_pedido(user_id: int, pedido: "regra_queda.PedidoConfirmacao", device_id: str | None = None) -> None:
-    msg = mensagens.criar_pedido_confirmacao(user_id, pedido.episode_id, pedido.timeout_s, pedido.motivo)
-    regra_queda.anotar_mensagem(user_id, pedido.episode_id, msg["messageId"])
-    _gravar_pedido_banco(user_id, pedido, msg, device_id)   # episodio + comando antes da entrega
-    _despachar(user_id, msg)
+    """Entrada avulsa (testes, ferramentas): monta o comando de um pedido ja aberto, no instante de agora, e o entrega.
+    O fluxo normal nao passa por aqui: o nucleo monta o comando junto com a decisao (nucleo.processar_leitura)."""
+    _entregar_comando(nucleo.comando_de_pedido(nucleo.PADRAO, user_id, pedido, device_id, tempo.agora_utc()))
 
 
 def _encerrar(enc: "regra_queda.Encerramento") -> None:
-    msg = mensagens.criar_encerramento(enc.user_id, enc.episode_id, enc.resultado)
-    _gravar_encerramento_banco(enc, msg)
-    _despachar(enc.user_id, msg)
-
-
-def _avaliar_queda(user_id: int, source: str, payload: dict, alerta_imobilidade: dict | None,
-                   device_id: str) -> None:
-    """Gatilho A (impacto + imobilidade) tem preferencia; gatilho B usa o alerta da regra de imobilidade."""
-    pedido = regra_queda.avaliar(user_id, source, payload, device_id=device_id)
-    if pedido is None and alerta_imobilidade is not None:
-        pedido = regra_queda.abrir_por_imobilidade(user_id)
-    if pedido is not None:
-        _emitir_pedido(user_id, pedido, device_id)
+    """Entrada avulsa (testes, ferramentas): monta o comando de encerramento no instante de agora e o entrega."""
+    _entregar_comando(nucleo.comando_de_encerramento(enc, tempo.agora_utc()))
 
 
 def _vigia_iteracao() -> None:
-    """Uma passada do vigia: encerra os episodios vencidos e despacha o encerramento de cada um.
-    Cada encerramento tem a sua propria protecao: a falha de um nao impede os seguintes.
-    O episodio ja esta marcado como encerrado em regra_queda antes do despacho; se o despacho falhar,
+    """Uma passada do vigia: o nucleo encerra os episodios vencidos (relogio REAL, o unico passo que o usa) e o
+    adaptador despacha o encerramento de cada um. Cada decisao tem a sua propria protecao: a falha de uma nao
+    impede as seguintes. O episodio ja esta marcado como encerrado no estado das regras; se o despacho falhar,
     so o aviso ao dispositivo se perde e o erro fica no log."""
-    for enc in regra_queda.vigiar():
-        try:
-            _encerrar(enc)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [vigia] falha ao encerrar episodeId={enc.episode_id} user={enc.user_id}: "
-                  f"{type(e).__name__}: {str(e)[:200]}")
+    _aplicar(nucleo.vigiar(nucleo.PADRAO, tempo.agora_utc()))
 
 
 def _vigia_loop() -> None:
@@ -613,18 +532,15 @@ def receber_evento():
         print(f"  [eventos] descartado (invalido): {e}")
         return jsonify({"status": "ok", "descartado": True}), 200   # conteudo invalido: 200, como em /dados
     # Resposta crua do dispositivo -> banco (borda). Identidade SEMPRE do token, nunca do corpo.
+    agora = tempo.agora_utc()   # instante da ingestao: o mesmo gravado em respostas_dispositivo e usado pelo nucleo
     repositorios.tentar_borda("resposta", lambda b: b.gravar_resposta({
-        "instante_ingestao": datetime.now(timezone.utc), "user_id": user_id, "device_id": g.principal.device_id,
+        "instante_ingestao": agora, "user_id": user_id, "device_id": g.principal.device_id,
         "fonte": g.principal.fonte, "tipo": ev["eventType"], "message_id": ev.get("messageId"),
         "schema_version": versao, "payload": ev}))
-    enc = regra_queda.registrar_retorno(user_id, ev)
-    if enc:
-        # O episodio ja esta encerrado e gravado; se o aviso aos dispositivos falhar, so ele se perde (log).
-        try:
-            _encerrar(enc)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [eventos] falha ao avisar o encerramento episodeId={enc.episode_id} user={user_id}: "
-                  f"{type(e).__name__}: {str(e)[:200]}")
+    decisoes = nucleo.processar_resposta(nucleo.PADRAO, nucleo.Resposta(
+        agora, user_id, g.principal.device_id, g.principal.fonte, ev, versao))
+    # O episodio ja esta encerrado no estado das regras; se o aviso aos dispositivos falhar, so ele se perde (log).
+    _aplicar(decisoes)
     return jsonify({"status": "ok"}), 200
 
 
@@ -674,39 +590,18 @@ def receber_dados():
 
     # 3. Guarda no buffer de agregacao (vira 1 linha no jsonl do usuario no
     #    proximo flush de 1s, junto com a outra fonte, se houver)
+    agora = tempo.agora_utc()   # o UNICO relogio lido na requisicao: instante da ingestao (leituras.instante_ingestao)
     _registrar_no_buffer(user_id, source, dados_fonte)
-    _enfileirar_leitura(user_id, source, device_id, dados_fonte, versao, g.principal.conta_id)
+    _enfileirar_leitura(user_id, source, device_id, dados_fonte, versao, g.principal.conta_id, agora)
 
-    # 4. Fluxo priorizado (independente do buffer): regra de luz inadequada
-    #    (app) ou validacao/estado/atuacao de imobilidade (wokwi)
-    alerta_imobilidade = None
-    alimenta_queda = True   # 9.1: validar -> deduplicar -> avaliar. Invalido ou duplicado nao chega a regra_queda
-    if source == "app":
-        # A analise de queda NAO depende do fluxo legado do app: se ele falhar, loga e segue.
-        try:
-            _processar_leitura_ambiente(user_id, payload, device_id)
-        except Exception as e:
-            _falha_fluxo_legado("leitura_ambiente", e)
-        alimenta_queda = not regra_queda.eh_duplicado_app(user_id, device_id, payload)
-    elif source == "wokwi":
-        # Para o wokwi a queda depende so do estado ACEITO: excecao no fluxo legado = nao aceito.
-        try:
-            resultado = _processar_evento_wokwi(user_id, payload, device_id)
-        except Exception as e:
-            _falha_fluxo_legado("wokwi", e)
-            resultado = ResultadoWokwi(WOKWI_INVALIDO)
-        alerta_imobilidade = resultado.alerta
-        alimenta_queda = resultado.estado == WOKWI_ACEITO
-        if alimenta_queda:
-            _gravar_estado_banco(user_id, device_id)
-
-    # 5. Marco 3: analise de queda (acelerometro) -> se provavel, push de confirmacao
-    # A telemetria ja foi aceita e gravada: falha ao avaliar/emitir o pedido fica no log e nao vira 500.
-    if alimenta_queda:
-        try:
-            _avaliar_queda(user_id, source, payload, alerta_imobilidade, device_id)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [queda] falha ao avaliar ou emitir o pedido user={user_id}: {type(e).__name__}: {str(e)[:200]}")
+    # 4. Nucleo das regras (luz do app, imobilidade do wokwi, queda): leitura -> decisoes, sem relogio e sem I/O;
+    #    depois o adaptador as aplica. A telemetria ja foi aceita e enfileirada: falha ao decidir ou aplicar
+    #    fica no log e nao vira 500.
+    try:
+        _aplicar(nucleo.processar_leitura(nucleo.PADRAO, nucleo.Leitura(
+            agora, user_id, device_id, source, dados_fonte, versao)))
+    except Exception as e:  # noqa: BLE001
+        print(f"  [queda] falha ao avaliar ou emitir o pedido user={user_id}: {type(e).__name__}: {str(e)[:200]}")
 
     return jsonify({
         "status": "ok",
@@ -728,7 +623,7 @@ def obter_estado_imobilidade(device_id):
     """Debug/demo: expoe a tabela de estado persistente (nao o buffer de
     1s) de um dispositivo wokwi - evidencia observavel de 'mudanca de
     estado', separada do log em dataUsers/usuario_<id>.jsonl."""
-    estado = regra_imobilidade.obter_estado(device_id)   # procura em todos os usuarios
+    estado = regra_imobilidade.obter_estado(device_id, estado=nucleo.PADRAO.imobilidade)   # procura em todos os usuarios
     if estado is None:
         return jsonify({"status": "erro", "mensagem": f"device_id desconhecido: {device_id}"}), 404
     return jsonify(estado)

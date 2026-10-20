@@ -63,7 +63,7 @@ def test_falha_ao_emitir_o_pedido_nao_da_500_em_dados(cli, tokens, relogio, monk
     def quebrado(*a, **k):
         raise RuntimeError("emitir quebrou")
 
-    monkeypatch.setattr(server, "_emitir_pedido", quebrado)
+    monkeypatch.setattr(server, "_entregar_comando", quebrado)
     assert Fluxo(cli, tokens, relogio).provocar_queda().status_code == 200
 
 

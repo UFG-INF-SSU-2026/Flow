@@ -2,6 +2,10 @@
 Mensagens do Marco 3 (sem I/O de rede): mensagem de push servidor -> dispositivo (contrato schemas/push-mensagem.json,
 const.SCHEMA_VERSION_MENSAGEM, docs/schemas.md secao 6). A validacao dos eventos de retorno dispositivo -> servidor
 (push.ack, confirmacao.resposta) e estrutural e vive na borda (validacao.validar_evento_retorno).
+
+Relogio: quem DECIDE (nucleo.py) sempre passa `agora` (o instante da ingestao) a criar_pedido_confirmacao e
+criar_encerramento. O `agora_utc()` padrao so serve a quem nao passa instante: o replay da entrega por SSE
+(`para_envio`, que mede o tempo restante AGORA, na borda) e as chamadas avulsas.
 """
 import uuid
 from datetime import datetime, timedelta, timezone

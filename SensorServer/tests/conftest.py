@@ -52,6 +52,7 @@ import regra_luz  # noqa: E402
 import regra_queda  # noqa: E402
 import repositorios  # noqa: E402
 import server  # noqa: E402
+import tempo  # noqa: E402
 from sse_hub import HUB  # noqa: E402
 
 def _limpar_estado() -> None:
@@ -152,7 +153,7 @@ def relogio_auth(monkeypatch):
 
 
 class Relogio:
-    """Relogio unico controlavel para regra_queda e mensagens (servidor e vigia enxergam o mesmo instante)."""
+    """Relogio unico controlavel para o servidor, o vigia, regra_queda e mensagens (todos enxergam o mesmo instante)."""
 
     def __init__(self, t0: float):
         self._t = t0
@@ -172,9 +173,12 @@ class Relogio:
 
 @pytest.fixture
 def relogio(monkeypatch):
-    """Congela o tempo de regra_queda._agora e mensagens.agora_utc. issuedAt fica exato e o timeoutMs entregue
-    e o original (sem o desconto de milissegundos do replay). Nao afeta o relogio do JWT nem do SSE (keepalive)."""
+    """Congela o tempo de tempo.agora_utc (o instante da ingestao e o do vigia, lidos pelo servidor), de
+    regra_queda._agora e de mensagens.agora_utc (padroes de quem chama sem instante: entrega, replay, testes
+    avulsos). issuedAt fica exato e o timeoutMs entregue e o original (sem o desconto de milissegundos do replay).
+    Nao afeta o relogio do JWT nem do SSE (keepalive)."""
     r = Relogio(float(int(time.time())))
+    monkeypatch.setattr(tempo, "agora_utc", r.agora_utc)
     monkeypatch.setattr(regra_queda, "_agora", r.agora)
     monkeypatch.setattr(mensagens, "agora_utc", r.agora_utc)
     return r
