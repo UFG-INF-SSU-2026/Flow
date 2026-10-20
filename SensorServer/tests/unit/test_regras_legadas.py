@@ -18,34 +18,10 @@ def decisao(state, seq, **extra):
 
 
 class TestImobilidadeValidacao:
+    """So a semantica (faixa fisica e sentinelas). A estrutura e conferida na borda: tests/unit/test_validacao.py."""
+
     def test_evento_valido(self):
         imob.validar_evento(ev_imob())
-
-    @pytest.mark.parametrize("campo", imob.CAMPOS_OBRIGATORIOS)
-    def test_campo_obrigatorio_ausente(self, campo):
-        ev = ev_imob()
-        del ev[campo]
-        with pytest.raises(imob.EventoInvalido):
-            imob.validar_evento(ev)
-
-    def test_event_type_desconhecido(self):
-        with pytest.raises(imob.EventoInvalido):
-            imob.validar_evento(ev_imob(event_type="outro"))
-
-    def test_state_de_outro_event_type(self):
-        with pytest.raises(imob.EventoInvalido):
-            imob.validar_evento(ev_imob(state="ALERTA_IMOBILIDADE"))
-
-    def test_value_nao_numerico(self):
-        with pytest.raises(imob.EventoInvalido):
-            imob.validar_evento(ev_imob(value="1"))
-
-    @pytest.mark.parametrize("seq", ["1", 1.5, True, None])
-    def test_sequence_nao_inteiro(self, seq):
-        ev = ev_imob()
-        ev["sequence"] = seq
-        with pytest.raises(imob.EventoInvalido):
-            imob.validar_evento(ev)
 
     @pytest.mark.parametrize("v", [-0.1, 160.1])
     def test_fora_da_faixa_fisica(self, v):
@@ -110,22 +86,17 @@ def ev_luz(seq=1, cct=6000, hora="22:00:00", device="d1", lux=10, **extra):
 
 
 class TestLuzValidacao:
+    """So a semantica (faixas e formato do instante). A estrutura e conferida na borda: tests/unit/test_validacao.py."""
+
     def test_evento_valido(self):
         luz.validar_evento(ev_luz())
 
-    @pytest.mark.parametrize("campo", ["device_id", "event_time", "luminosidade", "cct", "seq_num"])
-    def test_campo_obrigatorio_ausente(self, campo):
-        ev = ev_luz()
-        del ev[campo]
-        with pytest.raises(luz.EventoInvalido):
-            luz.validar_evento(ev)
-
-    @pytest.mark.parametrize("lux", [-1, "10", None])
+    @pytest.mark.parametrize("lux", [-1])
     def test_luminosidade_invalida(self, lux):
         with pytest.raises(luz.EventoInvalido):
             luz.validar_evento(ev_luz(lux=lux))
 
-    @pytest.mark.parametrize("cct", [999, 12001, "6000", None])
+    @pytest.mark.parametrize("cct", [999, 12001])
     def test_cct_fora_de_faixa(self, cct):
         with pytest.raises(luz.EventoInvalido):
             luz.validar_evento(ev_luz(cct=cct))

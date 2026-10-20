@@ -83,6 +83,7 @@ import const   # PORT, DATA_DIR, JANELA_AGREGACAO_S, FONTES_VALIDAS... (ver cons
 import mensagens
 import regra_queda
 import repositorios
+import validacao
 import canal_app
 import canal_wokwi
 from authz import exige, exigir_dispositivo, exigir_escopo, ForaDeEscopo, negar
@@ -360,6 +361,10 @@ def _processar_leitura_ambiente(user_id: int, payload: dict, device_id: str) -> 
     if evento_ambiente is None:
         return
 
+    erros = validacao.erros_leitura_ambiente(evento_ambiente)
+    if erros:
+        print(f"  [leitura_ambiente] descartada (estrutura invalida): {'; '.join(erros[:3])}")
+        return
     try:
         validar_evento(evento_ambiente)
     except EventoInvalido as e:
@@ -405,6 +410,10 @@ def _processar_evento_wokwi(user_id: int, payload: dict, device_id: str) -> Resu
 
     Devolve o estado explicito (INVALIDO | DUPLICADO | ACEITO) para que o chamador nao confunda
     'descartado' com 'aceito, sem alerta'."""
+    erros = validacao.erros_telemetria_wokwi(payload)
+    if erros:
+        print(f"  [wokwi] evento descartado (estrutura invalida): {'; '.join(erros[:3])}")
+        return ResultadoWokwi(WOKWI_INVALIDO)
     try:
         regra_imobilidade.validar_evento(payload)
     except regra_imobilidade.EventoInvalido as e:
@@ -509,8 +518,10 @@ def _corpo_grande(_erro):
 def _decifrar_corpo():
     """Le o envelope do corpo. Retorna (dict) ou uma resposta de erro (tuple)."""
     envelope = request.get_json(silent=True)
-    if not isinstance(envelope, dict) or "nonce" not in envelope or "ciphertext" not in envelope:
-        return jsonify({"status": "erro", "mensagem": "Corpo invalido: esperado {'nonce': ..., 'ciphertext': ...}"}), 400
+    try:
+        validacao.validar_envelope(envelope)
+    except validacao.CorpoInvalido as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 400
     try:
         corpo = json.loads(decrypt_payload(envelope["nonce"], envelope["ciphertext"]))
     except (DecryptionError, json.JSONDecodeError) as e:
@@ -520,44 +531,15 @@ def _decifrar_corpo():
     return corpo
 
 
-def _ler_user_id(valor) -> int | None:
-    """user_id aceito: somente inteiro JSON (nao booleano). String (mesmo de digitos), decimal, null e
-    ausente -> None (400). Evita que True vire 1, que 1.9 vire 1 e que "1" passe como 1 silenciosamente."""
-    if isinstance(valor, int) and not isinstance(valor, bool):
-        return valor
-    return None
+# A validacao estrutural vive em validacao.py (contratos em schemas/); estes nomes seguem valendo para as rotas e testes.
+_ler_user_id = validacao.ler_user_id
+versao_atual_da_fonte = validacao.versao_atual_da_fonte
+verificar_versao = validacao.verificar_versao
 
 
 def _resposta_cifrada(obj: dict):
     nonce, ct = encrypt_payload(json.dumps(obj))
     return jsonify({"nonce": nonce, "ciphertext": ct})
-
-
-def versao_atual_da_fonte(source: str) -> int:
-    """Versao mais recente do contrato da fonte ('app' ou 'wokwi'), lida de const.py na hora da chamada."""
-    if source == "app":
-        return const.SCHEMA_VERSION_APP
-    if source == "wokwi":
-        return const.SCHEMA_VERSION_WOKWI
-    raise ValueError(f"fonte desconhecida: {source!r}")
-
-
-def verificar_versao(payload: dict, versao_atual: int) -> int | None:
-    """Verifica `schemaVersion` (raiz do payload) ANTES de interpretar o resto.
-
-    Funcao unica para todas as rotas, sem numero fixo: `versao_atual` e a do contrato da rota (quem chama
-    escolhe: versao_atual_da_fonte(source) em /dados e /eventos, const.SCHEMA_VERSION_AUTH em login/refresh)
-    e o piso vem de const.py. Retorna a versao (int) quando suportada, ou None. Nunca levanta excecao.
-      - ausente: vale const.SCHEMA_VERSION_PADRAO;
-      - de const.SCHEMA_VERSION_MINIMA ate `versao_atual`: aceita (inclusive versao menor que a atual);
-      - invalido: nao inteiro (inclui "3", 3.0, null), booleano (em Python True e int), menor que a minima
-        ou maior que `versao_atual`."""
-    v = payload.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
-    if isinstance(v, bool) or not isinstance(v, int):
-        return None
-    if v < const.SCHEMA_VERSION_MINIMA or v > versao_atual:
-        return None
-    return v
 
 
 def _descartar_por_versao(rota: str, payload: dict):
@@ -611,15 +593,10 @@ def receber_evento():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    source = corpo.get("source")
-    if not isinstance(source, str) or source not in const.FONTES_VALIDAS:
-        return jsonify({
-            "status": "erro",
-            "mensagem": f"Campo 'source' ausente ou invalido (esperado 'app' ou 'wokwi'): {source}"
-        }), 400
-    user_id = _ler_user_id(corpo.get("user_id"))
-    if user_id is None:
-        return jsonify({"status": "erro", "mensagem": "user_id ausente ou nao-inteiro"}), 400
+    try:
+        source, user_id = validacao.validar_roteamento(corpo)
+    except validacao.CorpoInvalido as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 400
     try:
         exigir_escopo(g.principal, user_id, source)
         exigir_dispositivo(g.principal, corpo)
@@ -631,8 +608,8 @@ def receber_evento():
     if versao is None:
         return _descartar_por_versao("eventos", corpo)
     try:
-        ev = mensagens.validar_evento_retorno(corpo, source)
-    except mensagens.EventoRetornoInvalido as e:
+        ev = validacao.validar_evento_retorno(corpo, source)
+    except validacao.EventoRetornoInvalido as e:
         print(f"  [eventos] descartado (invalido): {e}")
         return jsonify({"status": "ok", "descartado": True}), 200   # conteudo invalido: 200, como em /dados
     # Resposta crua do dispositivo -> banco (borda). Identidade SEMPRE do token, nunca do corpo.
@@ -660,21 +637,10 @@ def receber_dados():
         return payload
 
     # 2. Identificar usuario (dono do dado) e fonte (app ou wokwi)
-    source = payload.get("source")
-    user_id_raw = payload.get("user_id")
-
-    if not isinstance(source, str) or source not in const.FONTES_VALIDAS:
-        return jsonify({
-            "status": "erro",
-            "mensagem": f"Campo 'source' ausente ou invalido (esperado 'app' ou 'wokwi'): {source}"
-        }), 400
-
-    user_id = _ler_user_id(user_id_raw)
-    if user_id is None:
-        return jsonify({
-            "status": "erro",
-            "mensagem": f"Campo 'user_id' ausente ou nao-inteiro: {user_id_raw}"
-        }), 400
+    try:
+        source, user_id = validacao.validar_roteamento(payload)
+    except validacao.CorpoInvalido as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 400
 
     # Estagio 2 de autorizacao: o user_id e a source declarados DEVEM ser os do token
     try:
@@ -696,6 +662,11 @@ def receber_dados():
     # versao verificada acompanha o payload (uso da fusao por versao). Feito DEPOIS de montar
     # dados_fonte, para nao alterar o registro gravado no jsonl.
     payload["schemaVersion"] = versao
+
+    if source == "app":   # contrato tolerante: so avisa (sem o conteudo); a telemetria segue como sempre
+        erros_app = validacao.erros_telemetria_app(payload)
+        if erros_app:
+            print(f"  [dados] aviso: telemetria do app fora do contrato: {'; '.join(erros_app[:3])}")
 
     device_id = str(payload.get("device_id") or payload.get("deviceId") or f"user{user_id}")
 

@@ -1,0 +1,1028 @@
+{
+  "wokwi-telemetria": {
+    "validos": {
+      "v1_sem_schemaVersion_nem_valueMax": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL"
+      },
+      "v2_com_schemaVersion": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL",
+        "schemaVersion": 2
+      },
+      "v3_leitura_com_valueMax_e_roteamento": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL",
+        "schemaVersion": 3,
+        "valueMax": 0.4,
+        "user_id": 1,
+        "source": "wokwi"
+      },
+      "v3_decisao_alerta": {
+        "eventType": "imobilidade.decisao",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "ALERTA_IMOBILIDADE",
+        "schemaVersion": 3
+      },
+      "v3_decisao_leitura_invalida_sentinela": {
+        "eventType": "imobilidade.decisao",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": -1.0,
+        "unit": "m/s2",
+        "state": "LEITURA_INVALIDA",
+        "schemaVersion": 3
+      },
+      "v3_decisao_fora_de_faixa": {
+        "eventType": "imobilidade.decisao",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 200.0,
+        "unit": "m/s2",
+        "state": "LEITURA_FORA_DE_FAIXA",
+        "schemaVersion": 3
+      }
+    },
+    "invalidos": {
+      "sem_entityId": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL",
+        "schemaVersion": 3
+      },
+      "eventType_desconhecido": {
+        "eventType": "sistema.erro",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "MPU_NAO_ENCONTRADO"
+      },
+      "state_de_outro_eventType": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "ALERTA_IMOBILIDADE"
+      },
+      "value_texto": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": "0.3",
+        "unit": "m/s2",
+        "state": "NORMAL"
+      },
+      "valueMax_texto": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL",
+        "valueMax": "0.4"
+      },
+      "sequence_texto": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": "42",
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL"
+      },
+      "sequence_decimal": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 1.5,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL"
+      },
+      "sequence_booleano": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": true,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL"
+      },
+      "schemaVersion_texto": {
+        "eventType": "imobilidade.leitura",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 42000,
+        "sequence": 42,
+        "value": 0.3,
+        "unit": "m/s2",
+        "state": "NORMAL",
+        "schemaVersion": "3"
+      }
+    }
+  },
+  "wokwi-eventos-retorno": {
+    "validos": {
+      "push_ack_ativado": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7,
+        "schemaVersion": 3,
+        "user_id": 1,
+        "source": "wokwi"
+      },
+      "push_ack_rejeitado": {
+        "eventType": "push.ack",
+        "state": "REJEITADO",
+        "messageId": "m-1",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "resposta_estou_bem": {
+        "eventType": "confirmacao.resposta",
+        "state": "ESTOU_BEM",
+        "messageId": "m-1",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "resposta_sem_resposta": {
+        "eventType": "confirmacao.resposta",
+        "state": "SEM_RESPOSTA",
+        "messageId": "m-1",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "device_id_em_vez_de_deviceId": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7,
+        "device_id": "bridge-dev"
+      }
+    },
+    "invalidos": {
+      "sem_messageId": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "messageId_vazio": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "messageId_numero": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": 5,
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "state_de_outro_eventType": {
+        "eventType": "push.ack",
+        "state": "ESTOU_BEM",
+        "messageId": "m-1",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "sem_entityId": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "deviceId": "bridge-dev",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "sem_sequence": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000
+      },
+      "sem_deviceId": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      },
+      "eventType_desconhecido": {
+        "eventType": "outro",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "deviceId": "bridge-dev",
+        "entityId": "idoso-sim",
+        "eventTimeMs": 9000,
+        "sequence": 7
+      }
+    }
+  },
+  "app-telemetria": {
+    "validos": {
+      "v1_so_sensores": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "timestamp_envio": 1760000000000,
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        }
+      },
+      "v2_com_leitura_ambiente_versionada": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": 1760000000000,
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        },
+        "leitura_ambiente": {
+          "device_id": "cel1",
+          "event_time": "2026-10-14T22:00:00.000-03:00",
+          "luminosidade": 12.5,
+          "cct": 6200,
+          "seq_num": 17,
+          "schemaVersion": 2
+        }
+      },
+      "v3_completo": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": 1760000000000,
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        },
+        "schemaVersion": 3,
+        "acelerometro": {
+          "magnitude": 9.8,
+          "magnitude_max_janela": 11.2,
+          "amostras": 50,
+          "janela_ms": 1000
+        },
+        "leitura_ambiente": {
+          "device_id": "cel1",
+          "event_time": "2026-10-14T22:00:00.000-03:00",
+          "luminosidade": 12.5,
+          "cct": 6200,
+          "seq_num": 17,
+          "schemaVersion": 3
+        }
+      },
+      "v3_sensores_vazio": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": 1760000000000,
+        "sensores": {},
+        "schemaVersion": 3
+      }
+    },
+    "invalidos": {
+      "acelerometro_lista": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": 1760000000000,
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        },
+        "acelerometro": [
+          9.8
+        ]
+      },
+      "acelerometro_magnitude_texto": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": 1760000000000,
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        },
+        "acelerometro": {
+          "magnitude": "9.8",
+          "magnitude_max_janela": 11.2,
+          "amostras": 50,
+          "janela_ms": 1000
+        }
+      },
+      "amostras_zero": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": 1760000000000,
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        },
+        "acelerometro": {
+          "magnitude": 9.8,
+          "magnitude_max_janela": 11.2,
+          "amostras": 0,
+          "janela_ms": 1000
+        }
+      },
+      "timestamp_envio_texto": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": "agora",
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        }
+      },
+      "schemaVersion_texto": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": 1760000000000,
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        },
+        "schemaVersion": "3"
+      }
+    }
+  },
+  "app-leitura-ambiente": {
+    "validos": {
+      "v1_sem_schemaVersion": {
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "cct": 6200,
+        "seq_num": 17
+      },
+      "v2": {
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "cct": 6200,
+        "seq_num": 17,
+        "schemaVersion": 2
+      },
+      "v3": {
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "cct": 6200,
+        "seq_num": 17,
+        "schemaVersion": 3
+      }
+    },
+    "invalidos": {
+      "sem_cct": {
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "seq_num": 17
+      },
+      "sem_seq_num": {
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "cct": 6200
+      },
+      "sem_device_id": {
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "cct": 6200,
+        "seq_num": 17
+      },
+      "luminosidade_texto": {
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": "12.5",
+        "cct": 6200,
+        "seq_num": 17
+      },
+      "cct_nulo": {
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "cct": null,
+        "seq_num": 17
+      },
+      "seq_num_decimal": {
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "cct": 6200,
+        "seq_num": 1.5
+      },
+      "event_time_numero": {
+        "device_id": "cel1",
+        "event_time": 1760000000,
+        "luminosidade": 12.5,
+        "cct": 6200,
+        "seq_num": 17
+      }
+    }
+  },
+  "app-eventos-retorno": {
+    "validos": {
+      "push_ack": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "device_id": "cel1",
+        "event_time": "2026-10-14T12:00:00.000Z",
+        "schemaVersion": 3,
+        "user_id": 1,
+        "source": "app"
+      },
+      "estou_bem": {
+        "eventType": "confirmacao.resposta",
+        "state": "ESTOU_BEM",
+        "messageId": "m-1",
+        "device_id": "cel1",
+        "event_time": "2026-10-14T12:00:00.000Z"
+      },
+      "sem_resposta": {
+        "eventType": "confirmacao.resposta",
+        "state": "SEM_RESPOSTA",
+        "messageId": "m-1",
+        "device_id": "cel1",
+        "event_time": "2026-10-14T12:00:00.000Z"
+      }
+    },
+    "invalidos": {
+      "sem_event_time": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "device_id": "cel1"
+      },
+      "state_de_outro_eventType": {
+        "eventType": "push.ack",
+        "state": "SEM_RESPOSTA",
+        "messageId": "m-1",
+        "device_id": "cel1",
+        "event_time": "2026-10-14T12:00:00.000Z"
+      },
+      "device_id_vazio": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "device_id": "",
+        "event_time": "2026-10-14T12:00:00.000Z"
+      },
+      "sem_device_id": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "m-1",
+        "event_time": "2026-10-14T12:00:00.000Z"
+      },
+      "messageId_vazio": {
+        "eventType": "push.ack",
+        "state": "ATIVADO",
+        "messageId": "",
+        "device_id": "cel1",
+        "event_time": "2026-10-14T12:00:00.000Z"
+      }
+    }
+  },
+  "push-mensagem": {
+    "validos": {
+      "solicitada_gatilho_a": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_solicitada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "timeoutMs": 5000,
+          "motivo": "IMPACTO_SEGUIDO_DE_IMOBILIDADE"
+        }
+      },
+      "solicitada_gatilho_b": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_solicitada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "timeoutMs": 3200,
+          "motivo": "IMOBILIDADE_PROLONGADA"
+        }
+      },
+      "encerrada_confirmado": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_encerrada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "resultado": "CONFIRMADO"
+        }
+      },
+      "encerrada_expirado": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_encerrada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "resultado": "EXPIRADO"
+        }
+      }
+    },
+    "invalidos": {
+      "motivo_desconhecido": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_solicitada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "timeoutMs": 5000,
+          "motivo": "OUTRO"
+        }
+      },
+      "sem_timeoutMs": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_solicitada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "motivo": "IMOBILIDADE_PROLONGADA"
+        }
+      },
+      "timeoutMs_zero": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_solicitada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "timeoutMs": 0,
+          "motivo": "IMOBILIDADE_PROLONGADA"
+        }
+      },
+      "encerrada_sem_resultado": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_encerrada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {}
+      },
+      "encerrada_resultado_desconhecido": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_encerrada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "resultado": "TALVEZ"
+        }
+      },
+      "messageType_desconhecido": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "outra.coisa",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {}
+      },
+      "issuedAt_sem_Z": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_solicitada",
+        "userId": 1,
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "timeoutMs": 5000,
+          "motivo": "IMOBILIDADE_PROLONGADA"
+        }
+      },
+      "userId_texto": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_encerrada",
+        "userId": "1",
+        "episodeId": "6f1f3c1e-0000-4000-8000-000000000002",
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "resultado": "CONFIRMADO"
+        }
+      },
+      "sem_episodeId": {
+        "schemaVersion": 3,
+        "messageId": "6f1f3c1e-0000-4000-8000-000000000001",
+        "messageType": "queda.confirmacao_encerrada",
+        "userId": 1,
+        "issuedAt": "2026-10-15T12:00:00.000Z",
+        "expiresAt": "2026-10-15T12:00:07.000Z",
+        "payload": {
+          "resultado": "CONFIRMADO"
+        }
+      }
+    }
+  },
+  "auth-login": {
+    "validos": {
+      "app": {
+        "schemaVersion": 3,
+        "identificador": "idoso1",
+        "segredo": "x",
+        "fonte": "app",
+        "device_id": "cel1"
+      },
+      "wokwi": {
+        "schemaVersion": 3,
+        "identificador": "bridge1",
+        "segredo": "x",
+        "fonte": "wokwi",
+        "device_id": "bridge-dev"
+      },
+      "admin_sem_fonte_nem_device": {
+        "schemaVersion": 3,
+        "identificador": "admin1",
+        "segredo": "x",
+        "fonte": null,
+        "device_id": null
+      },
+      "sem_schemaVersion": {
+        "identificador": "idoso1",
+        "segredo": "x",
+        "fonte": "app",
+        "device_id": "cel1"
+      }
+    },
+    "invalidos": {
+      "sem_segredo": {
+        "schemaVersion": 3,
+        "identificador": "idoso1",
+        "fonte": "app",
+        "device_id": "cel1"
+      },
+      "identificador_numero": {
+        "identificador": 7,
+        "segredo": "x",
+        "fonte": "app",
+        "device_id": "cel1"
+      },
+      "fonte_desconhecida": {
+        "identificador": "idoso1",
+        "segredo": "x",
+        "fonte": "outra",
+        "device_id": "cel1"
+      },
+      "device_id_com_65_caracteres": {
+        "identificador": "idoso1",
+        "segredo": "x",
+        "fonte": "app",
+        "device_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  },
+  "auth-refresh": {
+    "validos": {
+      "com_versao": {
+        "schemaVersion": 3,
+        "refresh_token": "abc"
+      },
+      "sem_versao": {
+        "refresh_token": "abc"
+      }
+    },
+    "invalidos": {
+      "sem_refresh_token": {
+        "schemaVersion": 3
+      },
+      "refresh_token_numero": {
+        "refresh_token": 1
+      },
+      "schemaVersion_texto": {
+        "schemaVersion": "3",
+        "refresh_token": "abc"
+      }
+    }
+  },
+  "alerta-luz": {
+    "validos": {
+      "alerta": {
+        "tipo": "alerta_luz_inadequada",
+        "device_id": "cel1",
+        "event_time": "2026-10-14T22:00:00.000-03:00",
+        "luminosidade": 12.5,
+        "cct": 6200,
+        "seq_num": 19,
+        "mensagem": "Luz fria durante a noite."
+      }
+    },
+    "invalidos": {
+      "tipo_errado": {
+        "tipo": "alerta_imobilidade",
+        "device_id": "cel1",
+        "event_time": "x",
+        "luminosidade": 1,
+        "cct": 1,
+        "seq_num": 1,
+        "mensagem": "m"
+      },
+      "sem_mensagem": {
+        "tipo": "alerta_luz_inadequada",
+        "device_id": "cel1",
+        "event_time": "x",
+        "luminosidade": 1,
+        "cct": 1,
+        "seq_num": 1
+      }
+    }
+  },
+  "alerta-imobilidade": {
+    "validos": {
+      "alerta": {
+        "tipo": "alerta_imobilidade",
+        "device_id": "bridge-dev",
+        "entity_id": "idoso-sim",
+        "event_time_ms": 90000,
+        "sequence": 90,
+        "value": 0.3,
+        "unit": "m/s2",
+        "mensagem": "Imobilidade confirmada."
+      }
+    },
+    "invalidos": {
+      "tipo_errado": {
+        "tipo": "alerta_luz_inadequada",
+        "device_id": "d",
+        "entity_id": "e",
+        "event_time_ms": 1,
+        "sequence": 1,
+        "value": 1,
+        "unit": "m/s2",
+        "mensagem": "m"
+      },
+      "sem_device_id": {
+        "tipo": "alerta_imobilidade",
+        "entity_id": "e",
+        "event_time_ms": 1,
+        "sequence": 1,
+        "value": 1,
+        "unit": "m/s2",
+        "mensagem": "m"
+      }
+    }
+  },
+  "confirmacao-registro": {
+    "validos": {
+      "episodio_aberto": {
+        "timestamp": "2026-10-15T12:00:00+00:00",
+        "tipo": "episodio.aberto",
+        "episodeId": "ep1",
+        "motivo": "IMOBILIDADE_PROLONGADA"
+      },
+      "push_entrega": {
+        "timestamp": "2026-10-15T12:00:00+00:00",
+        "tipo": "push.entrega",
+        "episodeId": "ep1",
+        "messageId": "m1",
+        "canal": "app",
+        "resultado": "ENTREGUE_AO_CANAL"
+      },
+      "resposta_de_mensagem_desconhecida": {
+        "timestamp": "2026-10-15T12:00:00+00:00",
+        "tipo": "confirmacao.resposta",
+        "episodeId": null,
+        "mensagem_desconhecida": true
+      },
+      "episodio_encerrado": {
+        "timestamp": "2026-10-15T12:00:00+00:00",
+        "tipo": "episodio.encerrado",
+        "episodeId": "ep1",
+        "resultado": "EXPIRADO"
+      }
+    },
+    "invalidos": {
+      "tipo_desconhecido": {
+        "timestamp": "2026-10-15T12:00:00+00:00",
+        "tipo": "outro",
+        "episodeId": "ep1"
+      },
+      "sem_timestamp": {
+        "tipo": "push.ack",
+        "episodeId": "ep1"
+      }
+    }
+  },
+  "envelope": {
+    "validos": {
+      "normal": {
+        "nonce": "AAAA",
+        "ciphertext": "BBBB"
+      }
+    },
+    "invalidos": {
+      "sem_ciphertext": {
+        "nonce": "AAAA"
+      },
+      "nonce_numero": {
+        "nonce": 1,
+        "ciphertext": "BBBB"
+      }
+    }
+  },
+  "roteamento": {
+    "validos": {
+      "app": {
+        "source": "app",
+        "user_id": 1
+      },
+      "wokwi": {
+        "source": "wokwi",
+        "user_id": 0
+      }
+    },
+    "invalidos": {
+      "source_desconhecida": {
+        "source": "bridge",
+        "user_id": 1
+      },
+      "sem_source": {
+        "user_id": 1
+      },
+      "user_id_texto": {
+        "source": "app",
+        "user_id": "1"
+      },
+      "user_id_booleano": {
+        "source": "app",
+        "user_id": true
+      },
+      "user_id_decimal": {
+        "source": "app",
+        "user_id": 1.0
+      },
+      "sem_user_id": {
+        "source": "app"
+      }
+    }
+  }
+}

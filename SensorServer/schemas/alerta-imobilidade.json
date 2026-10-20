@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/alerta-imobilidade",
+  "title": "Alerta de imobilidade (payload da tabela alertas)",
+  "type": "object",
+  "required": [
+    "tipo",
+    "device_id",
+    "entity_id",
+    "event_time_ms",
+    "sequence",
+    "value",
+    "unit",
+    "mensagem"
+  ],
+  "properties": {
+    "tipo": {
+      "const": "alerta_imobilidade"
+    },
+    "device_id": {
+      "type": "string"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "event_time_ms": {
+      "type": "number"
+    },
+    "sequence": {
+      "type": "integer"
+    },
+    "value": {
+      "type": "number"
+    },
+    "unit": {
+      "type": "string"
+    },
+    "mensagem": {
+      "type": "string"
+    }
+  }
+}

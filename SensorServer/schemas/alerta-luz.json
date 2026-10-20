@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/alerta-luz",
+  "title": "Alerta de luz inadequada (payload da tabela alertas)",
+  "type": "object",
+  "required": [
+    "tipo",
+    "device_id",
+    "event_time",
+    "luminosidade",
+    "cct",
+    "seq_num",
+    "mensagem"
+  ],
+  "properties": {
+    "tipo": {
+      "const": "alerta_luz_inadequada"
+    },
+    "device_id": {
+      "type": "string"
+    },
+    "event_time": {
+      "type": "string"
+    },
+    "luminosidade": {
+      "type": "number"
+    },
+    "cct": {
+      "type": "number"
+    },
+    "seq_num": {
+      "type": "integer"
+    },
+    "mensagem": {
+      "type": "string"
+    }
+  }
+}

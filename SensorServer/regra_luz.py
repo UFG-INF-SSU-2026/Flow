@@ -55,30 +55,25 @@ def _estado_do(user_id: int, device_id: str) -> EstadoDispositivo:
 
 
 def validar_evento(evento: dict) -> None:
-    """Valida schema + faixa fisica plausivel. Levanta EventoInvalido se falhar."""
-    # 0. schemaVersion: identificacao/aviso, nao rejeita (mesma ideia do
-    #    wokwi, ver regra_imobilidade.validar_evento). App atual sempre
-    #    manda SCHEMA_VERSION_APP; se ausente (app mais antigo), assume-se SCHEMA_VERSION_PADRAO.
+    """Validacao SEMANTICA (a estrutura -- campos obrigatorios e tipos, schemas/app-leitura-ambiente.json -- ja foi
+    conferida pela borda): faixa fisica plausivel e formato do instante. Levanta EventoInvalido se falhar."""
+    # 0. schemaVersion: identificacao/aviso, nao rejeita (mesma ideia do wokwi, ver regra_imobilidade.validar_evento).
+    #    App atual sempre manda SCHEMA_VERSION_APP; se ausente (app mais antigo), assume-se SCHEMA_VERSION_PADRAO.
     schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
-    if schema_version < const.SCHEMA_VERSION_APP:
+    if isinstance(schema_version, int) and schema_version < const.SCHEMA_VERSION_APP:
         print(
             f"  [app] aviso: evento leitura_ambiente com schemaVersion={schema_version} "
             f"desatualizado (atual={const.SCHEMA_VERSION_APP}), "
             f"device_id={evento.get('device_id')}"
         )
 
-    campos_obrigatorios = ["device_id", "event_time", "luminosidade", "cct", "seq_num"]
-    for campo in campos_obrigatorios:
-        if campo not in evento:
-            raise EventoInvalido(f"Campo obrigatorio ausente: {campo}")
-
     luminosidade = evento["luminosidade"]
     cct = evento["cct"]
 
-    if not isinstance(luminosidade, (int, float)) or luminosidade < 0:
+    if luminosidade < 0:
         raise EventoInvalido(f"luminosidade fora de faixa: {luminosidade}")
 
-    if not isinstance(cct, (int, float)) or not (const.CCT_MIN_VALIDO <= cct <= const.CCT_MAX_VALIDO):
+    if not (const.CCT_MIN_VALIDO <= cct <= const.CCT_MAX_VALIDO):
         raise EventoInvalido(f"cct fora de faixa: {cct}")
 
     try:

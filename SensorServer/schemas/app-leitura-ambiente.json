@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/app-leitura-ambiente",
+  "title": "App: bloco leitura_ambiente (versao propria)",
+  "description": "So a estrutura. Faixas (luminosidade >= 0, CCT 1000..12000) e o formato de event_time sao regra da analise.",
+  "x-versao": 3,
+  "type": "object",
+  "required": [
+    "device_id",
+    "event_time",
+    "luminosidade",
+    "cct",
+    "seq_num"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "device_id": {
+      "type": "string"
+    },
+    "event_time": {
+      "type": "string"
+    },
+    "luminosidade": {
+      "type": "number"
+    },
+    "cct": {
+      "type": "number"
+    },
+    "seq_num": {
+      "type": "integer"
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/wokwi-telemetria",
+  "title": "Wokwi -> servidor: telemetria (POST /dados)",
+  "description": "So a estrutura. Faixa fisica de value e sentinelas (-1.0, >160) sao regra da analise.",
+  "x-versao": 3,
+  "type": "object",
+  "required": [
+    "eventType",
+    "deviceId",
+    "entityId",
+    "eventTimeMs",
+    "sequence",
+    "value",
+    "unit",
+    "state"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "imobilidade.leitura",
+        "imobilidade.decisao"
+      ]
+    },
+    "deviceId": {
+      "type": "string"
+    },
+    "entityId": {
+      "type": "string"
+    },
+    "eventTimeMs": {
+      "type": "number"
+    },
+    "sequence": {
+      "type": "integer"
+    },
+    "value": {
+      "type": "number"
+    },
+    "valueMax": {
+      "type": "number"
+    },
+    "unit": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "imobilidade.leitura"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "enum": [
+              "NORMAL",
+              "AGUARDANDO_CONFIRMACAO",
+              "ALERTA_CONFIRMADO"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "imobilidade.decisao"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "enum": [
+              "LEITURA_INVALIDA",
+              "LEITURA_FORA_DE_FAIXA",
+              "SUSPEITA_IMOBILIDADE",
+              "CONFIRMADO_OK",
+              "MOVIMENTO_RETOMADO",
+              "ALERTA_IMOBILIDADE",
+              "REARMADO_MANUAL"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/roteamento",
+  "title": "Campos de roteamento de /dados e /eventos",
+  "description": "Presentes na raiz de toda telemetria e de todo evento de retorno. Conferidos depois contra o token (403).",
+  "type": "object",
+  "required": [
+    "source",
+    "user_id"
+  ],
+  "properties": {
+    "source": {
+      "type": "string",
+      "enum": [
+        "app",
+        "wokwi"
+      ]
+    },
+    "user_id": {
+      "type": "integer"
+    }
+  }
+}

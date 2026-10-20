@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/auth-login",
+  "title": "Autenticacao: login (POST /auth/login)",
+  "description": "A conta admin pode omitir fonte e device_id.",
+  "x-versao": 3,
+  "type": "object",
+  "required": [
+    "identificador",
+    "segredo"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "identificador": {
+      "type": "string"
+    },
+    "segredo": {
+      "type": "string"
+    },
+    "fonte": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "app",
+        "wokwi",
+        null
+      ]
+    },
+    "device_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64
+    }
+  }
+}

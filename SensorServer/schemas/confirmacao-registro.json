@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/confirmacao-registro",
+  "title": "Registro de confirmacao (payload da tabela confirmacoes)",
+  "description": "Saida do servidor (docs/schemas.md, secao 10); nao tem schemaVersion.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "tipo"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string"
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "episodio.aberto",
+        "push.entrega",
+        "push.ack",
+        "confirmacao.resposta",
+        "episodio.encerrado"
+      ]
+    },
+    "episodeId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

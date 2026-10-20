@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/wokwi-eventos-retorno",
+  "title": "Wokwi -> servidor: eventos de retorno (POST /eventos)",
+  "x-versao": 3,
+  "type": "object",
+  "required": [
+    "eventType",
+    "state",
+    "messageId",
+    "entityId",
+    "eventTimeMs",
+    "sequence"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "push.ack",
+        "confirmacao.resposta"
+      ]
+    },
+    "state": {
+      "type": "string"
+    },
+    "messageId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entityId": {
+      "type": "string"
+    },
+    "eventTimeMs": {
+      "type": "number"
+    },
+    "sequence": {
+      "type": "integer"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "push.ack"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "enum": [
+              "ATIVADO",
+              "REJEITADO"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "confirmacao.resposta"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "enum": [
+              "ESTOU_BEM",
+              "SEM_RESPOSTA"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "anyOf": [
+        {
+          "required": [
+            "device_id"
+          ],
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "deviceId"
+          ],
+          "properties": {
+            "deviceId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

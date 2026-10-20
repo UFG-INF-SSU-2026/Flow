@@ -3,7 +3,7 @@ Regra de negocio: decisao de imobilidade do wokwi (cascata de validacao,
 tabela de estado por dispositivo e atuacao para ALERTA_IMOBILIDADE).
 
 Fluxo: evento wokwi (imobilidade.leitura | imobilidade.decisao) ->
-validacao em cascata -> deduplicacao -> atualizacao de estado persistente
+validacao estrutural (borda) -> validacao semantica -> deduplicacao -> atualizacao de estado persistente
 -> atuacao (quando state == "ALERTA_IMOBILIDADE").
 
 Contrato do evento (emitido por sketch/sketch.ino, funcao emitirEvento):
@@ -28,34 +28,17 @@ import const   # ACEL_MIN/MAX_PLAUSIVEL, SCHEMA_VERSION_WOKWI/PADRAO (ver const.
 # versao 1 (const.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
 # como desatualizados (ver validar_evento).
 
-# Vocabulario conhecido: para cada eventType, quais valores de "state" sao
-# aceitos. Vem direto da maquina de estados de sketch.ino (nomeEstado() +
-# os literais passados para emitirEvento() em cada transicao).
-EVENTOS_ESPERADOS = {
-    "imobilidade.leitura": {"NORMAL", "AGUARDANDO_CONFIRMACAO", "ALERTA_CONFIRMADO"},
-    "imobilidade.decisao": {
-        "LEITURA_INVALIDA",
-        "LEITURA_FORA_DE_FAIXA",
-        "SUSPEITA_IMOBILIDADE",
-        "CONFIRMADO_OK",
-        "MOVIMENTO_RETOMADO",
-        "ALERTA_IMOBILIDADE",
-        "REARMADO_MANUAL",
-    },
-}
+# O vocabulario (eventType -> state) e os campos obrigatorios vivem em schemas/wokwi-telemetria.json e sao
+# conferidos pela borda (validacao.erros_telemetria_wokwi). Aqui ficam so as regras de negocio.
 
 # States de decisao que, ao chegar, encerram um episodio de alerta em aberto
 # (o dispositivo voltou a um estado seguro) - usados para "rearmar" o flag
 # alerta_ativo do lado do servidor, simetrico ao alerta_ativo do firmware.
 ESTADOS_QUE_ENCERRAM_ALERTA = {"CONFIRMADO_OK", "MOVIMENTO_RETOMADO", "REARMADO_MANUAL"}
 
-CAMPOS_OBRIGATORIOS = [
-    "eventType", "deviceId", "entityId", "eventTimeMs", "sequence", "value", "unit", "state",
-]
-
 
 class EventoInvalido(Exception):
-    """Evento fora do vocabulario conhecido, do enum esperado ou da faixa fisica plausivel."""
+    """Evento fora da faixa fisica plausivel (a estrutura invalida e barrada antes, na borda)."""
 
 
 @dataclass
@@ -98,62 +81,26 @@ def _agora_iso() -> str:
 
 
 def validar_evento(evento: dict) -> None:
-    """Cascata de validacao:
+    """Validacao SEMANTICA (a estrutura -- campos, tipos, vocabulario -- ja foi conferida pela borda):
 
         0. schemaVersion (apenas identificacao/aviso, nao rejeita)
-        1. eventType pertence ao vocabulario conhecido
-        2. state pertence ao enum esperado daquele eventType
-        3. value dentro da faixa fisica plausivel (0-160 m/s2)
+        1. value dentro da faixa fisica plausivel (0-160 m/s2)
 
-    A faixa fisica (passo 3) e verificada de forma coerente com o que o
-    proprio firmware envia: LEITURA_INVALIDA usa o sentinela -1.0 (leitura
-    falhou, nao ha magnitude) e LEITURA_FORA_DE_FAIXA reporta magnitude
-    real acima do teto (>160) - validar esses dois contra 0-160 rejeitaria
-    exatamente os eventos que existem para *avisar* sobre a anomalia.
-    Levanta EventoInvalido se qualquer passo falhar.
+    A faixa fisica e verificada de forma coerente com o que o proprio firmware envia: LEITURA_INVALIDA usa o
+    sentinela -1.0 (leitura falhou, nao ha magnitude) e LEITURA_FORA_DE_FAIXA reporta magnitude real acima do teto
+    (>160) - validar esses dois contra 0-160 rejeitaria exatamente os eventos que existem para *avisar* sobre a
+    anomalia. Levanta EventoInvalido se falhar.
     """
-    # 0. schemaVersion: primeiro passo da cascata (docs/arquitetura.md, 4.3).
-    #    Se o campo nao vier (produtor mais antigo), assume-se
-    #    SCHEMA_VERSION_PADRAO (1). Uma versao desatualizada
-    #    nao invalida o evento - so gera um aviso explicito no console, para
-    #    dar visibilidade de que ha um produtor fora da versao atual em campo.
     schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
-    if schema_version < const.SCHEMA_VERSION_WOKWI:
+    if isinstance(schema_version, int) and schema_version < const.SCHEMA_VERSION_WOKWI:
         print(
             f"  [wokwi] aviso: evento com schemaVersion={schema_version} "
             f"desatualizado (atual={const.SCHEMA_VERSION_WOKWI}), "
             f"deviceId={evento.get('deviceId')}"
         )
 
-    for campo in CAMPOS_OBRIGATORIOS:
-        if campo not in evento:
-            raise EventoInvalido(f"Campo obrigatorio ausente: {campo}")
-
-    event_type = evento["eventType"]
     state = evento["state"]
     value = evento["value"]
-
-    # 1. eventType conhecido
-    if event_type not in EVENTOS_ESPERADOS:
-        raise EventoInvalido(f"eventType desconhecido: {event_type}")
-
-    # 2. state esperado para esse eventType
-    if state not in EVENTOS_ESPERADOS[event_type]:
-        raise EventoInvalido(
-            f"state '{state}' nao esperado para eventType '{event_type}' "
-            f"(esperado um de {sorted(EVENTOS_ESPERADOS[event_type])})"
-        )
-
-    if not isinstance(value, (int, float)):
-        raise EventoInvalido(f"value nao numerico: {value!r}")
-
-    # sequence precisa ser inteiro: eh_duplicado compara com o ultimo (seq <= ultimo). Um valor nao numerico
-    # aceito aqui seria gravado como referencia e faria TODO evento seguinte do dispositivo falhar.
-    sequence = evento["sequence"]
-    if isinstance(sequence, bool) or not isinstance(sequence, int):
-        raise EventoInvalido(f"sequence nao inteiro: {sequence!r}")
-
-    # 3. faixa fisica plausivel, com as duas excecoes explicitas do firmware
     if state == "LEITURA_INVALIDA":
         if value != -1.0:
             raise EventoInvalido(

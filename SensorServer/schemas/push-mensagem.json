@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/push-mensagem",
+  "title": "Servidor -> dispositivo: mensagem de push (texto decifrado do SSE)",
+  "description": "E o payload gravado em comandos_push e o que vai cifrado ao app e ao bridge.",
+  "x-versao": 3,
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "messageId",
+    "messageType",
+    "userId",
+    "episodeId",
+    "issuedAt",
+    "expiresAt",
+    "payload"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "messageId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "messageType": {
+      "type": "string",
+      "enum": [
+        "queda.confirmacao_solicitada",
+        "queda.confirmacao_encerrada"
+      ]
+    },
+    "userId": {
+      "type": "integer"
+    },
+    "episodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issuedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "expiresAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "messageType"
+        ],
+        "properties": {
+          "messageType": {
+            "const": "queda.confirmacao_solicitada"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": [
+              "timeoutMs",
+              "motivo"
+            ],
+            "properties": {
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "motivo": {
+                "type": "string",
+                "enum": [
+                  "IMPACTO_SEGUIDO_DE_IMOBILIDADE",
+                  "IMOBILIDADE_PROLONGADA"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "messageType"
+        ],
+        "properties": {
+          "messageType": {
+            "const": "queda.confirmacao_encerrada"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": [
+              "resultado"
+            ],
+            "properties": {
+              "resultado": {
+                "type": "string",
+                "enum": [
+                  "CONFIRMADO",
+                  "EXPIRADO",
+                  "CANCELADO"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

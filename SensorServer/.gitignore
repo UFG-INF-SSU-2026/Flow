@@ -2,3 +2,7 @@
 *.ipynb
 .env
 *.tmp
+
+# contratos versionados e fixtures de teste (os demais .json, como contas.json e sessoes.json, ficam fora do Git)
+!schemas/*.json
+!tests/fixtures/*.json

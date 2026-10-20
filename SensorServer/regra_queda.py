@@ -260,7 +260,7 @@ def anotar_mensagem(user_id: int, episode_id: str, message_id: str, agora: float
 
 
 def registrar_retorno(user_id: int, evento: dict, agora: float | None = None) -> Encerramento | None:
-    """evento: dict normalizado por mensagens.validar_evento_retorno. Grava o retorno com o episodio da sua
+    """evento: dict normalizado por validacao.validar_evento_retorno. Grava o retorno com o episodio da sua
     `messageId` e, se for ESTOU_BEM de mensagem conhecida cujo episodio ainda esta aberto, encerra como CONFIRMADO.
 
     - messageId desconhecida ou de outro usuario: `episodeId: null` e `mensagem_desconhecida: true`; nada encerra.

@@ -1,7 +1,7 @@
 """
-Mensagens do Marco 3 (sem I/O de rede):
-  - mensagem de push servidor -> dispositivo (schema de mensagem, const.SCHEMA_VERSION_MENSAGEM, docs/schemas.md secao 3)
-  - validacao dos eventos de retorno dispositivo -> servidor (push.ack, confirmacao.resposta)
+Mensagens do Marco 3 (sem I/O de rede): mensagem de push servidor -> dispositivo (contrato schemas/push-mensagem.json,
+const.SCHEMA_VERSION_MENSAGEM, docs/schemas.md secao 6). A validacao dos eventos de retorno dispositivo -> servidor
+(push.ack, confirmacao.resposta) e estrutural e vive na borda (validacao.validar_evento_retorno).
 """
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -11,16 +11,6 @@ import const   # SCHEMA_VERSION_MENSAGEM, FONTES_VALIDAS, MARGEM_SERVIDOR_S, TTL
 TIPO_SOLICITADA = "queda.confirmacao_solicitada"
 TIPO_ENCERRADA = "queda.confirmacao_encerrada"
 RESULTADOS_ENCERRAMENTO = {"CONFIRMADO", "EXPIRADO", "CANCELADO"}
-
-EVENTOS_RETORNO = {
-    "push.ack": {"ATIVADO", "REJEITADO"},
-    "confirmacao.resposta": {"ESTOU_BEM", "SEM_RESPOSTA"},
-}
-
-
-class EventoRetornoInvalido(Exception):
-    pass
-
 
 def agora_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -82,34 +72,3 @@ def para_envio(msg: dict, agora: datetime | None = None) -> dict | None:
             return None
         copia["payload"]["timeoutMs"] = min(original, restante_cliente)
     return copia
-
-
-def validar_evento_retorno(payload: dict, source: str) -> dict:
-    """Valida e normaliza um evento de POST /eventos. Retorna dict normalizado:
-    {eventType, state, messageId, device_id, source}. Levanta EventoRetornoInvalido.
-
-    `source` deve ser 'app' ou 'wokwi' e JA conferida com o token pelo chamador (authz.exigir_escopo).
-    Qualquer outro valor e erro de programacao (ValueError), nao conteudo invalido do cliente."""
-    if source not in const.FONTES_VALIDAS:
-        raise ValueError(f"source deve ser uma de {sorted(const.FONTES_VALIDAS)} (ja conferida com o token): {source!r}")
-    tipo = payload.get("eventType")
-    if tipo not in EVENTOS_RETORNO:
-        raise EventoRetornoInvalido(f"eventType desconhecido: {tipo}")
-    state = payload.get("state")
-    if state not in EVENTOS_RETORNO[tipo]:
-        raise EventoRetornoInvalido(f"state '{state}' nao esperado para '{tipo}'")
-    message_id = payload.get("messageId")
-    if not isinstance(message_id, str) or not message_id:
-        raise EventoRetornoInvalido("messageId ausente")
-    device_id = payload.get("device_id") or payload.get("deviceId")
-    if not device_id:
-        raise EventoRetornoInvalido("device_id/deviceId ausente")
-    if source == "wokwi":
-        for campo in ("entityId", "eventTimeMs", "sequence"):
-            if campo not in payload:
-                raise EventoRetornoInvalido(f"campo obrigatorio ausente (wokwi): {campo}")
-    else:  # source == "app"
-        if "event_time" not in payload:
-            raise EventoRetornoInvalido("campo obrigatorio ausente (app): event_time")
-    return {"eventType": tipo, "state": state, "messageId": message_id,
-            "device_id": str(device_id), "source": source}

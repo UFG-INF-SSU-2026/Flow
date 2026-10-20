@@ -5,6 +5,8 @@ Documento único dos contratos que passam pelo servidor. Cada seção traz o sch
 
 Cada schema evolui de forma independente: a versão atual de cada um fica na tabela abaixo e no cabeçalho da sua seção, e as regras gerais se referem sempre à "versão atual do schema", nunca a um número fixo.
 
+> **Fonte única dos contratos:** os schemas legíveis por máquina ficam em `SensorServer/schemas/` (um arquivo por contrato, com `x-versao`; política de versão em `schemas/LEIAME.md`). A borda confere a **estrutura** contra eles (`validacao.py`); a **semântica** (faixas, sentinelas) é regra da análise. Este documento é a descrição humana e é conferido contra os arquivos e contra `const.py` por `tests/unit/test_contratos.py`. A seção 3 (comando serial) não é JSON e não tem arquivo de schema.
+
 ## Versões atuais
 
 | Seção | Schema | Versão atual (`schemaVersion`) |
@@ -27,7 +29,7 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 
 - **Envelope de transporte** (idêntico em todas as rotas e no push): `{"nonce": "<base64>", "ciphertext": "<base64>"}`, AES-256-GCM. Os schemas abaixo descrevem o **texto decifrado**.
 - **Autenticação:** toda rota, exceto `/`, `/health`, `/auth/login` e `/auth/refresh`, exige `Authorization: Bearer <access_token>`.
-- **`schemaVersion`** é obrigatório **na raiz** de todo payload de produtor e se refere à versão do schema daquele payload (ver tabela de versões atuais). Se ausente, o servidor assume `1`. A versão **mais recente** do contrato é definida num único lugar do servidor (`const.SCHEMA_VERSION_ATUAL`); `const.SCHEMA_VERSION_MINIMA` (hoje `1`) é a menor aceita.
+- **`schemaVersion`** é obrigatório **na raiz** de todo payload de produtor e se refere à versão do schema daquele payload (ver tabela de versões atuais). Se ausente, o servidor assume `1`. A versão **mais recente** de cada contrato é definida num único lugar do servidor (uma constante `const.SCHEMA_VERSION_*` por contrato); `const.SCHEMA_VERSION_MINIMA` (hoje `1`) é a menor aceita.
   - Versão **de `1` até a mais recente** é aceita e **usada**, inclusive a anterior à atual (as regras logam o aviso "desatualizada"). Na regra de queda a versão decide a prioridade entre dispositivos do mesmo usuário (arquitetura, 9.2.1); wokwi v1/v2 (sem `valueMax`) alimentam a regra de forma degradada, e app v1/v2 (sem `acelerometro`) não geram leitura de aceleração.
   - Versão **maior que a mais recente**, menor que a mínima, não inteira (inclui `"3"` e `3.0`) ou booleana é **descartada e logada**. Em `/dados` e `/eventos` a resposta é `200` com `{"status": "ok", "descartado": true, "motivo": "schemaVersion_nao_suportado"}` e o conteúdo não chega ao buffer nem às regras. Em `/auth/login` e `/auth/refresh` a resposta é `400` (a ausência é aceita).
 - **`source`** é obrigatório e deve ser `app` ou `wokwi` em `/dados` e `/eventos`; ausente ou inválido = `400`. **`user_id`** deve ser um número inteiro JSON; string (mesmo só de dígitos), booleano, decimal, `null` ou ausente = `400`. O corpo decifrado deve ser um objeto JSON; senão `400`.

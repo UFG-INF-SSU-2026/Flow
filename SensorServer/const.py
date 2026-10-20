@@ -11,8 +11,8 @@ Regras de uso:
   - FLOW_JWT_SECRET NAO esta aqui: e segredo, nao constante (ver auth.py).
   - A chave AES e o tamanho do nonce ficam em crypto_utils.py (limitacao
     assumida, documentada la).
-  - Politica e vocabulario (POLITICA, FONTE_DO_PAPEL, EVENTOS_ESPERADOS,
-    EVENTOS_RETORNO, tipos de mensagem) ficam nos modulos que os usam.
+  - Politica (POLITICA, FONTE_DO_PAPEL) e tipos de mensagem ficam nos modulos que os usam; o vocabulario dos
+    eventos (eventType/state) e os campos obrigatorios vivem em schemas/ (fonte unica, ver schemas/LEIAME.md).
 """
 import os
 from pathlib import Path

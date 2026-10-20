@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/envelope",
+  "title": "Envelope de transporte (AES-256-GCM)",
+  "description": "Corpo de toda requisicao e resposta cifrada. Os demais schemas descrevem o texto DECIFRADO.",
+  "type": "object",
+  "required": [
+    "nonce",
+    "ciphertext"
+  ],
+  "properties": {
+    "nonce": {
+      "type": "string"
+    },
+    "ciphertext": {
+      "type": "string"
+    }
+  }
+}

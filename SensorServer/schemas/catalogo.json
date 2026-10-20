@@ -1,0 +1,69 @@
+{
+  "contratos": {
+    "envelope": {
+      "versao_const": null,
+      "rota": "todas",
+      "secao": "0"
+    },
+    "roteamento": {
+      "versao_const": null,
+      "rota": "/dados, /eventos",
+      "secao": "0"
+    },
+    "wokwi-telemetria": {
+      "versao_const": "SCHEMA_VERSION_WOKWI",
+      "rota": "POST /dados",
+      "secao": "1"
+    },
+    "wokwi-eventos-retorno": {
+      "versao_const": "SCHEMA_VERSION_WOKWI",
+      "rota": "POST /eventos",
+      "secao": "2"
+    },
+    "app-telemetria": {
+      "versao_const": "SCHEMA_VERSION_APP",
+      "rota": "POST /dados",
+      "secao": "4"
+    },
+    "app-leitura-ambiente": {
+      "versao_const": "SCHEMA_VERSION_APP",
+      "rota": "POST /dados",
+      "secao": "4.2"
+    },
+    "app-eventos-retorno": {
+      "versao_const": "SCHEMA_VERSION_APP",
+      "rota": "POST /eventos",
+      "secao": "5"
+    },
+    "push-mensagem": {
+      "versao_const": "SCHEMA_VERSION_MENSAGEM",
+      "rota": "GET /push/*",
+      "secao": "6"
+    },
+    "auth-login": {
+      "versao_const": "SCHEMA_VERSION_AUTH",
+      "rota": "POST /auth/login",
+      "secao": "7"
+    },
+    "auth-refresh": {
+      "versao_const": "SCHEMA_VERSION_AUTH",
+      "rota": "POST /auth/refresh",
+      "secao": "8"
+    },
+    "alerta-luz": {
+      "versao_const": null,
+      "rota": "tabela alertas",
+      "secao": null
+    },
+    "alerta-imobilidade": {
+      "versao_const": null,
+      "rota": "tabela alertas",
+      "secao": null
+    },
+    "confirmacao-registro": {
+      "versao_const": null,
+      "rota": "tabela confirmacoes",
+      "secao": "10"
+    }
+  }
+}
