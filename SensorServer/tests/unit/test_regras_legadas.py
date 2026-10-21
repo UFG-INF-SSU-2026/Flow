@@ -1,13 +1,14 @@
 """regra_imobilidade e regra_luz: validacao, deduplicacao, estado por (user_id, device_id) e atuacao."""
 import pytest
 
-import regra_imobilidade as imob
-import regra_luz as luz
-import const
+from analise import const as const_analise
+from analise import regra_imobilidade as imob
+from analise import regra_luz as luz
+from comum import const as const_comum
 
 
 def ev_imob(seq=1, event_type="imobilidade.leitura", state="NORMAL", value=0.3, device="d1", **extra):
-    ev = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": event_type, "deviceId": device, "entityId": "e1",
+    ev = {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "eventType": event_type, "deviceId": device, "entityId": "e1",
           "eventTimeMs": seq * 1000, "sequence": seq, "value": value, "unit": "m/s2", "state": state}
     ev.update(extra)
     return ev
@@ -79,7 +80,7 @@ class TestImobilidadeEstado:
 
 
 def ev_luz(seq=1, cct=6000, hora="22:00:00", device="d1", lux=10, **extra):
-    ev = {"schemaVersion": const.SCHEMA_VERSION_APP, "device_id": device, "event_time": f"2026-10-14T{hora}-03:00",
+    ev = {"schemaVersion": const_comum.SCHEMA_VERSION_APP, "device_id": device, "event_time": f"2026-10-14T{hora}-03:00",
           "luminosidade": lux, "cct": cct, "seq_num": seq}
     ev.update(extra)
     return ev
@@ -137,18 +138,16 @@ class TestLuzRegra:
         assert (r[2] is not None) is alerta
 
     def test_cct_no_limiar_nao_e_frio(self):
-        import const
-        r = [luz.avaliar_regra(1, ev_luz(seq=s, cct=const.CCT_LIMIAR_FRIO)) for s in (1, 2, 3)]
+        r = [luz.avaliar_regra(1, ev_luz(seq=s, cct=const_analise.CCT_LIMIAR_FRIO)) for s in (1, 2, 3)]
         assert r == [None, None, None]
 
 
 class TestTetoDeEstados:
-    """As tabelas de estado crescem com device_id vindo do cliente: passam de const.MAX_ESTADOS_LEGADOS, saem as menos usadas."""
+    """As tabelas de estado crescem com device_id vindo do cliente: passam de const_analise.MAX_ESTADOS_LEGADOS, saem as menos usadas."""
 
     @pytest.fixture(autouse=True)
     def teto_pequeno(self, monkeypatch):
-        import const
-        monkeypatch.setattr(const, "MAX_ESTADOS_LEGADOS", 3)
+        monkeypatch.setattr(const_analise, "MAX_ESTADOS_LEGADOS", 3)
 
     def test_imobilidade_nao_passa_do_teto(self):
         for i in range(10):

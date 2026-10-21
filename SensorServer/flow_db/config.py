@@ -1,5 +1,5 @@
 """
-Configuracao de conexao. So le variaveis de ambiente (o .env e carregado por const.py ou por flow_db/__main__.py).
+Configuracao de conexao. So le variaveis de ambiente (o .env e carregado por comum/const.py ou por flow_db/__main__.py).
 
 Variaveis:
     FLOW_DB_HOST (127.0.0.1)  FLOW_DB_PORT (5432)  FLOW_DB_NAME (flow)

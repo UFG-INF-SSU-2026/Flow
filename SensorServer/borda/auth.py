@@ -1,10 +1,10 @@
 """
 Autenticacao (Marco 3): contas, senhas, login, refresh e tokens.
 
-Nao conhece Flask. A camada HTTP fica em server.py; a checagem por rota em authz.py.
+Nao conhece Flask. A camada HTTP fica em borda/server.py; a checagem por rota em borda/authz.py.
 
 Uso (CLI):
-    python auth.py criar-conta --id idoso1 --papel idoso --user-id 1 --fontes app
+    python -m borda.auth criar-conta --id idoso1 --papel idoso --user-id 1 --fontes app
 """
 import argparse
 import getpass
@@ -21,7 +21,8 @@ from dataclasses import dataclass
 
 import jwt  # PyJWT
 
-import const   # TTLs, bloqueio, caminhos, papeis, fontes e custo do scrypt (ver const.py)
+from borda import const as const_borda   # TTLs, bloqueio, caminhos, papeis e custo do scrypt
+from comum import const as const_comum   # fontes validas
 
 _lock = threading.RLock()
 _falhas: dict[str, list[float]] = {}
@@ -81,7 +82,7 @@ def exigir_segredo() -> None:
 def hash_senha(senha: str) -> str:
     salt = os.urandom(16)
     h = hashlib.scrypt(senha.encode(), salt=salt,
-                       n=const.SCRYPT_N, r=const.SCRYPT_R, p=const.SCRYPT_P, dklen=32)
+                       n=const_borda.SCRYPT_N, r=const_borda.SCRYPT_R, p=const_borda.SCRYPT_P, dklen=32)
     return f"scrypt${salt.hex()}${h.hex()}"
 
 
@@ -89,7 +90,7 @@ def _verificar_senha(senha: str, armazenado: str) -> bool:
     try:
         _, salt_hex, h_hex = armazenado.split("$")
         h = hashlib.scrypt(senha.encode(), salt=bytes.fromhex(salt_hex),
-                           n=const.SCRYPT_N, r=const.SCRYPT_R, p=const.SCRYPT_P, dklen=32)
+                           n=const_borda.SCRYPT_N, r=const_borda.SCRYPT_R, p=const_borda.SCRYPT_P, dklen=32)
         return hmac.compare_digest(h.hex(), h_hex)
     except Exception:
         return False
@@ -115,9 +116,9 @@ def _gravar_json(path: str, dados) -> None:
 
 
 def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str], senha: str) -> None:
-    if papel not in const.PAPEIS_VALIDOS:
+    if papel not in const_borda.PAPEIS_VALIDOS:
         raise ValueError(f"papel invalido: {papel}")
-    if not set(fontes) <= const.FONTES_VALIDAS:
+    if not set(fontes) <= const_comum.FONTES_VALIDAS:
         raise ValueError(f"fontes invalidas: {fontes}")
     for uid in user_ids:
         if isinstance(uid, bool) or not isinstance(uid, int) or uid < 0:
@@ -131,12 +132,12 @@ def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str
     if papel == "admin" and user_ids:
         raise ValueError("papel 'admin' nao tem --user-id (ele nao e escopado a uma pessoa)")
     with _lock:
-        contas = _ler_json(const.CONTAS_PATH, {})
+        contas = _ler_json(const_borda.CONTAS_PATH, {})
         if conta_id in contas:
             raise ValueError(f"conta ja existe: {conta_id}")
         contas[conta_id] = {"id": conta_id, "papel": papel, "user_ids": user_ids,
                             "fontes": fontes, "hash": hash_senha(senha)}
-        _gravar_json(const.CONTAS_PATH, contas)
+        _gravar_json(const_borda.CONTAS_PATH, contas)
 
 
 # --------------------------------- tokens ----------------------------------
@@ -144,7 +145,7 @@ def _emitir_access(conta: dict, fonte: str | None, device_id: str | None, agora:
     claims = {
         "sub": conta["id"], "papel": conta["papel"], "user_ids": conta["user_ids"],
         "fonte": fonte, "device_id": device_id,
-        "iat": int(agora), "exp": int(agora) + const.ACCESS_TTL_S, "jti": uuid.uuid4().hex,
+        "iat": int(agora), "exp": int(agora) + const_borda.ACCESS_TTL_S, "jti": uuid.uuid4().hex,
     }
     return jwt.encode(claims, _segredo(), algorithm="HS256")
 
@@ -160,16 +161,16 @@ def verificar_token(token: str) -> Principal:
 
 def _par_de_tokens(conta: dict, fonte, device_id, agora: float) -> dict:
     refresh_token = secrets.token_urlsafe(48)
-    sessoes = _ler_json(const.SESSOES_PATH, {})
+    sessoes = _ler_json(const_borda.SESSOES_PATH, {})
     sessoes = {h: s for h, s in sessoes.items() if s["exp"] > agora}  # limpa vencidas
     sessoes[hashlib.sha256(refresh_token.encode()).hexdigest()] = {
-        "conta_id": conta["id"], "fonte": fonte, "device_id": device_id, "exp": agora + const.REFRESH_TTL_S,
+        "conta_id": conta["id"], "fonte": fonte, "device_id": device_id, "exp": agora + const_borda.REFRESH_TTL_S,
     }
-    _gravar_json(const.SESSOES_PATH, sessoes)
+    _gravar_json(const_borda.SESSOES_PATH, sessoes)
     return {
         "access_token": _emitir_access(conta, fonte, device_id, agora),
         "refresh_token": refresh_token,
-        "expires_in": const.ACCESS_TTL_S,
+        "expires_in": const_borda.ACCESS_TTL_S,
         "papel": conta["papel"],
         "user_ids": conta["user_ids"],
     }
@@ -179,13 +180,13 @@ def _par_de_tokens(conta: dict, fonte, device_id, agora: float) -> dict:
 def _podar_login(agora: float) -> None:
     """Mantem _falhas e _bloqueado_ate pequenos: os identificadores vem do cliente (inclusive os que nao existem).
     Sai o que ja venceu (bloqueio passado; falhas todas fora da janela). Se ainda passar de
-    const.MAX_IDENTIFICADORES_LOGIN, saem primeiro os de falha mais antiga e depois os de bloqueio que vence antes."""
+    const_borda.MAX_IDENTIFICADORES_LOGIN, saem primeiro os de falha mais antiga e depois os de bloqueio que vence antes."""
     for ident in [i for i, ate in _bloqueado_ate.items() if ate <= agora]:
         del _bloqueado_ate[ident]
-    for ident in [i for i, fs in _falhas.items() if not fs or agora - fs[-1] >= const.JANELA_FALHAS_S]:
+    for ident in [i for i, fs in _falhas.items() if not fs or agora - fs[-1] >= const_borda.JANELA_FALHAS_S]:
         del _falhas[ident]
     for tabela, chave in ((_falhas, lambda i: _falhas[i][-1]), (_bloqueado_ate, _bloqueado_ate.get)):
-        excesso = len(tabela) - const.MAX_IDENTIFICADORES_LOGIN
+        excesso = len(tabela) - const_borda.MAX_IDENTIFICADORES_LOGIN
         if excesso > 0:
             for ident in sorted(tabela, key=chave)[:excesso]:
                 del tabela[ident]
@@ -197,17 +198,17 @@ def _checar_bloqueio(ident: str, agora: float) -> None:
 
 
 def _registrar_falha(ident: str, agora: float) -> None:
-    fs = [t for t in _falhas.get(ident, []) if agora - t < const.JANELA_FALHAS_S] + [agora]
+    fs = [t for t in _falhas.get(ident, []) if agora - t < const_borda.JANELA_FALHAS_S] + [agora]
     _falhas[ident] = fs
-    if len(fs) >= const.MAX_FALHAS:
-        _bloqueado_ate[ident] = agora + const.BLOQUEIO_S
+    if len(fs) >= const_borda.MAX_FALHAS:
+        _bloqueado_ate[ident] = agora + const_borda.BLOQUEIO_S
         del _falhas[ident]   # o bloqueio recomeca a contagem; nao deixa entrada vazia
     _podar_login(agora)      # depois de registrar: a entrada nova e a mais recente e nunca e a que sai
 
 
 def device_id_valido(device_id) -> bool:
-    """None (sem dispositivo) ou string de ate const.MAX_DEVICE_ID_LEN caracteres. device_id vira chave do hub SSE."""
-    return device_id is None or (isinstance(device_id, str) and len(device_id) <= const.MAX_DEVICE_ID_LEN)
+    """None (sem dispositivo) ou string de ate const_comum.MAX_DEVICE_ID_LEN caracteres. device_id vira chave do hub SSE."""
+    return device_id is None or (isinstance(device_id, str) and len(device_id) <= const_comum.MAX_DEVICE_ID_LEN)
 
 
 def login(identificador: str, segredo: str, fonte: str | None, device_id: str | None) -> dict:
@@ -215,7 +216,7 @@ def login(identificador: str, segredo: str, fonte: str | None, device_id: str | 
         raise ValueError("device_id invalido")
     agora = time.time()
     with _lock:
-        conta = _ler_json(const.CONTAS_PATH, {}).get(identificador)
+        conta = _ler_json(const_borda.CONTAS_PATH, {}).get(identificador)
         existe = conta is not None
         try:
             _checar_bloqueio(identificador, agora)
@@ -237,14 +238,14 @@ def refresh(refresh_token: str) -> dict:
     agora = time.time()
     h = hashlib.sha256(refresh_token.encode()).hexdigest()
     with _lock:
-        sessoes = _ler_json(const.SESSOES_PATH, {})
+        sessoes = _ler_json(const_borda.SESSOES_PATH, {})
         s = sessoes.pop(h, None)  # uso unico: se existia, sai do arquivo ja nesta chamada, valido ou expirado
         if s is None:
             raise TokenInvalido("refresh invalido ou expirado")   # desconhecido: nada mudou, nao regrava
-        _gravar_json(const.SESSOES_PATH, sessoes)
+        _gravar_json(const_borda.SESSOES_PATH, sessoes)
         if s["exp"] <= agora:
             raise TokenInvalido("refresh invalido ou expirado")
-        conta = _ler_json(const.CONTAS_PATH, {}).get(s["conta_id"])
+        conta = _ler_json(const_borda.CONTAS_PATH, {}).get(s["conta_id"])
         if conta is None:
             raise TokenInvalido("conta removida")
         return _par_de_tokens(conta, s["fonte"], s["device_id"], agora)
@@ -256,7 +257,7 @@ def _cli() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("criar-conta")
     c.add_argument("--id", required=True)
-    c.add_argument("--papel", required=True, choices=sorted(const.PAPEIS_VALIDOS))
+    c.add_argument("--papel", required=True, choices=sorted(const_borda.PAPEIS_VALIDOS))
     c.add_argument("--user-id", type=int, nargs="*", default=[])
     c.add_argument("--fontes", nargs="*", default=[])
     a = ap.parse_args()

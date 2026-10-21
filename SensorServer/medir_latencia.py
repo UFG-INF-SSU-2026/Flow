@@ -6,7 +6,7 @@ cada etapa que mexa no caminho dos dados.
 Faz login como o bridge (conta 'dispositivo', fonte wokwi), abre o SSE /push/wokwi e repete N rodadas de:
   - queda:        2 leituras normais, IMPACTO, repouso. Tempo = envio do impacto ate o push chegar.
   - imobilidade:  1 decisao ALERTA_IMOBILIDADE (gatilho B). Tempo = envio da decisao ate o push chegar.
-Entre rodadas espera o episodio expirar e o cooldown passar (const.COOLDOWN_S): por isso cada rodada leva ~1 min.
+Entre rodadas espera o episodio expirar e o cooldown passar (const_analise.COOLDOWN_S): por isso cada rodada leva ~1 min.
 
 Uso (na pasta SensorServer, com o servidor rodando):
     FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python medir_latencia.py [URL_BASE] [RODADAS]
@@ -20,8 +20,9 @@ import time
 
 import requests
 
-import const
-from crypto_utils import decrypt_payload, encrypt_payload
+from comum import const as const_comum
+from analise import const as const_analise
+from borda.crypto_utils import decrypt_payload, encrypt_payload
 
 # Nada aqui faz rede nem le argv/ambiente ao importar (o test_const importa todo .py da raiz): tudo isso ocorre em main().
 BASE = "http://localhost:5000"
@@ -36,7 +37,7 @@ def env(obj):
 
 
 def login():
-    r = requests.post(f"{BASE}/auth/login", json=env({"schemaVersion": const.SCHEMA_VERSION_AUTH, "identificador": CONTA,
+    r = requests.post(f"{BASE}/auth/login", json=env({"schemaVersion": const_comum.SCHEMA_VERSION_AUTH, "identificador": CONTA,
                                                       "segredo": os.environ["FLOW_BRIDGE_SECRET"], "fonte": "wokwi", "device_id": DEVICE}), timeout=10)
     r.raise_for_status()
     j = r.json()
@@ -68,7 +69,7 @@ def ouvir_sse():
 def enviar(tipo, state, value, value_max=None):
     global _seq
     _seq += 1
-    ev = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": tipo, "deviceId": DEVICE, "entityId": "medidor",
+    ev = {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "eventType": tipo, "deviceId": DEVICE, "entityId": "medidor",
           "eventTimeMs": _seq * 1000, "sequence": _seq, "value": value, "unit": "m/s2", "state": state,
           "user_id": USER, "source": "wokwi"}
     if value_max is not None:
@@ -110,7 +111,7 @@ def rodada_imobilidade() -> float | None:
 
 
 def esperar_cooldown():
-    espera = const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S + const.COOLDOWN_S + 3
+    espera = const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S + const_analise.COOLDOWN_S + 3
     print(f"  aguardando {espera}s (episodio expira + cooldown)...")
     time.sleep(espera)
 

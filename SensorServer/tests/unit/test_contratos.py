@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pytest
 
-import const
-import mensagens
-import regra_imobilidade as imob
-import regra_luz as luz
-import regra_queda
+from comum import const as const_comum
+from analise import const as const_analise
+from comum import mensagens
+from analise import regra_imobilidade as imob
+from analise import regra_luz as luz
+from analise import regra_queda
 from comum import contratos, schemas
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -83,7 +84,7 @@ class TestVersoes:
             if const_nome is None:
                 assert documentada is None, f"{nome}: tem x-versao mas o catalogo nao aponta constante"
             else:
-                assert documentada == getattr(const, const_nome), f"{nome}: x-versao diferente de const.{const_nome}"
+                assert documentada == getattr(const_comum, const_nome), f"{nome}: x-versao diferente de const_comum.{const_nome}"
 
     def test_tabela_de_versoes_do_docs_concorda_com_os_schemas(self):
         texto = DOC_SCHEMAS.read_text(encoding="utf-8")
@@ -104,7 +105,7 @@ class TestVersoes:
                 assert re.search(rf"^#+ {re.escape(meta['secao'])}[. ]", texto, re.M), f"{nome}: secao {meta['secao']}"
 
     def test_fontes_validas_do_const_e_do_schema(self):
-        assert set(contratos.enum("roteamento", "source")) == const.FONTES_VALIDAS
+        assert set(contratos.enum("roteamento", "source")) == const_comum.FONTES_VALIDAS
 
 
 class TestVocabulario:
@@ -132,21 +133,21 @@ class TestVocabulario:
 class TestSaidasDoServidor:
     def test_mensagens_de_push(self):
         assert contratos.validar("push-mensagem", mensagens.criar_pedido_confirmacao(
-            1, "ep1", 5, const.MOTIVO_A)) == []
+            1, "ep1", 5, const_analise.MOTIVO_A)) == []
         assert contratos.validar("push-mensagem", mensagens.criar_pedido_confirmacao(
-            1, "ep1", 5, const.MOTIVO_B)) == []
+            1, "ep1", 5, const_analise.MOTIVO_B)) == []
         for resultado in sorted(mensagens.RESULTADOS_ENCERRAMENTO):
             assert contratos.validar("push-mensagem", mensagens.criar_encerramento(1, "ep1", resultado)) == []
 
     def test_mensagem_pronta_para_envio(self):
-        msg = mensagens.criar_pedido_confirmacao(1, "ep1", 5, const.MOTIVO_A)
+        msg = mensagens.criar_pedido_confirmacao(1, "ep1", 5, const_analise.MOTIVO_A)
         assert contratos.validar("push-mensagem", mensagens.para_envio(msg)) == []
 
     def test_alerta_de_luz(self):
         alerta = None
-        for seq in range(1, const.LEITURAS_CONSECUTIVAS_PARA_ALERTA + 1):
+        for seq in range(1, const_analise.LEITURAS_CONSECUTIVAS_PARA_ALERTA + 1):
             alerta = luz.avaliar_regra(1, {"device_id": "d1", "event_time": "2026-10-14T22:00:00-03:00",
-                                           "luminosidade": 10, "cct": const.CCT_LIMIAR_FRIO + 500, "seq_num": seq}) or alerta
+                                           "luminosidade": 10, "cct": const_analise.CCT_LIMIAR_FRIO + 500, "seq_num": seq}) or alerta
         assert alerta is not None and contratos.validar("alerta-luz", alerta) == []
 
     def test_alerta_de_imobilidade(self):

@@ -1,12 +1,13 @@
 """auth.py: senhas, login, bloqueio, refresh rotativo, tokens e segredo."""
+from comum import const as const_comum
 import hashlib
 import time
 
 import jwt
 import pytest
 
-import auth
-import const
+from borda import auth
+from borda import const as const_borda
 from _apoio import SEGREDO
 
 
@@ -42,30 +43,30 @@ class TestSenha:
 class TestPodaLogin:
     def test_falha_vencida_sai_na_proxima_falha(self, contas, relogio_auth):
         _errar(1, ident="fantasma")
-        relogio_auth.avancar(const.JANELA_FALHAS_S + 1)
+        relogio_auth.avancar(const_borda.JANELA_FALHAS_S + 1)
         _errar(1, ident="outro")
         assert list(auth._falhas) == ["outro"]
 
     def test_falha_dentro_da_janela_fica(self, contas, relogio_auth):
         _errar(1, ident="fantasma")
-        relogio_auth.avancar(const.JANELA_FALHAS_S - 1)
+        relogio_auth.avancar(const_borda.JANELA_FALHAS_S - 1)
         _errar(1, ident="outro")
         assert set(auth._falhas) == {"fantasma", "outro"}
 
     def test_bloqueio_vencido_sai_e_o_vigente_fica(self, contas, relogio_auth):
-        _errar(const.MAX_FALHAS, ident="a")
-        relogio_auth.avancar(const.BLOQUEIO_S - 10)
-        _errar(const.MAX_FALHAS, ident="b")          # bloqueia 10 s depois de "a" passar a vencer
+        _errar(const_borda.MAX_FALHAS, ident="a")
+        relogio_auth.avancar(const_borda.BLOQUEIO_S - 10)
+        _errar(const_borda.MAX_FALHAS, ident="b")          # bloqueia 10 s depois de "a" passar a vencer
         relogio_auth.avancar(11)                        # "a" venceu, "b" segue bloqueado
         _errar(1, ident="c")
         assert set(auth._bloqueado_ate) == {"b"}
 
     def test_bloqueio_nao_deixa_entrada_vazia_em_falhas(self, contas, relogio_auth):
-        _errar(const.MAX_FALHAS, ident="a")
+        _errar(const_borda.MAX_FALHAS, ident="a")
         assert "a" not in auth._falhas and "a" in auth._bloqueado_ate
 
     def test_poda_nao_muda_o_bloqueio_nem_a_contagem(self, contas, relogio_auth):
-        _errar(const.MAX_FALHAS - 1)
+        _errar(const_borda.MAX_FALHAS - 1)
         for i in range(20):
             _errar(1, ident=f"x{i}")                  # outras falhas disparam a poda
         _errar(1)                                       # a 5a falha de idoso1 ainda bloqueia
@@ -73,7 +74,7 @@ class TestPodaLogin:
             _login_ok()
 
     def test_falhas_respeitam_o_teto_e_saem_as_mais_antigas(self, contas, relogio_auth, monkeypatch):
-        monkeypatch.setattr(const, "MAX_IDENTIFICADORES_LOGIN", 5)
+        monkeypatch.setattr(const_borda, "MAX_IDENTIFICADORES_LOGIN", 5)
         for i in range(8):
             _errar(1, ident=f"id{i}")
             relogio_auth.avancar(1)
@@ -81,9 +82,9 @@ class TestPodaLogin:
         assert "id7" in auth._falhas and "id0" not in auth._falhas
 
     def test_bloqueios_respeitam_o_teto_e_saem_os_que_vencem_antes(self, contas, relogio_auth, monkeypatch):
-        monkeypatch.setattr(const, "MAX_IDENTIFICADORES_LOGIN", 3)
+        monkeypatch.setattr(const_borda, "MAX_IDENTIFICADORES_LOGIN", 3)
         for i in range(6):
-            _errar(const.MAX_FALHAS, ident=f"id{i}")
+            _errar(const_borda.MAX_FALHAS, ident=f"id{i}")
             relogio_auth.avancar(1)
         _errar(1, ident="disparo")                     # a poda roda ao registrar uma falha
         assert len(auth._bloqueado_ate) <= 3
@@ -96,7 +97,7 @@ class TestLogin:
         t = _login_ok()
         assert set(t) == {"access_token", "refresh_token", "expires_in", "papel", "user_ids"}
         assert t["papel"] == "idoso" and t["user_ids"] == [1]
-        assert t["expires_in"] == const.ACCESS_TTL_S
+        assert t["expires_in"] == const_borda.ACCESS_TTL_S
         assert t["access_token"] and t["refresh_token"]
 
     def test_senha_errada_e_conta_inexistente_levantam_o_mesmo_erro(self, contas):
@@ -108,32 +109,32 @@ class TestLogin:
         assert e1.value.codigo == e2.value.codigo == "credenciais_invalidas"
 
     def test_cinco_falhas_bloqueiam_ate_com_a_senha_certa(self, contas, relogio_auth):
-        _errar(const.MAX_FALHAS)
+        _errar(const_borda.MAX_FALHAS)
         with pytest.raises(auth.Bloqueado):
             _login_ok()
 
     def test_bloqueio_expira(self, contas, relogio_auth):
-        _errar(const.MAX_FALHAS)
-        relogio_auth.avancar(const.BLOQUEIO_S - 1)
+        _errar(const_borda.MAX_FALHAS)
+        relogio_auth.avancar(const_borda.BLOQUEIO_S - 1)
         with pytest.raises(auth.Bloqueado):
             _login_ok()
         relogio_auth.avancar(2)
         assert _login_ok()["papel"] == "idoso"
 
     def test_falhas_fora_da_janela_nao_contam(self, contas, relogio_auth):
-        _errar(const.MAX_FALHAS - 1)
-        relogio_auth.avancar(const.JANELA_FALHAS_S + 1)
+        _errar(const_borda.MAX_FALHAS - 1)
+        relogio_auth.avancar(const_borda.JANELA_FALHAS_S + 1)
         _errar(1)
         assert _login_ok()["papel"] == "idoso"
 
     def test_login_ok_zera_as_falhas(self, contas, relogio_auth):
-        _errar(const.MAX_FALHAS - 1)
+        _errar(const_borda.MAX_FALHAS - 1)
         _login_ok()
-        _errar(const.MAX_FALHAS - 1)     # com as falhas antigas somadas, teria bloqueado
+        _errar(const_borda.MAX_FALHAS - 1)     # com as falhas antigas somadas, teria bloqueado
         assert _login_ok()["papel"] == "idoso"
 
     def test_bloqueio_e_por_identificador(self, contas, relogio_auth):
-        _errar(const.MAX_FALHAS)
+        _errar(const_borda.MAX_FALHAS)
         assert auth.login("bridge1", "senha-bridge", "wokwi", "b")["papel"] == "dispositivo"
 
     def test_fonte_nao_permitida_falha(self, contas):
@@ -148,7 +149,7 @@ class TestLogin:
 
     def test_device_id_invalido_levanta_value_error(self, contas):
         with pytest.raises(ValueError):
-            auth.login("idoso1", "senha-idoso", "app", "x" * (const.MAX_DEVICE_ID_LEN + 1))
+            auth.login("idoso1", "senha-idoso", "app", "x" * (const_comum.MAX_DEVICE_ID_LEN + 1))
 
 
 class TestDeviceId:
@@ -176,40 +177,40 @@ class TestRefresh:
             auth.refresh("nao-existe")
 
     def test_expirado_falha(self, contas, relogio_auth, monkeypatch):
-        monkeypatch.setattr(const, "REFRESH_TTL_S", 10)
+        monkeypatch.setattr(const_borda, "REFRESH_TTL_S", 10)
         t = _login_ok()
         relogio_auth.avancar(11)
         with pytest.raises(auth.TokenInvalido):
             auth.refresh(t["refresh_token"])
 
     def test_expirado_some_do_arquivo_na_primeira_tentativa(self, contas, relogio_auth, monkeypatch):
-        monkeypatch.setattr(const, "REFRESH_TTL_S", 10)
+        monkeypatch.setattr(const_borda, "REFRESH_TTL_S", 10)
         t = _login_ok()
         outro = auth.login("bridge1", "senha-bridge", "wokwi", "b")   # segunda sessao, nao deve ser afetada
-        assert len(auth._ler_json(const.SESSOES_PATH, {})) == 2
+        assert len(auth._ler_json(const_borda.SESSOES_PATH, {})) == 2
         relogio_auth.avancar(11)
         with pytest.raises(auth.TokenInvalido):
             auth.refresh(t["refresh_token"])
-        restantes = auth._ler_json(const.SESSOES_PATH, {})
+        restantes = auth._ler_json(const_borda.SESSOES_PATH, {})
         assert len(restantes) == 1
         assert hashlib.sha256(outro["refresh_token"].encode()).hexdigest() in restantes
 
     def test_desconhecido_nao_mexe_no_arquivo(self, contas):
         _login_ok()
-        antes = auth._ler_json(const.SESSOES_PATH, {})
+        antes = auth._ler_json(const_borda.SESSOES_PATH, {})
         with pytest.raises(auth.TokenInvalido):
             auth.refresh("nao-existe")
-        assert auth._ler_json(const.SESSOES_PATH, {}) == antes
+        assert auth._ler_json(const_borda.SESSOES_PATH, {}) == antes
 
     def test_dentro_da_validade_funciona(self, contas, relogio_auth, monkeypatch):
-        monkeypatch.setattr(const, "REFRESH_TTL_S", 10)
+        monkeypatch.setattr(const_borda, "REFRESH_TTL_S", 10)
         t = _login_ok()
         relogio_auth.avancar(9)
         assert auth.refresh(t["refresh_token"])["papel"] == "idoso"
 
     def test_conta_removida_falha(self, contas):
         t = _login_ok()
-        auth._gravar_json(const.CONTAS_PATH, {})
+        auth._gravar_json(const_borda.CONTAS_PATH, {})
         with pytest.raises(auth.TokenInvalido):
             auth.refresh(t["refresh_token"])
 
@@ -225,7 +226,7 @@ class TestToken:
         c = jwt.decode(_login_ok()["access_token"], SEGREDO, algorithms=["HS256"])
         assert c["sub"] == "idoso1" and c["papel"] == "idoso" and c["user_ids"] == [1]
         assert c["fonte"] == "app" and c["device_id"] == "cel1"
-        assert c["exp"] - c["iat"] == const.ACCESS_TTL_S
+        assert c["exp"] - c["iat"] == const_borda.ACCESS_TTL_S
         assert isinstance(c["jti"], str) and len(c["jti"]) == 32
 
     def test_verificar_token_devolve_principal(self, contas):
@@ -234,7 +235,7 @@ class TestToken:
         assert isinstance(p.exp, float) and p.exp > time.time()
 
     def test_expirado(self, contas, monkeypatch):
-        monkeypatch.setattr(const, "ACCESS_TTL_S", -10)
+        monkeypatch.setattr(const_borda, "ACCESS_TTL_S", -10)
         with pytest.raises(auth.TokenInvalido):
             auth.verificar_token(_login_ok()["access_token"])
 

@@ -31,7 +31,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-import const   # todas as constantes (limiares, timeout, margem, cooldown...) vivem em const.py
+from analise import const as const_analise   # limiares, cooldown, janelas e retencao
+from comum import const as const_comum       # prazos do pedido (timeout, margem), pasta de dados, versao padrao
 
 _lock_arquivo = threading.Lock()     # so o append em confirmacoes_usuario_<id>.jsonl
 
@@ -85,7 +86,7 @@ class _EstadoUsuario:
 class _Mensagem:
     user_id: int
     episode_id: str
-    expira_em: float        # instante (s) do servidor; base da poda por const.RETENCAO_MENSAGENS_S
+    expira_em: float        # instante (s) do servidor; base da poda por const_analise.RETENCAO_MENSAGENS_S
 
 
 @dataclass
@@ -127,8 +128,8 @@ def extrair_dinamica(fonte: str, dados: dict) -> tuple[float, float] | None:
                 return None
             v = float(dados["value"])
             vmax = float(dados.get("valueMax", v))
-            if not (const.ACEL_MIN_PLAUSIVEL <= v <= const.ACEL_MAX_PLAUSIVEL) \
-                    or not (v <= vmax <= const.ACEL_MAX_PLAUSIVEL):
+            if not (const_analise.ACEL_MIN_PLAUSIVEL <= v <= const_analise.ACEL_MAX_PLAUSIVEL) \
+                    or not (v <= vmax <= const_analise.ACEL_MAX_PLAUSIVEL):
                 return None
             return v, vmax
         if fonte == "app":
@@ -136,9 +137,9 @@ def extrair_dinamica(fonte: str, dados: dict) -> tuple[float, float] | None:
             if not a:
                 return None
             m, mmax = float(a["magnitude"]), float(a["magnitude_max_janela"])
-            if not (const.ACEL_MIN_PLAUSIVEL <= m <= mmax <= const.ACEL_MAX_PLAUSIVEL):
+            if not (const_analise.ACEL_MIN_PLAUSIVEL <= m <= mmax <= const_analise.ACEL_MAX_PLAUSIVEL):
                 return None
-            return abs(m - const.GRAVIDADE), max(mmax - const.GRAVIDADE, 0.0)
+            return abs(m - const_analise.GRAVIDADE), max(mmax - const_analise.GRAVIDADE, 0.0)
     except (KeyError, TypeError, ValueError):
         return None
     return None
@@ -147,7 +148,7 @@ def extrair_dinamica(fonte: str, dados: dict) -> tuple[float, float] | None:
 # ------------------- deduplicacao da telemetria do app -------------------
 def eh_duplicado_app(user_id: int, device_id: str, dados: dict, estado: EstadoQueda | None = None) -> bool:
     """True se esta leitura do app e duplicata/atrasada: `timestamp_envio` (epoch ms, raiz do payload) menor ou
-    igual ao ultimo aceito para (user_id, 'app', device_id). Se regredir mais de const.TOLERANCIA_RELOGIO_S, assume
+    igual ao ultimo aceito para (user_id, 'app', device_id). Se regredir mais de const_analise.TOLERANCIA_RELOGIO_S, assume
     reajuste de relogio do celular: vira a nova referencia e NAO e duplicata (nao bloqueia a analise de queda).
 
     Nao e duplicata (retorna False, sem tocar no estado) a leitura sem `acelerometro` aproveitavel ou sem
@@ -162,27 +163,27 @@ def eh_duplicado_app(user_id: int, device_id: str, dados: dict, estado: EstadoQu
     with est.lock:
         ultimo = est.ultimo_ts_app.get(chave)
         if ultimo is not None and ts <= ultimo:
-            if ultimo - ts <= const.TOLERANCIA_RELOGIO_S * 1000:
+            if ultimo - ts <= const_analise.TOLERANCIA_RELOGIO_S * 1000:
                 return True                          # duplicata ou leitura atrasada
             # regressao grande: reajuste de relogio, cai na nova referencia abaixo
         est.ultimo_ts_app.pop(chave, None)           # reinsere no fim: mantem a ordem de uso para o limite
         est.ultimo_ts_app[chave] = ts
-        if len(est.ultimo_ts_app) > const.MAX_REFERENCIAS_DEDUP:
+        if len(est.ultimo_ts_app) > const_analise.MAX_REFERENCIAS_DEDUP:
             est.ultimo_ts_app.pop(next(iter(est.ultimo_ts_app)))
         return False
 
 
 # --------------------------- gatilho A (impacto) ---------------------------
 def _versao_da_leitura(dados: dict) -> int:
-    v = dados.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
-    return v if isinstance(v, int) and not isinstance(v, bool) else const.SCHEMA_VERSION_PADRAO
+    v = dados.get("schemaVersion", const_comum.SCHEMA_VERSION_PADRAO)
+    return v if isinstance(v, int) and not isinstance(v, bool) else const_comum.SCHEMA_VERSION_PADRAO
 
 
 def _log_desatualizada(est: EstadoQueda, user_id: int, leitura: _Leitura, referencia: int, agora: float) -> None:
-    """Loga a leitura de versao menor que a de referencia, no maximo uma vez por const.LOG_DESATUALIZADA_INTERVALO_S
+    """Loga a leitura de versao menor que a de referencia, no maximo uma vez por const_analise.LOG_DESATUALIZADA_INTERVALO_S
     para cada (usuario, fonte, versao). Chamar com o lock do estado tomado."""
     chave = (user_id, leitura.fonte, leitura.versao)
-    if agora - est.ultimo_log_desatualizada.get(chave, float("-inf")) < const.LOG_DESATUALIZADA_INTERVALO_S:
+    if agora - est.ultimo_log_desatualizada.get(chave, float("-inf")) < const_analise.LOG_DESATUALIZADA_INTERVALO_S:
         return
     est.ultimo_log_desatualizada[chave] = agora
     print(f"  [queda] leitura desatualizada ignorada: user={user_id} fonte={leitura.fonte} "
@@ -195,7 +196,7 @@ def avaliar(user_id: int, fonte: str, dados: dict, agora: float | None = None,
     instante da ingestao da leitura (o nucleo sempre o passa).
 
     Fusao de fontes por usuario:
-      - versao de referencia = maior versao entre as leituras frescas (const.JANELA_FUSAO_S) de todos os
+      - versao de referencia = maior versao entre as leituras frescas (const_analise.JANELA_FUSAO_S) de todos os
         dispositivos do usuario; so as leituras dessa versao sao USADAS. Leitura de versao menor e
         desatualizada: e logada e fica de fora (nao move a maquina nem renova o relogio dela);
       - entre leituras usadas vale o MAXIMO: cada leitura e comparada com o limiar da PROPRIA fonte, e qualquer
@@ -204,7 +205,7 @@ def avaliar(user_id: int, fonte: str, dados: dict, agora: float | None = None,
 
     Maquina: OBSERVANDO -(impacto)-> POS_IMPACTO -(sem movimento por T_POS_IMPACTO_S)-> episodio.
     Em POS_IMPACTO, "movimento" e din_max >= LIMIAR_REPOUSO (o pico da janela, nao a ultima amostra); se passar
-    mais de const.INTERVALO_MAX_ENTRE_LEITURAS_S sem leitura usada, o impacto e descartado."""
+    mais de const_analise.INTERVALO_MAX_ENTRE_LEITURAS_S sem leitura usada, o impacto e descartado."""
     agora = _agora() if agora is None else agora
     est = _estado(estado)
     leitura = extrair_dinamica(fonte, dados)
@@ -218,18 +219,18 @@ def avaliar(user_id: int, fonte: str, dados: dict, agora: float | None = None,
         u = est.estados.setdefault(user_id, _EstadoUsuario())
         u.leituras[(nova.fonte, nova.device_id)] = nova
         # So ficam as leituras frescas; isso tambem limita a memoria (device_id vem do cliente).
-        u.leituras = {k: l for k, l in u.leituras.items() if agora - l.t_chegada <= const.JANELA_FUSAO_S}
+        u.leituras = {k: l for k, l in u.leituras.items() if agora - l.t_chegada <= const_analise.JANELA_FUSAO_S}
         referencia = max(l.versao for l in u.leituras.values())
         if nova.versao < referencia:
             _log_desatualizada(est, user_id, nova, referencia, agora)
             return None
 
-        if u.fase == "POS_IMPACTO" and agora - u.t_ultima_leitura > const.INTERVALO_MAX_ENTRE_LEITURAS_S:
+        if u.fase == "POS_IMPACTO" and agora - u.t_ultima_leitura > const_analise.INTERVALO_MAX_ENTRE_LEITURAS_S:
             u.fase = "OBSERVANDO"          # leituras pararam: o impacto nao vale mais
         u.t_ultima_leitura = agora
 
-        impacto = din_max >= const.LIMIAR_IMPACTO[fonte]
-        movimento = din_max >= const.LIMIAR_REPOUSO[fonte]
+        impacto = din_max >= const_analise.LIMIAR_IMPACTO[fonte]
+        movimento = din_max >= const_analise.LIMIAR_REPOUSO[fonte]
         if u.fase == "OBSERVANDO":
             if impacto:
                 u.fase, u.t_impacto = "POS_IMPACTO", agora
@@ -240,11 +241,11 @@ def avaliar(user_id: int, fonte: str, dados: dict, agora: float | None = None,
             if impacto:
                 u.fase, u.t_impacto = "POS_IMPACTO", agora
             return None
-        if agora - u.t_impacto >= const.T_POS_IMPACTO_S:
+        if agora - u.t_impacto >= const_analise.T_POS_IMPACTO_S:
             u.fase = "OBSERVANDO"
             usadas = [l for l in u.leituras.values() if l.versao == referencia]
             antigas = [l for l in u.leituras.values() if l.versao < referencia]
-            return _abrir(est, user_id, const.MOTIVO_A, agora, {
+            return _abrir(est, user_id, const_analise.MOTIVO_A, agora, {
                 "fonte_do_disparo": fonte,
                 "versao_referencia": referencia,
                 "fontes_usadas": [{"fonte": l.fonte, "device_id": l.device_id, "versao": l.versao,
@@ -258,7 +259,7 @@ def avaliar(user_id: int, fonte: str, dados: dict, agora: float | None = None,
 # ------------------------ gatilho B (imobilidade) --------------------------
 def abrir_por_imobilidade(user_id: int, agora: float | None = None,
                           estado: EstadoQueda | None = None) -> PedidoConfirmacao | None:
-    return _abrir(_estado(estado), user_id, const.MOTIVO_B, _agora() if agora is None else agora)
+    return _abrir(_estado(estado), user_id, const_analise.MOTIVO_B, _agora() if agora is None else agora)
 
 
 # ------------------------------- episodios ---------------------------------
@@ -269,13 +270,13 @@ def _abrir(est: EstadoQueda, user_id: int, motivo: str, agora: float,
         if ep is not None:
             if ep.encerrado_em is None:
                 return None                                   # ja ha episodio aberto
-            if agora - ep.encerrado_em < const.COOLDOWN_S:
+            if agora - ep.encerrado_em < const_analise.COOLDOWN_S:
                 return None                                   # cooldown
         novo = Episodio(str(uuid.uuid4()), motivo, agora,
-                        agora + const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S)
+                        agora + const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S)
         est.episodios[user_id] = novo
     registrar(user_id, "episodio.aberto", {"episodeId": novo.episode_id, "motivo": motivo, **(extra or {})}, agora)
-    return PedidoConfirmacao(novo.episode_id, const.TIMEOUT_CONFIRMACAO_S, motivo)
+    return PedidoConfirmacao(novo.episode_id, const_comum.TIMEOUT_CONFIRMACAO_S, motivo)
 
 
 def anotar_mensagem(user_id: int, episode_id: str, message_id: str, agora: float | None = None,
@@ -288,7 +289,7 @@ def anotar_mensagem(user_id: int, episode_id: str, message_id: str, agora: float
         if ep is not None and ep.episode_id == episode_id:
             expira_em = ep.prazo
         else:
-            expira_em = agora + const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S
+            expira_em = agora + const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S
         est.mensagens[message_id] = _Mensagem(user_id, episode_id, expira_em)
 
 
@@ -349,9 +350,9 @@ def vigiar(agora: float | None = None, estado: EstadoQueda | None = None) -> lis
 
 
 def _podar_mensagens(est: EstadoQueda, agora: float) -> None:
-    """Remove do mapa as mensagens que expiraram ha mais de const.RETENCAO_MENSAGENS_S. Chamar com o lock do estado
+    """Remove do mapa as mensagens que expiraram ha mais de const_analise.RETENCAO_MENSAGENS_S. Chamar com o lock do estado
     tomado. A retencao alem da validade existe para classificar como `tardia` as respostas que chegam depois do prazo."""
-    corte = agora - const.RETENCAO_MENSAGENS_S
+    corte = agora - const_analise.RETENCAO_MENSAGENS_S
     for mid in [m for m, info in est.mensagens.items() if info.expira_em < corte]:
         del est.mensagens[mid]
 
@@ -387,7 +388,7 @@ def coletar_registros():
 
 
 def registrar(user_id: int, tipo: str, dados: dict, agora: float | None = None) -> None:
-    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (enquanto const.GRAVAR_ARQUIVOS) e o aviso ao ouvinte
+    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (enquanto const_comum.GRAVAR_ARQUIVOS) e o aviso ao ouvinte
     (banco). E tudo que o servidor faz com a resposta. O `timestamp` da linha e o instante `agora` da decisao.
     Dentro de coletar_registros() so anota (ver acima)."""
     agora = _agora() if agora is None else agora
@@ -396,9 +397,9 @@ def registrar(user_id: int, tipo: str, dados: dict, agora: float | None = None) 
         coletor.append(Registro(user_id, tipo, dict(dados), agora))
         return
     linha = {"timestamp": datetime.fromtimestamp(agora, tz=timezone.utc).isoformat(), "tipo": tipo, **dados}
-    if const.GRAVAR_ARQUIVOS:
-        os.makedirs(const.DATA_DIR, exist_ok=True)
-        with _lock_arquivo, open(os.path.join(const.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl"), "a", encoding="utf-8") as f:
+    if const_comum.GRAVAR_ARQUIVOS:
+        os.makedirs(const_comum.DATA_DIR, exist_ok=True)
+        with _lock_arquivo, open(os.path.join(const_comum.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps(linha, ensure_ascii=False) + "\n")
     ouvinte = OUVINTE_REGISTRO     # chamado fora de qualquer lock: o ouvinte pode demorar (banco)
     if ouvinte is not None:

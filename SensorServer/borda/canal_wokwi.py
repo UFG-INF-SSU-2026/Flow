@@ -3,10 +3,10 @@ import json
 
 from flask import Blueprint, g, request
 
-import mensagens
-from authz import exige
-from crypto_utils import encrypt_payload
-from sse_hub import HUB, ler_last_event_id
+from comum import mensagens
+from borda.authz import exige
+from borda.crypto_utils import encrypt_payload
+from borda.sse_hub import HUB, ler_last_event_id
 
 CANAL = "wokwi"
 SUPORTA = {mensagens.TIPO_SOLICITADA, mensagens.TIPO_ENCERRADA}

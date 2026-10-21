@@ -1,11 +1,11 @@
 """regra_queda: normalizacao da leitura (extrair_dinamica) e deduplicacao do app (eh_duplicado_app)."""
+from analise import const as const_analise
 import math
 
 import pytest
 
-import const
-import regra_queda
-from regra_queda import eh_duplicado_app, extrair_dinamica
+from analise import regra_queda
+from analise.regra_queda import eh_duplicado_app, extrair_dinamica
 
 
 def wokwi(value, vmax=None, **extra):
@@ -125,7 +125,7 @@ class TestDeduplicacaoApp:
         assert eh_duplicado_app(2, "d1", leitura(2000)) is False
 
     def test_limite_de_referencias_descarta_a_mais_antiga(self, monkeypatch):
-        monkeypatch.setattr(const, "MAX_REFERENCIAS_DEDUP", 3)
+        monkeypatch.setattr(const_analise, "MAX_REFERENCIAS_DEDUP", 3)
         for i in range(4):
             eh_duplicado_app(1, f"d{i}", leitura(1000))
         assert set(regra_queda._ultimo_ts_app) == {(1, "app", "d1"), (1, "app", "d2"), (1, "app", "d3")}

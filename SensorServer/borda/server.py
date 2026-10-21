@@ -50,11 +50,12 @@ user_id e a source declarados sao os do token (estagio 2). O que nao esta na pol
 
 Caminho de volta (servidor -> dispositivo), tambem do Marco 3:
 
-    1. Cada leitura aceita vira uma `nucleo.Leitura`, com o instante da ingestao, e o nucleo das regras (nucleo.py:
+    1. Cada leitura aceita vira uma `nucleo.Leitura`, com o instante da ingestao, e o nucleo das regras (analise/nucleo.py:
        regra de luz, imobilidade e queda) a transforma em DECISOES, sem relogio, sem I/O e sem threads. Ao concluir
        QUEDA PROVAVEL (impacto seguido de imobilidade, ou imobilidade prolongada), uma das decisoes e um Comando
-       de push, com a mensagem (mensagens.py) ja montada.
-    2. server.py e o ADAPTADOR do caminho direto: aplica as decisoes (arquivos, banco) e despacha cada mensagem a
+       de push, com a mensagem (comum/mensagens.py) ja montada.
+    2. borda/caminho_direto.py e o ADAPTADOR do caminho direto (o unico ponto em que a borda chama a analise):
+       analise/efeitos.py aplica as decisoes (arquivos, banco) e o adaptador despacha cada mensagem a
        TODOS os canais: GET /push/app (SSE para o app) e GET /push/wokwi (SSE para o bridge). Cada mensagem vai
        cifrada com a mesma chave e passa pelo hub de conexoes (sse_hub.py), que guarda as mensagens ainda validas
        para quem reconectar.
@@ -66,42 +67,37 @@ Caminho de volta (servidor -> dispositivo), tambem do Marco 3:
 
 Como rodar:
     pip install -r requirements.txt
-    FLOW_JWT_SECRET=<segredo> python server.py
-    (sem FLOW_JWT_SECRET o servidor nao sobe; contas se criam com "python auth.py criar-conta")
-    Tambem vale "flask --app server run" ou WSGI: o segredo e as threads de fundo sao tratados no import
+    FLOW_JWT_SECRET=<segredo> python -m borda.server      (a partir de SensorServer/)
+    (sem FLOW_JWT_SECRET o servidor nao sobe; contas se criam com "python -m borda.auth criar-conta")
+    Tambem vale "flask --app borda.server run" ou WSGI: o segredo e as threads de fundo sao tratados no import
     (FLOW_SEM_THREADS=1 desliga as threads, para os testes).
 """
 
 import json
 import os
-import re
 import threading
 import time
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify, g
 
-import auth
-import const   # PORT, DATA_DIR, JANELA_AGREGACAO_S, FONTES_VALIDAS... (ver const.py)
-import nucleo
-import regra_queda   # so o registro de confirmacoes (arquivo + ouvinte do banco) e os tipos Pedido/Encerramento
-import repositorios
-import tempo
-import validacao
-import canal_app
-import canal_wokwi
-from authz import exige, exigir_dispositivo, exigir_escopo, ForaDeEscopo, negar
-from crypto_utils import decrypt_payload, encrypt_payload, DecryptionError
-import regra_imobilidade   # so /estado/<device_id> (nucleo.PADRAO.imobilidade): a leitura de estado e debug
-
-# Canais de push (servidor -> dispositivo). Todos expoem CANAL e enviar(user_id, mensagem).
-CANAIS = [canal_app, canal_wokwi]
+from borda import auth
+from borda import caminho_direto   # o UNICO ponto em que a borda chama a analise (ver caminho_direto.py)
+from borda import canal_app
+from borda import canal_wokwi
+from borda import const as const_borda
+from borda import tempo
+from borda import validacao
+from comum import const as const_comum
+from flow_db import repositorios
+from borda.authz import exige, exigir_dispositivo, exigir_escopo, ForaDeEscopo, negar
+from borda.crypto_utils import decrypt_payload, encrypt_payload, DecryptionError
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = const.MAX_CONTENT_LENGTH   # corpo maior: 413 (ver errorhandler abaixo)
+app.config["MAX_CONTENT_LENGTH"] = const_borda.MAX_CONTENT_LENGTH   # corpo maior: 413 (ver errorhandler abaixo)
 app.register_blueprint(canal_app.bp)
 app.register_blueprint(canal_wokwi.bp)
 
-os.makedirs(const.DATA_DIR, exist_ok=True)
+os.makedirs(const_comum.DATA_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Buffer de agregacao por usuario (protegido por lock, pois a thread de
@@ -112,7 +108,7 @@ os.makedirs(const.DATA_DIR, exist_ok=True)
 _buffer_lock = threading.Lock()
 _buffer: dict[int, dict[str, dict | None]] = {}
 
-# Guarda os ultimos registros gravados (limite: const.MAX_EM_MEMORIA), so para o GET /dados de debug.
+# Guarda os ultimos registros gravados (limite: const_borda.MAX_EM_MEMORIA), so para o GET /dados de debug.
 _registros_recentes: list[dict] = []
 
 # ---------------------------------------------------------------------------
@@ -124,10 +120,6 @@ _registros_recentes: list[dict] = []
 _fila_lock = threading.Lock()
 _fila_leituras: list[dict] = []
 _descartes_leituras = 0
-_estado_gravado: dict[tuple, tuple] = {}   # (user_id, device_id) -> ultima "assinatura" do estado gravada no banco
-
-_RESULTADO_ENTREGA = {"ENTREGUE_AO_CANAL": "enviado", "SEM_CANAL_ATIVO": "sem_conexao",
-                      "TIPO_NAO_SUPORTADO": "nao_suportado", "ERRO_NO_CANAL": "erro"}
 
 
 def _instante_origem(source: str, dados: dict) -> datetime | None:
@@ -158,7 +150,7 @@ def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, 
                "instante_origem": _instante_origem(source, dados), "conta_id": conta_id, "payload": dados}
     with _fila_lock:
         _fila_leituras.append(leitura)
-        excesso = len(_fila_leituras) - const.MAX_FILA_LEITURAS
+        excesso = len(_fila_leituras) - const_borda.MAX_FILA_LEITURAS
         if excesso > 0:
             del _fila_leituras[:excesso]
             _descartes_leituras += excesso
@@ -171,7 +163,7 @@ def _devolver_lote(lote: list[dict]) -> None:
     global _descartes_leituras
     with _fila_lock:
         _fila_leituras[0:0] = lote
-        excesso = len(_fila_leituras) - const.MAX_FILA_LEITURAS
+        excesso = len(_fila_leituras) - const_borda.MAX_FILA_LEITURAS
         if excesso > 0:
             del _fila_leituras[:excesso]
             _descartes_leituras += excesso
@@ -181,7 +173,7 @@ def _descarregar_leituras() -> None:
     """Esvazia a fila em lotes. Chamada SO pela thread de descarga (uma unica escritora de `leituras`)."""
     for _ in range(20):    # teto por passada: nao monopoliza a thread se a fila estiver enorme
         with _fila_lock:
-            lote = _fila_leituras[:const.TAMANHO_LOTE_LEITURAS]
+            lote = _fila_leituras[:const_borda.TAMANHO_LOTE_LEITURAS]
             del _fila_leituras[:len(lote)]
         if not lote:
             return
@@ -190,66 +182,12 @@ def _descarregar_leituras() -> None:
             return
 
 
-def _registro_para_banco(user_id: int, tipo: str, linha: dict) -> None:
-    """Ouvinte de regra_queda.registrar: o que antes so ia para confirmacoes_usuario_<id>.jsonl tambem vai ao banco.
-    push.entrega -> entregas_push (borda); os demais (episodio.*, push.ack, confirmacao.resposta) -> confirmacoes (analise)."""
-    instante = datetime.fromisoformat(linha["timestamp"])
-    if tipo == "push.entrega":
-        repositorios.tentar_borda("entrega", lambda b: b.gravar_entrega({
-            "instante": instante, "comando_id": None, "message_id": linha.get("messageId"), "user_id": user_id,
-            "device_id": None, "canal": linha.get("canal"),
-            "resultado": _RESULTADO_ENTREGA.get(linha.get("resultado"), "erro"), "detalhe": linha.get("resultado")}))
-        return
-    repositorios.tentar_analise("confirmacao", lambda a: a.gravar_confirmacao({
-        "instante": instante, "user_id": user_id, "tipo": tipo, "dados": linha,
-        "episodio_id": linha.get("episodeId"), "message_id": linha.get("messageId"),
-        "schema_version": const.SCHEMA_VERSION_MENSAGEM}))
-
-
-regra_queda.OUVINTE_REGISTRO = _registro_para_banco
-
-
-def _gravar_alerta_banco(user_id: int, device_id: str, tipo: str, alerta: dict, schema_version: int,
-                         instante: datetime | None = None) -> None:
-    repositorios.tentar_analise("alerta", lambda a: a.gravar_alerta({
-        "instante": instante or tempo.agora_utc(), "user_id": user_id, "device_id": device_id, "tipo": tipo,
-        "mensagem": alerta.get("mensagem"), "dados": alerta, "schema_version": schema_version}))
-
-
-def _gravar_comando_banco(cmd: "nucleo.Comando") -> None:
-    """Episodio (aguardando confirmacao ou encerrado) e o comando de push, na MESMA transacao (DS5/DS6).
-    Se o episodio nao chegou ao banco (queda na abertura), a linha de encerramento o cria com tipo DESCONHECIDO."""
-    def grava(a):
-        with a.transacao() as tx:
-            tx.gravar_episodio(cmd.episodio.como_linha())
-            tx.gravar_comando(cmd.como_linha())
-    repositorios.tentar_analise("comando", grava)
-
-
-def _gravar_estado_banco(resumo: "nucleo.ResumoEstado") -> None:
-    """Estado persistente da regra de imobilidade -> estado_dispositivo. So grava quando algo relevante mudou."""
-    try:
-        chave = (resumo.user_id, resumo.device_id)
-        if _estado_gravado.get(chave) == resumo.assinatura:
-            return
-        if repositorios.tentar_analise("estado", lambda a: a.gravar_estado_dispositivo(resumo.como_linha())):
-            _estado_gravado[chave] = resumo.assinatura
-    except Exception as e:  # noqa: BLE001
-        print(f"  [db] falha ao preparar estado_dispositivo user={resumo.user_id}: {type(e).__name__}: {str(e)[:200]}")
-
-
 def _agora_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _nome_seguro(valor: str) -> str:
-    """Valor vindo do cliente (device_id) para compor nome de arquivo: qualquer caractere fora de [A-Za-z0-9_.-]
-    vira '_' (impede '/' e '..' de sair da pasta de dados) e o resultado e limitado a const.MAX_DEVICE_ID_LEN."""
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", valor)[:const.MAX_DEVICE_ID_LEN]
-
-
 def _arquivo_usuario(user_id: int) -> str:
-    return os.path.join(const.DATA_DIR, f"usuario_{user_id}.jsonl")
+    return os.path.join(const_comum.DATA_DIR, f"usuario_{user_id}.jsonl")
 
 
 def _registrar_no_buffer(user_id: int, source: str, dados: dict) -> None:
@@ -275,15 +213,15 @@ def _gravar_usuario(user_id: int, fontes: dict) -> None:
     }
 
     filepath = _arquivo_usuario(user_id)
-    if const.GRAVAR_ARQUIVOS:
+    if const_comum.GRAVAR_ARQUIVOS:
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(json.dumps(registro, ensure_ascii=False) + "\n")
 
     _registros_recentes.append(registro)
-    if len(_registros_recentes) > const.MAX_EM_MEMORIA:
+    if len(_registros_recentes) > const_borda.MAX_EM_MEMORIA:
         _registros_recentes.pop(0)
 
-    if const.GRAVAR_TELEMETRIA_LEGADO:   # dupla escrita: mesma linha, agora tambem na tabela `telemetria`
+    if const_borda.GRAVAR_TELEMETRIA_LEGADO:   # dupla escrita: mesma linha, agora tambem na tabela `telemetria`
         repositorios.tentar_borda("telemetria", lambda b: b.gravar_telemetria([{
             "instante": datetime.fromisoformat(registro["timestamp"]), "user_id": user_id,
             "app": dado_app, "wokwi": dado_wokwi}]))
@@ -311,17 +249,17 @@ def _flush_iteracao() -> None:
 
 
 def _flush_loop() -> None:
-    """Roda em thread separada (a UNICA que grava `leituras`). A cada const.INTERVALO_DESCARGA_S descarrega a fila de
-    leituras em lote; a cada const.JANELA_AGREGACAO_S grava tambem uma linha por usuario que recebeu dado
+    """Roda em thread separada (a UNICA que grava `leituras`). A cada const_borda.INTERVALO_DESCARGA_S descarrega a fila de
+    leituras em lote; a cada const_borda.JANELA_AGREGACAO_S grava tambem uma linha por usuario que recebeu dado
     (de app e/ou wokwi) na janela (telemetria agregada, como antes)."""
     ultima_janela = time.monotonic()
     while True:
-        time.sleep(const.INTERVALO_DESCARGA_S)
+        time.sleep(const_borda.INTERVALO_DESCARGA_S)
         try:
             _descarregar_leituras()
         except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
             print(f"  [flush] falha na descarga de leituras (a thread segue): {type(e).__name__}: {str(e)[:200]}")
-        if time.monotonic() - ultima_janela >= const.JANELA_AGREGACAO_S:
+        if time.monotonic() - ultima_janela >= const_borda.JANELA_AGREGACAO_S:
             ultima_janela = time.monotonic()
             try:
                 _flush_iteracao()
@@ -329,108 +267,9 @@ def _flush_loop() -> None:
                 print(f"  [flush] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
-# ---------------------------------------------------------------------------
-# Adaptador do caminho direto: aplica as DECISOES do nucleo (nucleo.py). O nucleo decide sem relogio e sem I/O;
-# aqui estao os efeitos (arquivos, banco, canais) e a protecao de cada um: a falha de um nao impede os demais e
-# nunca vira 500 (a telemetria ja foi aceita).
-# ---------------------------------------------------------------------------
-def _aplicar_alerta(alerta: "nucleo.Alerta") -> None:
-    """Arquivo alerta_*.json (enquanto const.GRAVAR_ARQUIVOS), tabela `alertas` e log."""
-    prefixo = "alerta" if alerta.tipo == "luz_inadequada" else "alerta_imobilidade"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")   # so o nome do arquivo (dupla escrita de transicao)
-    filename = f"{prefixo}_{_nome_seguro(alerta.device_id)}_{timestamp}.json"
-    if const.GRAVAR_ARQUIVOS:
-        with open(os.path.join(const.DATA_DIR, filename), "w", encoding="utf-8") as f:
-            json.dump(alerta.dados, f, ensure_ascii=False, indent=2)
-    _gravar_alerta_banco(alerta.user_id, alerta.device_id, alerta.tipo, alerta.dados, alerta.schema_version,
-                         alerta.instante)
-    print(f"  >>> ALERTA gerado: {filename} -> {alerta.dados['mensagem']}")
-
-
-def _isolar(nome: str, fn) -> None:
-    try:
-        fn()
-    except Exception as e:  # noqa: BLE001
-        print(f"  [{nome}] falha ao aplicar a decisao (ignorada): {type(e).__name__}: {str(e)[:200]}")
-
-
-def _aplicar(decisoes: "nucleo.Decisoes") -> None:
-    """Efeitos das decisoes, na ordem de sempre: registros de confirmacao, alertas, estado e, por ultimo, cada
-    comando de push (episodio + comando no banco, depois a entrega aos canais)."""
-    for c in decisoes.confirmacoes:
-        _isolar("confirmacao", c.aplicar)
-    for a in decisoes.alertas:
-        _isolar("alerta", lambda a=a: _aplicar_alerta(a))
-    for r in decisoes.estados:
-        _isolar("estado", lambda r=r: _gravar_estado_banco(r))
-    for cmd in decisoes.comandos:
-        _isolar(f"comando episodeId={cmd.episodio.episodio_id} user={cmd.user_id}",
-                lambda cmd=cmd: _entregar_comando(cmd))
-
-
-# ---------------------------------------------------------------------------
-# Marco 3: decisao de queda e push
-# ---------------------------------------------------------------------------
-RESULTADO_ERRO_NO_CANAL = "ERRO_NO_CANAL"   # canal.enviar levantou excecao (alem de ENTREGUE_AO_CANAL etc. dos canais)
-
-
-def _despachar(user_id: int, msg: dict) -> None:
-    """Entrega a mesma mensagem a TODOS os canais; registra o resultado por canal.
-    Cada canal tem a sua propria protecao: a falha de um (envio ou gravacao do resultado) fica no log e
-    nao impede os demais."""
-    for canal in CANAIS:
-        try:
-            resultado = canal.enviar(user_id, msg)
-        except Exception as e:  # noqa: BLE001
-            resultado = RESULTADO_ERRO_NO_CANAL
-            print(f"  [push] falha no canal={canal.CANAL} user={user_id}: {type(e).__name__}: {str(e)[:200]}")
-        try:
-            regra_queda.registrar(user_id, "push.entrega", {
-                "episodeId": msg["episodeId"], "messageId": msg["messageId"],
-                "messageType": msg["messageType"], "canal": canal.CANAL, "resultado": resultado})
-        except Exception as e:  # noqa: BLE001
-            print(f"  [push] falha ao registrar push.entrega canal={canal.CANAL} user={user_id}: "
-                  f"{type(e).__name__}: {str(e)[:200]}")
-        print(f"  [push] {msg['messageType']} user={user_id} canal={canal.CANAL} -> {resultado}")
-
-
-def _entregar_comando(cmd: "nucleo.Comando") -> None:
-    """Episodio + comando no banco (antes da entrega) e depois o despacho a todos os canais."""
-    _gravar_comando_banco(cmd)
-    _despachar(cmd.user_id, cmd.mensagem)
-
-
-def _emitir_pedido(user_id: int, pedido: "regra_queda.PedidoConfirmacao", device_id: str | None = None) -> None:
-    """Entrada avulsa (testes, ferramentas): monta o comando de um pedido ja aberto, no instante de agora, e o entrega.
-    O fluxo normal nao passa por aqui: o nucleo monta o comando junto com a decisao (nucleo.processar_leitura)."""
-    _entregar_comando(nucleo.comando_de_pedido(nucleo.PADRAO, user_id, pedido, device_id, tempo.agora_utc()))
-
-
-def _encerrar(enc: "regra_queda.Encerramento") -> None:
-    """Entrada avulsa (testes, ferramentas): monta o comando de encerramento no instante de agora e o entrega."""
-    _entregar_comando(nucleo.comando_de_encerramento(enc, tempo.agora_utc()))
-
-
-def _vigia_iteracao() -> None:
-    """Uma passada do vigia: o nucleo encerra os episodios vencidos (relogio REAL, o unico passo que o usa) e o
-    adaptador despacha o encerramento de cada um. Cada decisao tem a sua propria protecao: a falha de uma nao
-    impede as seguintes. O episodio ja esta marcado como encerrado no estado das regras; se o despacho falhar,
-    so o aviso ao dispositivo se perde e o erro fica no log."""
-    _aplicar(nucleo.vigiar(nucleo.PADRAO, tempo.agora_utc()))
-
-
-def _vigia_loop() -> None:
-    while True:
-        time.sleep(const.INTERVALO_VIGIA_S)
-        try:
-            _vigia_iteracao()
-        except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
-            print(f"  [vigia] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
-
-
 @app.errorhandler(413)
 def _corpo_grande(_erro):
-    """Corpo acima de const.MAX_CONTENT_LENGTH (o Flask levanta ao ler o corpo). Entra na auditoria como as demais negacoes."""
+    """Corpo acima de const_borda.MAX_CONTENT_LENGTH (o Flask levanta ao ler o corpo). Entra na auditoria como as demais negacoes."""
     return negar(413, "corpo_grande")
 
 
@@ -477,8 +316,8 @@ def login():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo, const.SCHEMA_VERSION_AUTH) is None:   # ausente aceito
-        return _versao_invalida_400(const.SCHEMA_VERSION_AUTH)
+    if verificar_versao(corpo, const_comum.SCHEMA_VERSION_AUTH) is None:   # ausente aceito
+        return _versao_invalida_400(const_comum.SCHEMA_VERSION_AUTH)
     if not auth.device_id_valido(corpo.get("device_id")):
         return jsonify({"status": "erro", "mensagem": "device_id invalido"}), 400
     ident = str(corpo.get("identificador", ""))
@@ -496,8 +335,8 @@ def refresh():
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
-    if verificar_versao(corpo, const.SCHEMA_VERSION_AUTH) is None:   # ausente aceito
-        return _versao_invalida_400(const.SCHEMA_VERSION_AUTH)
+    if verificar_versao(corpo, const_comum.SCHEMA_VERSION_AUTH) is None:   # ausente aceito
+        return _versao_invalida_400(const_comum.SCHEMA_VERSION_AUTH)
     try:
         tokens = auth.refresh(str(corpo.get("refresh_token", "")))
     except auth.AuthError as e:
@@ -537,10 +376,7 @@ def receber_evento():
         "instante_ingestao": agora, "user_id": user_id, "device_id": g.principal.device_id,
         "fonte": g.principal.fonte, "tipo": ev["eventType"], "message_id": ev.get("messageId"),
         "schema_version": versao, "payload": ev}))
-    decisoes = nucleo.processar_resposta(nucleo.PADRAO, nucleo.Resposta(
-        agora, user_id, g.principal.device_id, g.principal.fonte, ev, versao))
-    # O episodio ja esta encerrado no estado das regras; se o aviso aos dispositivos falhar, so ele se perde (log).
-    _aplicar(decisoes)
+    caminho_direto.analisar_resposta(user_id, g.principal.device_id, g.principal.fonte, ev, versao, agora)
     return jsonify({"status": "ok"}), 200
 
 
@@ -594,14 +430,9 @@ def receber_dados():
     _registrar_no_buffer(user_id, source, dados_fonte)
     _enfileirar_leitura(user_id, source, device_id, dados_fonte, versao, g.principal.conta_id, agora)
 
-    # 4. Nucleo das regras (luz do app, imobilidade do wokwi, queda): leitura -> decisoes, sem relogio e sem I/O;
-    #    depois o adaptador as aplica. A telemetria ja foi aceita e enfileirada: falha ao decidir ou aplicar
-    #    fica no log e nao vira 500.
-    try:
-        _aplicar(nucleo.processar_leitura(nucleo.PADRAO, nucleo.Leitura(
-            agora, user_id, device_id, source, dados_fonte, versao)))
-    except Exception as e:  # noqa: BLE001
-        print(f"  [queda] falha ao avaliar ou emitir o pedido user={user_id}: {type(e).__name__}: {str(e)[:200]}")
+    # 4. Analise (luz do app, imobilidade do wokwi, queda), pelo adaptador do caminho direto. A telemetria ja foi
+    #    aceita e enfileirada: falha ao decidir ou aplicar fica no log (la) e nao vira 500.
+    caminho_direto.analisar_leitura(user_id, device_id, source, dados_fonte, versao, agora)
 
     return jsonify({
         "status": "ok",
@@ -623,7 +454,7 @@ def obter_estado_imobilidade(device_id):
     """Debug/demo: expoe a tabela de estado persistente (nao o buffer de
     1s) de um dispositivo wokwi - evidencia observavel de 'mudanca de
     estado', separada do log em dataUsers/usuario_<id>.jsonl."""
-    estado = regra_imobilidade.obter_estado(device_id, estado=nucleo.PADRAO.imobilidade)   # procura em todos os usuarios
+    estado = caminho_direto.estado_do_dispositivo(device_id)   # procura em todos os usuarios
     if estado is None:
         return jsonify({"status": "erro", "mensagem": f"device_id desconhecido: {device_id}"}), 404
     return jsonify(estado)
@@ -641,7 +472,7 @@ def status():
 
 
 # ---------------------------------------------------------------------------
-# Inicializacao. Roda no import, para valer tambem em "flask --app server run" e em servidores WSGI
+# Inicializacao. Roda no import, para valer tambem em "flask --app borda.server run" e em servidores WSGI
 # (o "flask" CLI usa o "app" do modulo): sem FLOW_JWT_SECRET valido a importacao falha, e as threads
 # de flush e de vigia sobem. FLOW_SEM_THREADS=1 desliga as duas (usado pela suite de testes).
 # ---------------------------------------------------------------------------
@@ -656,7 +487,7 @@ def iniciar_threads() -> None:
         if _threads_iniciadas:
             return
         threading.Thread(target=_flush_loop, name="flow-flush", daemon=True).start()
-        threading.Thread(target=_vigia_loop, name="flow-vigia", daemon=True).start()   # encerra episodios vencidos
+        caminho_direto.iniciar_vigia()   # encerra episodios vencidos
         _threads_iniciadas = True
 
 
@@ -667,14 +498,14 @@ if os.environ.get("FLOW_SEM_THREADS") != "1":
 
 
 if __name__ == "__main__":
-    print(f"Servidor iniciando na porta {const.PORT}...")
-    print(f"Configuracao (.env): {const.DOTENV_ARQUIVO} " + ("carregado" if const.DOTENV_CARREGADO
+    print(f"Servidor iniciando na porta {const_borda.PORT}...")
+    print(f"Configuracao (.env): {const_comum.DOTENV_ARQUIVO} " + ("carregado" if const_comum.DOTENV_CARREGADO
           else "nao encontrado; usando so as variaveis de ambiente"))
     print(f"Banco: {'banco falso em memoria (FLOW_DB_FAKE=1)' if os.environ.get('FLOW_DB_FAKE') == '1' else 'PostgreSQL'}"
-          f" | arquivos: {'sim' if const.GRAVAR_ARQUIVOS else 'nao'}")
-    print(f"Salvando dados recebidos em: {os.path.abspath(const.DATA_DIR)} (1 arquivo .jsonl por usuario)")
-    print(f"Janela de agregacao app+wokwi: {const.JANELA_AGREGACAO_S}s")
+          f" | arquivos: {'sim' if const_comum.GRAVAR_ARQUIVOS else 'nao'}")
+    print(f"Salvando dados recebidos em: {os.path.abspath(const_comum.DATA_DIR)} (1 arquivo .jsonl por usuario)")
+    print(f"Janela de agregacao app+wokwi: {const_borda.JANELA_AGREGACAO_S}s")
     print("Transporte: AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")
 
     # host="0.0.0.0" para aceitar conexoes de outros dispositivos na mesma rede
-    app.run(host="0.0.0.0", port=const.PORT, threaded=True)   # threaded: uma thread por stream SSE
+    app.run(host="0.0.0.0", port=const_borda.PORT, threaded=True)   # threaded: uma thread por stream SSE

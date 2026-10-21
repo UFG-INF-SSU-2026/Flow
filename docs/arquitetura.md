@@ -46,27 +46,34 @@ Há **dois dispositivos** concretos, cada um com a sua conta e falando diretamen
 | `WokwiBridge/` | Dispositivo Wokwi: ponte (`bridge.py`) | Parte do dispositivo que o liga à rede: autentica-se, repassa a telemetria da serial ao servidor e traduz as mensagens de push em comandos de texto para o firmware. |
 | `SensorServer/` | Servidor (Flask) | Módulos abaixo. |
 
-Módulos do servidor:
+Módulos do servidor (pacotes em `SensorServer/`; ainda **um único processo**, a separação em dois serviços é a etapa S5 do roadmap do split):
 
 | Arquivo | Responsabilidade |
 | --- | --- |
-| `server.py` | Orquestração: rotas, pipeline de ingestão, buffer de agregação, threads de flush e vigia, despacho dos pedidos de confirmação. |
-| `const.py` | **Constantes e parâmetros ajustáveis** (porta, caminhos, validade de tokens, versão do contrato, limiares, timeouts, retenções). Definição única de cada valor. Ver 14. |
-| `auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens. Não conhece Flask. |
-| `authz.py` | **Autorização:** papel → permissões, escopo por pessoa, auditoria. |
-| `mensagens.py` | Mensagens de push (criação, validade) e validação dos eventos de retorno. Sem I/O de rede. |
-| `sse_hub.py` | Mecanismo comum de push por SSE: conexões, fila limitada por conexão, keepalive, replay. |
-| `canal_app.py` | **Servidor → app.** Rota `GET /push/app` e envio ao alvo `app`. |
-| `canal_wokwi.py` | **Servidor → Wokwi.** Rota `GET /push/wokwi` e envio ao alvo `wokwi`. |
-| `regra_queda.py` | Análise do acelerômetro (fusão das fontes por usuário), episódios de confirmação, timeout, mapa `messageId` → episódio, armazenamento da resposta. |
-| `regra_luz.py`, `regra_imobilidade.py` | Regras de negócio (luz inadequada à noite; imobilidade prolongada). |
-| `nucleo.py` | **Núcleo das regras:** `Leitura`/`Resposta` com o instante da ingestão entram, `Decisoes` (comandos de push com a mudança de episódio, alertas, registros de confirmação, resumos de estado, descartes) saem. Sem relógio global, sem I/O, sem thread; o estado é um `EstadoRegras` explícito (`PADRAO` = tabelas dos módulos de regra; `novo_estado()` = mundo limpo). O vigia é um passo à parte (`nucleo.vigiar`). |
-| `tempo.py` | Único ponto de leitura do relógio na borda (`tempo.agora_utc()`): o instante da ingestão por requisição e o relógio do vigia. Os testes o congelam (fixture `relogio`). |
-| `crypto_utils.py` | Envelope AES-256-GCM. |
-| `simular_queda.py` | Utilitário (fora do servidor): simula um wokwi que sofre impacto e fica imóvel, para testar o push sem Wokwi nem celular. |
+| **`borda/`** | Gateway: único com porta de rede e com acesso aos dispositivos, aos segredos de transporte e às contas. |
+| `borda/server.py` | Rotas, pipeline de ingestão, buffer de agregação, descarga de leituras, threads de flush e vigia. Executa com `python -m borda.server`. |
+| `borda/caminho_direto.py` | **Adaptador fino do caminho direto:** o único módulo da borda que conhece a análise. Chama o núcleo, manda aplicar as decisões (`analise/efeitos.py`) e entrega o push aos canais; também sobe o vigia. Na S4 é trocado pelo caminho por banco. |
+| `borda/const.py` | Constantes da borda (porta, validade de tokens, bloqueio de login, limite de corpo, SSE, descarga de leituras). Ver 14. |
+| `borda/auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens. Não conhece Flask. CLI: `python -m borda.auth criar-conta`. |
+| `borda/authz.py` | **Autorização:** papel → permissões, escopo por pessoa, auditoria. |
+| `borda/validacao.py` | Validação **estrutural** dos corpos, pelos contratos de `schemas/`. |
+| `borda/sse_hub.py` | Mecanismo comum de push por SSE: conexões, fila limitada por conexão, keepalive, replay. |
+| `borda/canal_app.py` | **Servidor → app.** Rota `GET /push/app` e envio ao alvo `app`. |
+| `borda/canal_wokwi.py` | **Servidor → Wokwi.** Rota `GET /push/wokwi` e envio ao alvo `wokwi`. |
+| `borda/tempo.py` | Único ponto de leitura do relógio na borda (`tempo.agora_utc()`): o instante da ingestão por requisição e o relógio do vigia. Os testes o congelam (fixture `relogio`). |
+| `borda/crypto_utils.py` | Envelope AES-256-GCM. |
+| **`analise/`** | Decide (queda, imobilidade, luz). Não tem porta de rede nem segredo de transporte; não importa a borda nem Flask. |
+| `analise/nucleo.py` | **Núcleo das regras:** `Leitura`/`Resposta` com o instante da ingestão entram, `Decisoes` (comandos de push com a mudança de episódio, alertas, registros de confirmação, resumos de estado, descartes) saem. Sem relógio global, sem I/O, sem thread; o estado é um `EstadoRegras` explícito (`PADRAO` = tabelas dos módulos de regra; `novo_estado()` = mundo limpo). O vigia é um passo à parte (`nucleo.vigiar`). |
+| `analise/efeitos.py` | Persistência das decisões do núcleo (alertas, confirmações, episódio + comando na mesma transação, estado do dispositivo). |
+| `analise/regra_queda.py` | Análise do acelerômetro (fusão das fontes por usuário), episódios de confirmação, timeout, mapa `messageId` → episódio, armazenamento da resposta. |
+| `analise/regra_luz.py`, `analise/regra_imobilidade.py` | Regras de negócio (luz inadequada à noite; imobilidade prolongada). |
+| `analise/const.py` | Constantes da análise (limiares, janelas, cooldown, retenções, período do vigia). Ver 14. |
+| **`comum/`** | Só o que os dois lados partilham: constantes comuns e carregador do `.env` (`const.py`), carregador e validador dos contratos (`schemas.py`, `contratos.py`) e o contrato da mensagem de push (`mensagens.py`: criação, validade, recálculo no replay). |
+| **`flow_db/`** | Banco: conexão, migrações, papéis, interfaces e implementações de acesso (borda e análise) e `repositorios.py` (disjuntor e pools dos dois lados). CLI: `python -m flow_db`. |
+| `simular_queda.py`, `medir_latencia.py` | Utilitários (fora do servidor): simulam um wokwi que sofre impacto e fica imóvel / medem a latência do push. |
 | `tests/` | Suíte pytest (`unit/` e `integration/`); ver 14.1. |
 
-Dependências: `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; o `nucleo.py` monta a mensagem e `server.py`, como adaptador, aplica as decisões e a despacha). `nucleo.py` importa as regras, `mensagens` e `validacao`; nenhuma regra importa o núcleo; `auth` não conhece Flask. `const.py` é um módulo folha: não importa nada do projeto, e os demais fazem `import const` e leem `const.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
+Dependências: a **borda** só importa a análise em `borda/caminho_direto.py`; a **análise** não importa a borda; `comum/` e `flow_db/` não importam nenhum dos dois (conferido por `tests/unit/test_fronteiras.py`). `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; o `nucleo.py` monta a mensagem e `caminho_direto.py` entrega). `nucleo.py` importa as regras, `comum.mensagens` e `comum.contratos` (a mesma validação estrutural da borda); nenhuma regra importa o núcleo; `auth` não conhece Flask. Os três `const` (`comum`, `borda`, `analise`) são módulos folha (só o comum lê o `.env`; os outros dois importam o comum apenas para que ele já esteja carregado), e os demais fazem `from <pacote> import const as const_<pacote>` e leem `const_<pacote>.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
 
 ### 2.3 Elementos abstratos (visão do sistema)
 
@@ -96,14 +103,14 @@ flowchart LR
     end
 
     subgraph SRV["SensorServer"]
-        AUTH["auth.py"]
-        AUTHZ["authz.py"]
-        SRVP["server.py (orquestra)"]
-        RQ["regra_queda.py"]
-        MSG["mensagens.py"]
-        CA["canal_app.py"]
-        CW["canal_wokwi.py"]
-        HUB["sse_hub.py"]
+        AUTH["borda/auth.py"]
+        AUTHZ["borda/authz.py"]
+        SRVP["borda/server.py (orquestra)"]
+        RQ["analise/nucleo.py + regras"]
+        MSG["comum/mensagens.py"]
+        CA["borda/canal_app.py"]
+        CW["borda/canal_wokwi.py"]
+        HUB["borda/sse_hub.py"]
         CA --> HUB
         CW --> HUB
     end
@@ -164,7 +171,7 @@ O `user_id` é uma consequência da conta: não é digitado no app nem no bridge
 
 ### 4.2 Login e tokens
 
-- **Senhas:** `scrypt` com sal por conta, comparação em tempo constante. Contas criadas por CLI (`python auth.py criar-conta ...`); não há auto-cadastro. Persistidas em `contas.json`.
+- **Senhas:** `scrypt` com sal por conta, comparação em tempo constante. Contas criadas por CLI (`python -m borda.auth criar-conta ...`); não há auto-cadastro. Persistidas em `contas.json`.
 - **`POST /auth/login`** (corpo em envelope cifrado): `identificador`, `segredo`, `fonte`, `device_id`. Resposta (também cifrada): `access_token`, `refresh_token`, `expires_in`, `papel`, `user_ids`. A senha nunca trafega em claro.
 - **Access token:** JWT HS256, validade padrão 1 h; claims `sub`, `papel`, `user_ids`, `fonte`, `device_id`, `iat`, `exp`, `jti`. Enviado em `Authorization: Bearer`.
 - **Refresh token:** opaco, validade padrão 7 dias, **uso único** (rotativo). O servidor guarda só o hash em `sessoes.json`, de modo que reiniciar o servidor não derruba as sessões.
@@ -197,7 +204,7 @@ Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do 
 
 - **HTTP** na rede local, com **envelope AES-256-GCM** em todo corpo: `{"nonce": "<base64>", "ciphertext": "<base64>"}` (nonce de 12 bytes aleatório por mensagem, tag de 128 bits ao final do ciphertext).
 - O mesmo envelope cifra o **push**: o `data:` de cada evento SSE é um envelope.
-- Implementações equivalentes em Python (`crypto_utils.py`, no servidor e no bridge) e Kotlin (`CryptoUtils.kt`, `javax.crypto`); ambas oferecem `encrypt` e `decrypt`.
+- Implementações equivalentes em Python (`borda/crypto_utils.py` no servidor e `crypto_utils.py` no bridge) e Kotlin (`CryptoUtils.kt`, `javax.crypto`); ambas oferecem `encrypt` e `decrypt`.
 - O firmware **não** faz rede nem criptografia: a cifragem do Wokwi começa no bridge. A serial entre ESP32 e bridge é local e em texto.
 
 Por que HTTP+AES-GCM e não MQTT, gRPC ou Kafka: o sistema tem um único consumidor lógico, eventos pequenos e periódicos e nenhuma necessidade de replay ou fan-out; HTTP é o menor mecanismo que atende. O volume e o número de consumidores são a premissa que, se mudar, reabre essa decisão; a topologia, mesmo assim, continua em estrela.
@@ -237,7 +244,7 @@ Detalhe campo a campo em `docs/schemas.md`.
 - **`timeoutMs` é relativo**, nunca um prazo absoluto: celular e servidor não têm relógios sincronizados. `issuedAt`/`expiresAt` servem ao servidor e ao bridge.
 - **Idempotência:** o dispositivo ignora `messageId` já tratado.
 - **Faixa física plausível:** aceleração de `0` a `160` m/s² (o sensor do Wokwi opera em ±8 g, magnitude máxima mensurável ≈136 m/s²; o teto é o mesmo do app).
-- **Versionamento tolerante, por schema:** a versão atual de cada schema está em `docs/schemas.md` e é definida em um único lugar do servidor (`const.SCHEMA_VERSION_ATUAL`); nenhum outro ponto do código escreve o número. Versão ausente = 1. Versão de `1` até a atual é **aceita e usada**, e as regras logam o aviso de "desatualizada". Versão maior que a atual, abaixo da mínima ou que não seja inteiro é descartada e logada (resposta em 7). Na análise de queda a versão tem papel próprio: entre as leituras de um usuário vale a de maior versão presente (9.2).
+- **Versionamento tolerante, por schema:** a versão atual de cada schema está em `docs/schemas.md` e é definida em um único lugar do servidor (as constantes `SCHEMA_VERSION_*` de `SensorServer/comum/const.py`); nenhum outro ponto do código escreve o número. Versão ausente = 1. Versão de `1` até a atual é **aceita e usada**, e as regras logam o aviso de "desatualizada". Versão maior que a atual, abaixo da mínima ou que não seja inteiro é descartada e logada (resposta em 7). Na análise de queda a versão tem papel próprio: entre as leituras de um usuário vale a de maior versão presente (9.2).
 
 ---
 
@@ -283,11 +290,11 @@ Produtores assíncronos da mesma pessoa não enviam sincronizados. O servidor ma
 
 Fonte sem dado na janela fica `null` (não repete o último valor). Se uma fonte atrasar além da janela, aparece sozinha na linha seguinte: é telemetria, vale a leitura mais recente. As regras de negócio rodam **imediatamente**, sem esperar o flush.
 
-### 8.2 Regra "luz inadequada à noite" (`regra_luz.py`, dados do app)
+### 8.2 Regra "luz inadequada à noite" (`analise/regra_luz.py`, dados do app)
 
 Validação (`luminosidade >= 0`, `1000 <= cct <= 12000`, `event_time` ISO 8601), deduplicação por `device_id`+`seq_num`, condição noturna (18h–6h) com `cct > 4500K`, debounce de 3 leituras consecutivas, sem repetição no mesmo episódio. Atuação: `alerta_<device_id>_<timestamp>.json` em `dataUsers/`.
 
-### 8.3 Regra "imobilidade prolongada" (`regra_imobilidade.py` + `sketch.ino`)
+### 8.3 Regra "imobilidade prolongada" (`analise/regra_imobilidade.py` + `sketch.ino`)
 
 Decisão compartilhada. No firmware: máquina `NORMAL → AGUARDANDO_CONFIRMACAO → ALERTA_CONFIRMADO` com histerese (`LIMIAR_BAIXO`/`LIMIAR_ALTO`), persistência (`T_PERSISTENCIA_MS`), janela de confirmação humana (`T_CONFIRMACAO_MS`, botão "Estou bem") e rearme manual. No servidor: validação em cascata (`eventType` → `state` → faixa de `value`), deduplicação por `sequence`, tabela de estado por `device_id` (exposta em `GET /estado/<device_id>`) e atuação só quando chega `ALERTA_IMOBILIDADE` sem alerta ativo no episódio, gravando `alerta_imobilidade_<device_id>_<timestamp>.json`. O servidor não confia cegamente no firmware: só rearma ao receber um estado que encerra o episódio.
 
@@ -295,7 +302,7 @@ Decisão compartilhada. No firmware: máquina `NORMAL → AGUARDANDO_CONFIRMACAO
 
 ## 9. Análise de queda e ciclo de confirmação
 
-`regra_queda.py` recebe as leituras de aceleração das duas fontes, decide se há **queda provável** e devolve um `PedidoConfirmacao`; `server.py` o transforma em mensagem e o despacha.
+`analise/regra_queda.py` recebe as leituras de aceleração das duas fontes, decide se há **queda provável** e devolve um `PedidoConfirmacao`; o núcleo (`analise/nucleo.py`) o transforma em mensagem (`comum/mensagens.py`) e em comando de push, e `borda/caminho_direto.py` o despacha.
 
 ### 9.1 Entrada normalizada
 
@@ -315,7 +322,7 @@ O pico existe porque uma amostra por segundo perderia o impacto, que dura fraç�
 | Gatilho | `motivo` | Fontes | Detecção |
 | --- | --- | --- | --- |
 | **A** (preferencial) impacto seguido de imobilidade | `IMPACTO_SEGUIDO_DE_IMOBILIDADE` | app e wokwi | Máquina de estados **por usuário**, alimentada pelas leituras de todas as fontes (9.2.1). |
-| **B** imobilidade prolongada | `IMOBILIDADE_PROLONGADA` | wokwi | Alerta de `regra_imobilidade`, repassado por `server.py` a `regra_queda.abrir_por_imobilidade`. |
+| **B** imobilidade prolongada | `IMOBILIDADE_PROLONGADA` | wokwi | Alerta de `regra_imobilidade`, repassado pelo núcleo a `regra_queda.abrir_por_imobilidade`. |
 
 ```mermaid
 stateDiagram-v2
@@ -394,7 +401,7 @@ sequenceDiagram
     S-->>O: SSE queda.confirmacao_encerrada
 ```
 
-### 9.4 Parâmetros (`const.py`)
+### 9.4 Parâmetros (`comum/const.py` e `analise/const.py`)
 
 | Constante | Padrão | Observação |
 | --- | --- | --- |
@@ -439,7 +446,7 @@ sequenceDiagram
 
 Tipos: `queda.confirmacao_solicitada` e `queda.confirmacao_encerrada` (`payload.resultado`: `CONFIRMADO`, `EXPIRADO`, `CANCELADO`). Mensagem expirada não é entregue nem executada.
 
-### 10.2 Hub SSE (`sse_hub.py`)
+### 10.2 Hub SSE (`borda/sse_hub.py`)
 
 - Registro `(user_id, canal) → conexões`. Nova conexão do mesmo `device_id` substitui a anterior. A conexão só é registrada quando o stream de fato começa; um cliente que cai antes disso não deixa conexão fantasma.
 - Cada evento SSE: `id:` (contador por usuário e canal), `event: push`, `data:` (envelope cifrado). Comentário `: keepalive` a cada 15 s. O contador parte de um valor derivado do instante de subida do servidor (em segundos, para caber em inteiro de 32 bits), de modo que o `Last-Event-ID` guardado pelo cliente nunca fica à frente do contador depois de um reinício.
@@ -579,12 +586,14 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | `FLOW_JWT_SECRET` | `SensorServer/.env` ou ambiente | Obrigatório; ≥ 32 bytes. |
 | `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | `SensorServer/.env` ou ambiente | Opcionais; padrão `contas.json`, `sessoes.json`. |
 | `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de flush e vigia (e a exigência do segredo na subida); usado pela suíte de testes. |
-| `FLOW_SENHA` | ambiente da CLI `auth.py` | Opcional; senha sem prompt ao criar contas. |
+| `FLOW_SENHA` | ambiente da CLI `borda/auth.py` | Opcional; senha sem prompt ao criar contas. |
 | `FLOW_SEM_DOTENV` | ambiente (testes) | `1` impede a leitura dos `.env` reais; a suíte do servidor e a do bridge o definem. Variável de ambiente já definida sempre vence o `.env`. |
 | `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_BRIDGE_DEVICE` | `WokwiBridge/.env` ou ambiente | Os dois primeiros são obrigatórios. `FLOW_BRIDGE_DEVICE` (padrão: o `DEVICE_ID` de `sketch.ino`) é registrado no login e deve ser igual ao `deviceId` dos eventos do firmware (`403` se diferir, 4.3). |
 | Usuário e senha, IP e porta | tela "Configurações" do app | |
-| Timeout do botão, limiares, cooldown, fusão de fontes, retenções | `SensorServer/const.py` | Sem recompilar app nem firmware. |
-| Porta, pasta de dados, limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, rotação da auditoria, fila do SSE, versão atual do contrato | `SensorServer/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
+| Timeout do botão | `SensorServer/comum/const.py` | Sem recompilar app nem firmware. |
+| Limiares, cooldown, fusão de fontes, retenções | `SensorServer/analise/const.py` | Idem. |
+| Porta, limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, rotação da auditoria, fila do SSE | `SensorServer/borda/const.py` | Idem. |
+| Versão atual de cada contrato, pasta de dados | `SensorServer/comum/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
 | Versão do core ESP32 | `arduino-cli core list` | 3.x (usa `tone`/`noTone`). |
 
 Ordem de subida: contas criadas → servidor → simulação Wokwi (aba visível, `rfc2217ServerPort = 4000`) → bridge → app. O firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
@@ -595,7 +604,7 @@ Arquivos produzidos em `dataUsers/`: `usuario_<id>.jsonl` (agregado), `confirmac
 
 | Alvo | Como | Observação |
 | --- | --- | --- |
-| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização e queda ponta a ponta). Usa segredo próprio, sem threads de fundo, e grava contas, sessões e `dataUsers/` em pasta temporária: não toca nos dados reais. |
+| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização e queda ponta a ponta). Usa segredo próprio, sem threads de fundo, e grava contas, sessões e `dataUsers/` em pasta temporária: não toca nos dados reais. |
 | Ponte | `cd WokwiBridge && python -m pytest` (`pytest.ini`) | `tests/test_bridge.py`: tradução e validação das mensagens de push, roteamento das linhas da serial, parser SSE e renovação de sessão. Sem rede e sem serial. |
 | Ponte, ponta a ponta | `WokwiBridge/tests/fake_firmware.py` | Substitui a serial por um firmware falso (impacto, `push.ack`, `ESTOU_BEM`). Exige servidor no ar e `FLOW_BRIDGE_DEVICE=esp32-falso`. Não é pytest. |
 | Firmware | `sketch/host_test/` | Lógica do firmware no PC, com um Arduino falso; opcional. |

@@ -1,10 +1,11 @@
 """regra_queda: retorno do dispositivo (CONFIRMADO, tardia, mensagem desconhecida) e vigia (EXPIRADO, poda)."""
-import const
-import mensagens
-import regra_queda
+from comum import const as const_comum
+from analise import const as const_analise
+from comum import mensagens
+from analise import regra_queda
 
 T0 = 1000.0
-PRAZO = const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S
+PRAZO = const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S
 
 
 def abrir(uid=1, t=T0):
@@ -90,8 +91,8 @@ class TestRetorno:
     def test_retorno_de_episodio_anterior_ao_mais_recente_e_tardio(self, ler_confirmacoes):
         _, mid1 = abrir(t=T0)
         regra_queda.vigiar(agora=T0 + PRAZO)
-        segundo, _ = abrir(t=T0 + PRAZO + const.COOLDOWN_S)
-        enc = regra_queda.registrar_retorno(1, retorno(mid1), agora=T0 + PRAZO + const.COOLDOWN_S + 1)
+        segundo, _ = abrir(t=T0 + PRAZO + const_analise.COOLDOWN_S)
+        enc = regra_queda.registrar_retorno(1, retorno(mid1), agora=T0 + PRAZO + const_analise.COOLDOWN_S + 1)
         assert enc is None
         assert ler_confirmacoes(1)[-1]["tardia"] is True
         assert regra_queda._episodios[1].episode_id == segundo.episode_id
@@ -130,7 +131,7 @@ class TestVigia:
         assert [l["tipo"] for l in ler_confirmacoes(1)] == ["episodio.aberto"]
 
     def test_poda_o_mapa_depois_da_retencao(self, monkeypatch):
-        monkeypatch.setattr(const, "RETENCAO_MENSAGENS_S", 100)
+        monkeypatch.setattr(const_analise, "RETENCAO_MENSAGENS_S", 100)
         _, mid = abrir()                                             # a mensagem expira em T0 + PRAZO
         regra_queda.vigiar(agora=T0 + PRAZO)
         assert mid in regra_queda._mensagens
@@ -140,7 +141,7 @@ class TestVigia:
         assert mid not in regra_queda._mensagens
 
     def test_resposta_depois_da_poda_vira_mensagem_desconhecida(self, monkeypatch, ler_confirmacoes):
-        monkeypatch.setattr(const, "RETENCAO_MENSAGENS_S", 100)
+        monkeypatch.setattr(const_analise, "RETENCAO_MENSAGENS_S", 100)
         _, mid = abrir()
         regra_queda.vigiar(agora=T0 + PRAZO + 101)
         regra_queda.registrar_retorno(1, retorno(mid), agora=T0 + PRAZO + 102)

@@ -15,8 +15,8 @@ import time
 
 import requests
 
-import const
-from crypto_utils import decrypt_payload, encrypt_payload
+from comum import const as const_comum
+from borda.crypto_utils import decrypt_payload, encrypt_payload
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5000").rstrip("/")
 CONTA = os.environ.get("FLOW_BRIDGE_ID", "bridge1")
@@ -28,7 +28,7 @@ def env(obj):
     return {"nonce": n, "ciphertext": c}
 
 
-r = requests.post(f"{BASE}/auth/login", json=env({"schemaVersion": const.SCHEMA_VERSION_AUTH, "identificador": CONTA, "segredo": SENHA,
+r = requests.post(f"{BASE}/auth/login", json=env({"schemaVersion": const_comum.SCHEMA_VERSION_AUTH, "identificador": CONTA, "segredo": SENHA,
                                                   "fonte": "wokwi", "device_id": "simulador-queda"}))
 r.raise_for_status()
 j = r.json()
@@ -41,7 +41,7 @@ seq = int(time.time())
 def enviar(value, value_max):
     global seq
     seq += 1
-    ev = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "simulador-queda", "entityId": "idoso-simulado",
+    ev = {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "simulador-queda", "entityId": "idoso-simulado",
           "eventTimeMs": seq * 1000, "sequence": seq, "value": value, "valueMax": value_max, "unit": "m/s2",
           "state": "NORMAL", "user_id": user_id, "source": "wokwi"}
     rr = requests.post(f"{BASE}/dados", json=env(ev), headers=H)

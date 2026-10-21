@@ -1,12 +1,13 @@
-"""Corpo de requisicao acima de const.MAX_CONTENT_LENGTH: 413, com auditoria e sem processar o conteudo."""
+"""Corpo de requisicao acima de const_borda.MAX_CONTENT_LENGTH: 413, com auditoria e sem processar o conteudo."""
 import json
 import os
 import time
 
 import pytest
 
-import const
-import server
+from comum import const as const_comum
+from borda import const as const_borda
+from borda import server
 
 LIMITE_TESTE = 2048
 
@@ -22,7 +23,7 @@ def _dados(extra: str = "") -> dict:
 
 
 def _auditoria() -> list[dict]:
-    caminho = os.path.join(const.DATA_DIR, "auditoria.jsonl")
+    caminho = os.path.join(const_comum.DATA_DIR, "auditoria.jsonl")
     if not os.path.exists(caminho):
         return []
     with open(caminho, encoding="utf-8") as f:
@@ -30,7 +31,7 @@ def _auditoria() -> list[dict]:
 
 
 def test_o_app_usa_o_limite_da_const():
-    assert server.app.config["MAX_CONTENT_LENGTH"] == const.MAX_CONTENT_LENGTH
+    assert server.app.config["MAX_CONTENT_LENGTH"] == const_borda.MAX_CONTENT_LENGTH
 
 
 def test_corpo_legitimo_cabe_no_limite_da_const(cli, tokens):

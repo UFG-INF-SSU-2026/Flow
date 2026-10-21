@@ -1,12 +1,10 @@
 """auth.criar_conta: validacoes."""
 import pytest
 
-import auth
-import const
-
-
+from borda import auth
+from borda import const as const_borda
 def _contas() -> dict:
-    return auth._ler_json(const.CONTAS_PATH, {})
+    return auth._ler_json(const_borda.CONTAS_PATH, {})
 
 
 class TestValidas:

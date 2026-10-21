@@ -1,16 +1,16 @@
 """
-Mensagens do Marco 3 (sem I/O de rede): mensagem de push servidor -> dispositivo (contrato schemas/push-mensagem.json,
-const.SCHEMA_VERSION_MENSAGEM, docs/schemas.md secao 6). A validacao dos eventos de retorno dispositivo -> servidor
+Contrato da mensagem de push (comum a quem PRODUZ, a analise, e a quem ENTREGA, a borda). Marco 3, sem I/O de rede: mensagem de push servidor -> dispositivo (contrato schemas/push-mensagem.json,
+const_comum.SCHEMA_VERSION_MENSAGEM, docs/schemas.md secao 6). A validacao dos eventos de retorno dispositivo -> servidor
 (push.ack, confirmacao.resposta) e estrutural e vive na borda (validacao.validar_evento_retorno).
 
-Relogio: quem DECIDE (nucleo.py) sempre passa `agora` (o instante da ingestao) a criar_pedido_confirmacao e
+Relogio: quem DECIDE (analise/nucleo.py) sempre passa `agora` (o instante da ingestao) a criar_pedido_confirmacao e
 criar_encerramento. O `agora_utc()` padrao so serve a quem nao passa instante: o replay da entrega por SSE
 (`para_envio`, que mede o tempo restante AGORA, na borda) e as chamadas avulsas.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import const   # SCHEMA_VERSION_MENSAGEM, FONTES_VALIDAS, MARGEM_SERVIDOR_S, TTL_ENCERRAMENTO_S (lidos na hora do uso)
+from comum import const as const_comum   # SCHEMA_VERSION_MENSAGEM, MARGEM_SERVIDOR_S, TTL_ENCERRAMENTO_S (lidos na hora do uso)
 
 TIPO_SOLICITADA = "queda.confirmacao_solicitada"
 TIPO_ENCERRADA = "queda.confirmacao_encerrada"
@@ -32,13 +32,13 @@ def criar_pedido_confirmacao(user_id: int, episode_id: str, timeout_s: float, mo
                              agora: datetime | None = None) -> dict:
     agora = agora or agora_utc()
     return {
-        "schemaVersion": const.SCHEMA_VERSION_MENSAGEM,
+        "schemaVersion": const_comum.SCHEMA_VERSION_MENSAGEM,
         "messageId": str(uuid.uuid4()),
         "messageType": TIPO_SOLICITADA,
         "userId": user_id,
         "episodeId": episode_id,
         "issuedAt": iso_z(agora),
-        "expiresAt": iso_z(agora + timedelta(seconds=timeout_s + const.MARGEM_SERVIDOR_S)),
+        "expiresAt": iso_z(agora + timedelta(seconds=timeout_s + const_comum.MARGEM_SERVIDOR_S)),
         "payload": {"timeoutMs": int(timeout_s * 1000), "motivo": motivo},
     }
 
@@ -48,13 +48,13 @@ def criar_encerramento(user_id: int, episode_id: str, resultado: str, agora: dat
         raise ValueError(resultado)
     agora = agora or agora_utc()
     return {
-        "schemaVersion": const.SCHEMA_VERSION_MENSAGEM,
+        "schemaVersion": const_comum.SCHEMA_VERSION_MENSAGEM,
         "messageId": str(uuid.uuid4()),
         "messageType": TIPO_ENCERRADA,
         "userId": user_id,
         "episodeId": episode_id,
         "issuedAt": iso_z(agora),
-        "expiresAt": iso_z(agora + timedelta(seconds=const.TTL_ENCERRAMENTO_S)),
+        "expiresAt": iso_z(agora + timedelta(seconds=const_comum.TTL_ENCERRAMENTO_S)),
         "payload": {"resultado": resultado},
     }
 

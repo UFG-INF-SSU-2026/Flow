@@ -2,8 +2,8 @@
 A semantica (faixas, sentinelas) fica nas regras: tests/unit/test_regras_legadas.py."""
 import pytest
 
-import const
-import validacao
+from comum import const as const_comum
+from borda import validacao
 from comum import contratos
 
 
@@ -49,7 +49,7 @@ class TestRoteamento:
             validacao.validar_roteamento({"source": "x", "user_id": "1"})
 
     def test_respeita_fontes_validas_alterada(self, monkeypatch):
-        monkeypatch.setattr(const, "FONTES_VALIDAS", {"app"})
+        monkeypatch.setattr(const_comum, "FONTES_VALIDAS", {"app"})
         with pytest.raises(validacao.CorpoInvalido):
             validacao.validar_roteamento({"source": "wokwi", "user_id": 1})
 
@@ -67,7 +67,7 @@ class TestLerUserId:
 # ------------------------------------------------------------------ versao
 class TestVersao:
     def test_ausente_vale_o_padrao(self):
-        assert validacao.verificar_versao({}, 3) == const.SCHEMA_VERSION_PADRAO
+        assert validacao.verificar_versao({}, 3) == const_comum.SCHEMA_VERSION_PADRAO
 
     @pytest.mark.parametrize("v", [1, 2, 3])
     def test_aceitas(self, v):
@@ -78,8 +78,8 @@ class TestVersao:
         assert validacao.verificar_versao({"schemaVersion": v}, 3) is None
 
     def test_versao_atual_da_fonte(self, monkeypatch):
-        monkeypatch.setattr(const, "SCHEMA_VERSION_APP", 7)
-        monkeypatch.setattr(const, "SCHEMA_VERSION_WOKWI", 9)
+        monkeypatch.setattr(const_comum, "SCHEMA_VERSION_APP", 7)
+        monkeypatch.setattr(const_comum, "SCHEMA_VERSION_WOKWI", 9)
         assert validacao.versao_atual_da_fonte("app") == 7 and validacao.versao_atual_da_fonte("wokwi") == 9
         with pytest.raises(ValueError):
             validacao.versao_atual_da_fonte("outra")
@@ -87,7 +87,7 @@ class TestVersao:
 
 # ------------------------------------------------------------------ telemetria do wokwi
 def ev_wk(**extra):
-    ev = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "d1",
+    ev = {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "d1",
           "entityId": "e1", "eventTimeMs": 1000, "sequence": 1, "value": 0.3, "unit": "m/s2", "state": "NORMAL"}
     ev.update(extra)
     return ev
@@ -128,7 +128,7 @@ class TestTelemetriaWokwi:
 
 # ------------------------------------------------------------------ leitura_ambiente
 def ev_la(**extra):
-    ev = {"schemaVersion": const.SCHEMA_VERSION_APP, "device_id": "d1", "event_time": "2026-10-14T22:00:00-03:00",
+    ev = {"schemaVersion": const_comum.SCHEMA_VERSION_APP, "device_id": "d1", "event_time": "2026-10-14T22:00:00-03:00",
           "luminosidade": 10, "cct": 6000, "seq_num": 1}
     ev.update(extra)
     return ev
@@ -247,7 +247,7 @@ class TestValidarEventoRetorno:
             validacao.validar_evento_retorno(ev_app(), fonte)
 
     def test_respeita_fontes_validas_alterada(self, monkeypatch):
-        monkeypatch.setattr(const, "FONTES_VALIDAS", {"app"})
+        monkeypatch.setattr(const_comum, "FONTES_VALIDAS", {"app"})
         with pytest.raises(ValueError):
             validacao.validar_evento_retorno(ev_wokwi(), "wokwi")
 

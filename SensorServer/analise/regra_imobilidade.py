@@ -24,12 +24,13 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-import const   # ACEL_MIN/MAX_PLAUSIVEL, SCHEMA_VERSION_WOKWI/PADRAO (ver const.py)
+from analise import const as const_analise   # ACEL_MIN/MAX_PLAUSIVEL, MAX_ESTADOS_LEGADOS
+from comum import const as const_comum       # SCHEMA_VERSION_WOKWI/PADRAO
 
 # Versao do schema do payload wokwi (docs/arquitetura.md, secao 4.3).
-# O produtor atual (sketch.ino) envia a versao do contrato do wokwi (const.SCHEMA_VERSION_WOKWI).
+# O produtor atual (sketch.ino) envia a versao do contrato do wokwi (const_comum.SCHEMA_VERSION_WOKWI).
 # Eventos sem o campo (produtor mais antigo/nao atualizado) sao tratados como
-# versao 1 (const.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
+# versao 1 (const_comum.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
 # como desatualizados (ver validar_evento).
 
 # O vocabulario (eventType -> state) e os campos obrigatorios vivem em schemas/wokwi-telemetria.json e sao
@@ -55,7 +56,7 @@ class EstadoDispositivo:
     ultima_decisao: str | None = None       # ultimo state de imobilidade.decisao
     alerta_ativo: bool = False              # evita reemitir arquivo de alerta para o mesmo episodio
     ultima_atualizacao: str | None = None   # ISO 8601, para saber ha quanto tempo o device fala com o servidor
-    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const.SCHEMA_VERSION_PADRAO, se ausente)
+    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const_comum.SCHEMA_VERSION_PADRAO, se ausente)
     ordem_atualizacao: int = 0              # contador monotonico: desempata o "atualizado por ultimo" (o relogio do Windows
                                             # tem ~15 ms de resolucao e duas atualizacoes seguidas podem ter o mesmo ISO)
 
@@ -63,7 +64,7 @@ class EstadoDispositivo:
 # Estado por (user_id, device_id) (em memoria; reinicia se o servidor reiniciar,
 # mesma decisao de simplicidade ja assumida em regra_luz.py). O user_id faz parte da chave: dois usuarios com o
 # mesmo device_id nao compartilham estado nem sequence.
-# Como o device_id vem do cliente, a tabela tem teto (const.MAX_ESTADOS_LEGADOS): estoura, sai o menos usado
+# Como o device_id vem do cliente, a tabela tem teto (const_analise.MAX_ESTADOS_LEGADOS): estoura, sai o menos usado
 # (a ordem do dict e a do ultimo uso).
 @dataclass
 class EstadoImobilidade:
@@ -89,7 +90,7 @@ def _estado_do(user_id: int, device_id: str, estado: "EstadoImobilidade | None" 
     with tab.lock:
         atual = tab.estados.pop(chave, None) or EstadoDispositivo()
         tab.estados[chave] = atual   # reinsere no fim: o primeiro do dict e sempre o menos usado
-        while len(tab.estados) > const.MAX_ESTADOS_LEGADOS:
+        while len(tab.estados) > const_analise.MAX_ESTADOS_LEGADOS:
             del tab.estados[next(iter(tab.estados))]
         return atual
 
@@ -110,11 +111,11 @@ def validar_evento(evento: dict) -> None:
     (>160) - validar esses dois contra 0-160 rejeitaria exatamente os eventos que existem para *avisar* sobre a
     anomalia. Levanta EventoInvalido se falhar.
     """
-    schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
-    if isinstance(schema_version, int) and schema_version < const.SCHEMA_VERSION_WOKWI:
+    schema_version = evento.get("schemaVersion", const_comum.SCHEMA_VERSION_PADRAO)
+    if isinstance(schema_version, int) and schema_version < const_comum.SCHEMA_VERSION_WOKWI:
         print(
             f"  [wokwi] aviso: evento com schemaVersion={schema_version} "
-            f"desatualizado (atual={const.SCHEMA_VERSION_WOKWI}), "
+            f"desatualizado (atual={const_comum.SCHEMA_VERSION_WOKWI}), "
             f"deviceId={evento.get('deviceId')}"
         )
 
@@ -126,15 +127,15 @@ def validar_evento(evento: dict) -> None:
                 f"LEITURA_INVALIDA deveria vir com o sentinela -1.0, veio {value}"
             )
     elif state == "LEITURA_FORA_DE_FAIXA":
-        if value <= const.ACEL_MAX_PLAUSIVEL:
+        if value <= const_analise.ACEL_MAX_PLAUSIVEL:
             raise EventoInvalido(
-                f"LEITURA_FORA_DE_FAIXA deveria vir com value > {const.ACEL_MAX_PLAUSIVEL}, veio {value}"
+                f"LEITURA_FORA_DE_FAIXA deveria vir com value > {const_analise.ACEL_MAX_PLAUSIVEL}, veio {value}"
             )
     else:
-        if not (const.ACEL_MIN_PLAUSIVEL <= value <= const.ACEL_MAX_PLAUSIVEL):
+        if not (const_analise.ACEL_MIN_PLAUSIVEL <= value <= const_analise.ACEL_MAX_PLAUSIVEL):
             raise EventoInvalido(
                 f"value fora da faixa fisica plausivel "
-                f"({const.ACEL_MIN_PLAUSIVEL}-{const.ACEL_MAX_PLAUSIVEL}): {value}"
+                f"({const_analise.ACEL_MIN_PLAUSIVEL}-{const_analise.ACEL_MAX_PLAUSIVEL}): {value}"
             )
 
 
@@ -172,7 +173,7 @@ def processar_evento(user_id: int, evento: dict, agora: float | None = None,
     do_device.ultima_atualizacao = (_agora_iso() if agora is None
                                     else datetime.fromtimestamp(agora, tz=timezone.utc).isoformat())
     do_device.ordem_atualizacao = next(tab.contador)
-    do_device.ultimo_schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
+    do_device.ultimo_schema_version = evento.get("schemaVersion", const_comum.SCHEMA_VERSION_PADRAO)
 
     event_type = evento["eventType"]
     state = evento["state"]

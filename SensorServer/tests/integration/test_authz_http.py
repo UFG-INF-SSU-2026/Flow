@@ -1,11 +1,10 @@
 """Autorizacao pelas rotas HTTP (test_client): matriz rota x papel, escopo e auditoria."""
+from borda import const as const_borda
 import json
 
 import pytest
 
-import const
-
-# (metodo, rota) -> status esperado por papel. POST usa corpo `{}`: autorizado chega ao estagio 2 e da 400.
+from comum import const as const_comum  # (metodo, rota) -> status esperado por papel. POST usa corpo `{}`: autorizado chega ao estagio 2 e da 400.
 MATRIZ = {
     ("POST", "/dados"):        {"idoso": 400, "dispositivo": 400, "admin": 403, "sem_token": 401, "invalido": 401},
     ("POST", "/eventos"):      {"idoso": 400, "dispositivo": 400, "admin": 403, "sem_token": 401, "invalido": 401},
@@ -32,7 +31,7 @@ def test_matriz_rota_x_papel(cli, tokens, metodo, rota, papel, esperado):
 
 
 def test_token_expirado_da_401(cli, contas, monkeypatch):
-    monkeypatch.setattr(const, "ACCESS_TTL_S", -10)
+    monkeypatch.setattr(const_borda, "ACCESS_TTL_S", -10)
     token = cli.login("idoso1", "senha-idoso", "app", "cel1")["access_token"]
     r = cli.post("/dados", {"source": "app", "user_id": 1}, token)
     assert r.status_code == 401 and r.get_json()["codigo"] == "token_invalido"
@@ -64,7 +63,7 @@ def test_auditoria_uma_linha_por_negacao_sem_o_conteudo(cli, tokens):
     assert cli.get("/dados", tokens["idoso"]).status_code == 403
     assert cli.get("/dados").status_code == 401
 
-    with open(f"{const.DATA_DIR}/auditoria.jsonl", encoding="utf-8") as f:
+    with open(f"{const_comum.DATA_DIR}/auditoria.jsonl", encoding="utf-8") as f:
         texto = f.read()
     linhas = [json.loads(l) for l in texto.splitlines() if l.strip()]
     assert [(l["rota"], l["status"], l["motivo"], l["conta"]) for l in linhas] == [

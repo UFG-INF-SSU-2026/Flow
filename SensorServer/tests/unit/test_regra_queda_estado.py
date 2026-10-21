@@ -4,8 +4,9 @@ regra_queda: maquina do gatilho A e abertura de episodios.
 CARACTERIZACAO: fixa o comportamento atual do codigo. Se uma regra mudar, o teste muda de proposito.
 Todos os instantes sao passados em `agora`; nao ha sleep.
 """
-import const
-import regra_queda
+from comum import const as const_comum
+from analise import const as const_analise
+from analise import regra_queda
 
 U = 1
 T0 = 1000.0
@@ -42,15 +43,15 @@ class TestGatilhoA:
         assert avaliar(T0 + 2, CALMA) is None
         pedido = avaliar(T0 + 3, CALMA)                      # T_POS_IMPACTO_S = 3
         assert isinstance(pedido, regra_queda.PedidoConfirmacao)
-        assert pedido.motivo == const.MOTIVO_A
-        assert pedido.timeout_s == const.TIMEOUT_CONFIRMACAO_S
+        assert pedido.motivo == const_analise.MOTIVO_A
+        assert pedido.timeout_s == const_comum.TIMEOUT_CONFIRMACAO_S
         assert fase() == "OBSERVANDO"
         ep = regra_queda._episodios[U]
         assert ep.episode_id == pedido.episode_id
-        assert ep.prazo == T0 + 3 + const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S
+        assert ep.prazo == T0 + 3 + const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S
 
         (aberto,) = [l for l in ler_confirmacoes(U) if l["tipo"] == "episodio.aberto"]
-        assert aberto["episodeId"] == pedido.episode_id and aberto["motivo"] == const.MOTIVO_A
+        assert aberto["episodeId"] == pedido.episode_id and aberto["motivo"] == const_analise.MOTIVO_A
         assert aberto["fonte_do_disparo"] == "wokwi" and aberto["versao_referencia"] == 1
         assert aberto["fontes_usadas"][0]["fonte"] == "wokwi"
 
@@ -60,7 +61,7 @@ class TestGatilhoA:
         avaliar(T0 + 1, APP_CALMA, "app")
         avaliar(T0 + 2, APP_CALMA, "app")
         pedido = avaliar(T0 + 3, APP_CALMA, "app")
-        assert pedido is not None and pedido.motivo == const.MOTIVO_A
+        assert pedido is not None and pedido.motivo == const_analise.MOTIVO_A
 
     def test_cada_leitura_usa_o_limiar_da_propria_fonte(self):
         avaliar(T0, wokwi(3.0, 16.0))                    # 16 < 20: nao e impacto no wokwi
@@ -123,20 +124,20 @@ class TestEpisodios:
 
     def test_gatilho_b_usa_o_motivo_b(self):
         pedido = regra_queda.abrir_por_imobilidade(U, agora=T0)
-        assert pedido.motivo == const.MOTIVO_B
+        assert pedido.motivo == const_analise.MOTIVO_B
 
     def test_cooldown_conta_do_encerramento(self):
         regra_queda.abrir_por_imobilidade(U, agora=T0)
-        prazo = const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S
+        prazo = const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S
         assert [e.resultado for e in regra_queda.vigiar(agora=T0 + prazo)] == ["EXPIRADO"]
         fim = T0 + prazo
-        assert regra_queda.abrir_por_imobilidade(U, agora=fim + const.COOLDOWN_S - 1) is None
+        assert regra_queda.abrir_por_imobilidade(U, agora=fim + const_analise.COOLDOWN_S - 1) is None
 
     def test_depois_do_cooldown_abre_outro(self):
         primeiro = regra_queda.abrir_por_imobilidade(U, agora=T0)
-        fim = T0 + const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S
+        fim = T0 + const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S
         regra_queda.vigiar(agora=fim)
-        segundo = regra_queda.abrir_por_imobilidade(U, agora=fim + const.COOLDOWN_S)
+        segundo = regra_queda.abrir_por_imobilidade(U, agora=fim + const_analise.COOLDOWN_S)
         assert segundo is not None and segundo.episode_id != primeiro.episode_id
 
     def test_usuarios_sao_independentes(self):

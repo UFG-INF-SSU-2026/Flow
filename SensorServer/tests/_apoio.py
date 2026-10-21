@@ -9,9 +9,8 @@ import time
 
 import requests
 
-from crypto_utils import decrypt_payload, encrypt_payload
-import const
-
+from borda.crypto_utils import decrypt_payload, encrypt_payload
+from comum import const as const_comum
 SEGREDO = "t" * 48   # FLOW_JWT_SECRET dos testes (>= 32 bytes)
 
 
@@ -59,7 +58,7 @@ class Cliente:
         return json.loads(decrypt_payload(d["nonce"], d["ciphertext"]))
 
     def login(self, identificador: str, segredo: str, fonte, device_id=None) -> dict:
-        r = self.post("/auth/login", {"schemaVersion": const.SCHEMA_VERSION_AUTH, "identificador": identificador, "segredo": segredo,
+        r = self.post("/auth/login", {"schemaVersion": const_comum.SCHEMA_VERSION_AUTH, "identificador": identificador, "segredo": segredo,
                                       "fonte": fonte, "device_id": device_id})
         assert r.status_code == 200, f"login de {identificador} falhou: {r.status_code}"
         return self.corpo(r)

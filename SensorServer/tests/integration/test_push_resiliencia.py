@@ -11,19 +11,20 @@ from types import SimpleNamespace
 
 import pytest
 
-import auth
-import canal_app
-import canal_wokwi
-import const
-import mensagens
-import regra_imobilidade
-import regra_luz
-import regra_queda
-import server
-import sse_hub
+from borda import auth
+from borda import canal_app
+from borda import canal_wokwi
+from comum import const as const_comum
+from borda import const as const_borda
+from comum import mensagens
+from analise import regra_imobilidade
+from analise import regra_luz
+from analise import regra_queda
+from borda import server
+from borda import sse_hub
 from _apoio import aguardar
 from _cenarios import FluxoQueda
-from sse_hub import Hub
+from borda.sse_hub import Hub
 
 
 @pytest.fixture
@@ -63,7 +64,7 @@ def test_sem_canal_ativo_registra_a_entrega_e_o_episodio_expira(fluxo, relogio, 
     assert [(l["canal"], l["resultado"]) for l in _linhas(ler_confirmacoes, "push.entrega")] == [
         ("app", "SEM_CANAL_ATIVO"), ("wokwi", "SEM_CANAL_ATIVO")]
 
-    relogio.avancar(const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S)
+    relogio.avancar(const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S)
     assert aguardar(lambda: len(ler_confirmacoes(1)) >= 6)
     assert regra_queda._episodios[1].resultado == "EXPIRADO"
     assert [l["tipo"] for l in ler_confirmacoes(1)] == [
@@ -85,14 +86,14 @@ def test_cliente_que_conecta_dentro_da_validade_recebe_o_pedido_com_timeout_redu
 
     assert pedido["messageType"] == mensagens.TIPO_SOLICITADA
     assert pedido["messageId"] == _unica_mensagem()
-    assert pedido["payload"]["timeoutMs"] == (const.TIMEOUT_CONFIRMACAO_S - 2) * 1000
+    assert pedido["payload"]["timeoutMs"] == (const_comum.TIMEOUT_CONFIRMACAO_S - 2) * 1000
     assert _linhas(ler_confirmacoes, "push.entrega") == entregas      # a linha original nao muda
     assert {l["resultado"] for l in entregas} == {"SEM_CANAL_ATIVO"}
 
 
 def test_pedido_com_tempo_do_cliente_esgotado_nao_e_reenviado(fluxo, relogio, abrir_sse):
     fluxo.enviar_queda()
-    relogio.avancar(const.TIMEOUT_CONFIRMACAO_S + 1)         # idoso sem tempo, mas ainda dentro da margem do servidor
+    relogio.avancar(const_comum.TIMEOUT_CONFIRMACAO_S + 1)         # idoso sem tempo, mas ainda dentro da margem do servidor
     assert regra_queda._episodios[1].encerrado_em is None
 
     leitor = abrir_sse("/push/app", fluxo.tok_app)
@@ -103,7 +104,7 @@ def test_pedido_com_tempo_do_cliente_esgotado_nao_e_reenviado(fluxo, relogio, ab
 def test_mensagens_vencidas_nao_sao_reenviadas(fluxo, relogio, abrir_sse):
     fluxo.enviar_queda()
     fluxo.resposta_app(_unica_mensagem())                    # encerra: o anel passa a ter pedido e encerramento
-    relogio.avancar(const.TTL_ENCERRAMENTO_S + 1)            # os dois ja passaram do expiresAt
+    relogio.avancar(const_comum.TTL_ENCERRAMENTO_S + 1)            # os dois ja passaram do expiresAt
 
     leitor = abrir_sse("/push/app", fluxo.tok_app)
     leitor.esperar_comentario("conectado")
@@ -166,7 +167,7 @@ def test_cliente_que_nao_consome_enche_a_fila_e_e_desconectado_e_reconecta_com_r
     leitor = abrir_sse("/push/app", token)
     leitor.esperar_comentario("conectado")
 
-    msgs = [mensagens.criar_encerramento(1, f"ep-{i}", "CONFIRMADO") for i in range(const.TAMANHO_FILA_CONEXAO + 2)]
+    msgs = [mensagens.criar_encerramento(1, f"ep-{i}", "CONFIRMADO") for i in range(const_borda.TAMANHO_FILA_CONEXAO + 2)]
     assert canal_app.enviar(1, msgs[0]) == "ENTREGUE_AO_CANAL"
     assert entrou.wait(3)                                    # o gerador pegou a primeira e esta preso com ela
     for m in msgs[1:-1]:                                     # as 16 seguintes ocupam a fila inteira
@@ -182,7 +183,7 @@ def test_cliente_que_nao_consome_enche_a_fila_e_e_desconectado_e_reconecta_com_r
     novo = abrir_sse("/push/app", token, {"Last-Event-ID": str(visto)})
     novo.esperar_comentario("conectado")
     recebidas, ids = [], []
-    for _ in range(const.TAMANHO_FILA_CONEXAO):
+    for _ in range(const_borda.TAMANHO_FILA_CONEXAO):
         recebidas.append(novo.proximo_push())
         ids.append(novo.ultimo_id)
     # pendentes: msgs[1:] (17); a fila comporta 16, entao valem as mais recentes: msgs[2:]
@@ -222,7 +223,7 @@ def test_sessoes_persistem_no_reinicio(cli, reiniciar):
     nova = cli.corpo(r)
     assert nova["refresh_token"] != sessao["refresh_token"] and nova["papel"] == "idoso" and nova["user_ids"] == [1]
     # o access token anterior segue valido (JWT sem estado no servidor)
-    r = cli.post("/eventos", {"schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
+    r = cli.post("/eventos", {"schemaVersion": const_comum.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
                               "event_time": "2026-10-14T12:00:00.000Z", "eventType": "push.ack", "state": "ATIVADO",
                               "messageId": "m-1"}, sessao["access_token"])
     assert r.status_code == 200

@@ -1,5 +1,5 @@
 """
-Nucleo das regras (S2a do roadmap do split): "processar este lote com este relogio e este estado".
+Nucleo das regras (roadmap do split, S2): "processar este lote com este relogio e este estado".
 
 Entra: leituras e respostas de dispositivo, cada uma com o seu INSTANTE DE INGESTAO (o `instante_ingestao` que a
 borda grava em `leituras` / `respostas_dispositivo`), e o `EstadoRegras` de quem esta processando.
@@ -9,29 +9,29 @@ alertas, registros de confirmacao, resumos de estado e descartes.
 O que o nucleo NAO faz (e por que ele serve ao servidor de hoje, a sombra da S3, a analise da S4 e as simulacoes):
   - nao le o relogio: o instante vem no argumento. O vigia (`vigiar`) tambem recebe o relogio de quem o chama,
     porque so ele depende do tempo que passa e nao do tempo dos dados;
-  - nao tem thread, nao toca arquivo nem banco, nao envia nada. Quem grava e entrega e o ADAPTADOR (hoje,
-    server.py; na S4, o laco da analise e a entrega de push da borda);
+  - nao tem thread, nao toca arquivo nem banco, nao envia nada. Quem grava e `analise/efeitos.py` e quem entrega
+    e o ADAPTADOR (hoje, borda/caminho_direto.py; na S4, o laco da analise e a entrega de push da borda);
   - nao guarda estado global: o estado e o `EstadoRegras` recebido. `PADRAO` aponta para as tabelas dos modulos
     de regra (o estado do servidor); `novo_estado()` da um estado limpo e independente.
 
-Ordem das decisoes: para o mesmo instante, a borda deve aplicar `confirmacoes`, depois `alertas`/`estados`, depois
+Ordem das decisoes: para o mesmo instante, quem aplica deve aplicar `confirmacoes`, depois `alertas`/`estados`, depois
 `comandos` (cada um grava episodio + comando juntos e entao entrega). E a mesma ordem em que os efeitos aconteciam
 antes da extracao.
 
 Validacao: a estrutura ja foi conferida pela borda para aceitar o dado, mas a analise precisa tratar do mesmo jeito
 o que ja esta no banco (leitura estruturalmente invalida e gravada e depois descartada, como hoje). Por isso o
-nucleo repete a conferencia estrutural, chamando a MESMA funcao (`validacao`), sem copia. Quando a borda passar a
-recusar com 400, essa chamada sai daqui.
+nucleo repete a conferencia estrutural, chamando o MESMO validador e os MESMOS schemas da borda
+(`comum.contratos.validar`, contratos de schemas/), sem copia de regra. A analise nao importa a borda: o que as duas
+partilham mora em `comum/`. Quando a borda passar a recusar com 400, essa chamada sai daqui.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-import const
-import mensagens
-import regra_imobilidade
-import regra_luz
-import regra_queda
-import validacao
+from comum import const as const_comum
+from comum import contratos, mensagens
+from analise import regra_imobilidade
+from analise import regra_luz
+from analise import regra_queda
 
 # Resultado da cascata de validacao de um evento wokwi (so ACEITO alimenta a regra de queda).
 WOKWI_INVALIDO = "INVALIDO"
@@ -75,7 +75,7 @@ class Leitura:
 @dataclass(frozen=True)
 class Resposta:
     """Uma resposta de dispositivo (a linha de `respostas_dispositivo`): o evento JA normalizado por
-    `validacao.validar_evento_retorno` ({eventType, state, messageId, device_id, source}). A identidade
+    `borda.validacao.validar_evento_retorno` ({eventType, state, messageId, device_id, source}). A identidade
     (`user_id`, `device_id`) vem do token, nunca do corpo (DS1)."""
     instante: datetime          # instante_ingestao (UTC)
     user_id: int
@@ -248,7 +248,7 @@ def comando_de_pedido(estado: EstadoRegras, user_id: int, pedido: "regra_queda.P
                                 estado=estado.queda)
     episodio = MudancaEpisodio(pedido.episode_id, user_id, device_id, pedido.motivo, "aguardando_confirmacao",
                                instante, instante, None, None, {"timeout_s": pedido.timeout_s})
-    expira = instante + timedelta(seconds=pedido.timeout_s + const.MARGEM_SERVIDOR_S)
+    expira = instante + timedelta(seconds=pedido.timeout_s + const_comum.MARGEM_SERVIDOR_S)
     return Comando(user_id, device_id, msg, instante, expira, episodio)
 
 
@@ -277,7 +277,7 @@ def _regra_de_luz(estado: EstadoRegras, leitura: Leitura, payload: dict, d: Deci
     bloco = payload.get("leitura_ambiente")
     if bloco is None:
         return
-    erros = validacao.erros_leitura_ambiente(bloco)
+    erros = contratos.validar("app-leitura-ambiente", bloco)
     if erros:
         print(f"  [leitura_ambiente] descartada (estrutura invalida): {'; '.join(erros[:3])}")
         d.descartes.append(Descarte(leitura.user_id, leitura.device_id, DESCARTE_ESTRUTURA, "leitura_ambiente"))
@@ -295,13 +295,13 @@ def _regra_de_luz(estado: EstadoRegras, leitura: Leitura, payload: dict, d: Deci
     alerta = regra_luz.avaliar_regra(leitura.user_id, bloco, estado=estado.luz)
     if alerta is not None:
         d.alertas.append(Alerta(leitura.user_id, leitura.device_id, "luz_inadequada", alerta,
-                                const.SCHEMA_VERSION_APP, leitura.instante))
+                                const_comum.SCHEMA_VERSION_APP, leitura.instante))
 
 
 def _regra_de_imobilidade(estado: EstadoRegras, leitura: Leitura, payload: dict, d: Decisoes) -> tuple[str, dict | None]:
     """Cascata de validacao por eventType + tabela de estado + atuacao para ALERTA_IMOBILIDADE.
     Devolve (INVALIDO | DUPLICADO | ACEITO, alerta ou None): so ACEITO alimenta a regra de queda."""
-    erros = validacao.erros_telemetria_wokwi(payload)
+    erros = contratos.validar("wokwi-telemetria", payload)
     if erros:
         print(f"  [wokwi] evento descartado (estrutura invalida): {'; '.join(erros[:3])}")
         d.descartes.append(Descarte(leitura.user_id, leitura.device_id, DESCARTE_ESTRUTURA, "wokwi"))
@@ -320,7 +320,7 @@ def _regra_de_imobilidade(estado: EstadoRegras, leitura: Leitura, payload: dict,
                                                 estado=estado.imobilidade)
     if alerta is not None:
         d.alertas.append(Alerta(leitura.user_id, leitura.device_id, "imobilidade", alerta,
-                                const.SCHEMA_VERSION_WOKWI, leitura.instante))
+                                const_comum.SCHEMA_VERSION_WOKWI, leitura.instante))
     return WOKWI_ACEITO, alerta
 
 

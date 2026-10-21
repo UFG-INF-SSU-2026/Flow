@@ -2,7 +2,7 @@
 Acesso unico do servidor aos repositorios de banco (borda e analise).
 
 Enquanto borda e analise forem o mesmo processo, os dois lados vivem aqui, cada um com o seu papel no banco e o seu
-disjuntor. Quem usa (server.py, authz.py, regra_queda.py) NUNCA toca em SQL nem em pool: chama borda()/analise() ou
+disjuntor. Quem usa (borda/server.py, borda/authz.py, borda/caminho_direto.py, analise/efeitos.py) NUNCA toca em SQL nem em pool: chama borda()/analise() ou
 tentar_borda()/tentar_analise().
 
   iniciar()    -> sobe os pools e VERIFICA a versao do esquema; falha com mensagem clara (o servidor nao sobe).
@@ -13,7 +13,7 @@ tentar_borda()/tentar_analise().
 """
 import os
 
-import const
+from comum import const as const_comum
 from flow_db.disjuntor import Disjuntor
 
 
@@ -31,7 +31,7 @@ _banco_falso = None
 
 def _zerar_disjuntores() -> None:
     for lado in (_borda, _analise):
-        lado.disjuntor = Disjuntor(const.DB_PAUSA_APOS_FALHA_S)
+        lado.disjuntor = Disjuntor(const_comum.DB_PAUSA_APOS_FALHA_S)
 
 
 def iniciar() -> None:
@@ -95,7 +95,7 @@ def _tentar(lado: _Lado, nome: str, fn) -> bool:
         fn(repo)
     except Exception as e:  # noqa: BLE001  (o banco nunca derruba o fluxo principal)
         lado.disjuntor.falhou()
-        print(f"  [db:{lado.nome}] falha ao gravar {nome} (pausa de {const.DB_PAUSA_APOS_FALHA_S}s): "
+        print(f"  [db:{lado.nome}] falha ao gravar {nome} (pausa de {const_comum.DB_PAUSA_APOS_FALHA_S}s): "
               f"{type(e).__name__}: {str(e)[:200]}")
         return False
     lado.disjuntor.sucesso()

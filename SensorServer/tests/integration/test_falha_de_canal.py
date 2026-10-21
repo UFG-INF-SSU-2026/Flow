@@ -1,11 +1,10 @@
 """Falha de canal e do aviso de encerramento nao derrubam o fluxo."""
-import const
-import canal_app
-import canal_wokwi
-import mensagens
-import regra_queda
-import server
-from sse_hub import HUB
+from comum import const as const_comum
+from analise import const as const_analise
+from borda import caminho_direto, canal_app, canal_wokwi
+from comum import mensagens
+from analise import regra_queda
+from borda.sse_hub import HUB
 
 
 class Fluxo:
@@ -16,7 +15,7 @@ class Fluxo:
 
     def leitura(self, value, vmax):
         self._seq += 1
-        ev = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "bridge-dev",
+        ev = {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "bridge-dev",
               "entityId": "idoso-sim", "eventTimeMs": self._seq * 1000, "sequence": self._seq, "value": value,
               "valueMax": vmax, "unit": "m/s2", "state": "NORMAL", "user_id": 1, "source": "wokwi"}
         return self.cli.post("/dados", ev, self.tokens["dispositivo"])
@@ -27,7 +26,7 @@ class Fluxo:
         self.relogio.avancar(1)
         self.leitura(3.0, 25.0)
         r = None
-        for _ in range(int(const.T_POS_IMPACTO_S)):
+        for _ in range(int(const_analise.T_POS_IMPACTO_S)):
             self.relogio.avancar(1)
             r = self.leitura(0.3, 0.4)
         return r
@@ -39,7 +38,7 @@ def _entregas(ler_confirmacoes):
 
 def _resposta_app(cli, tokens, message_id):
     return cli.post("/eventos", {
-        "schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
+        "schemaVersion": const_comum.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
         "event_time": "2026-10-14T12:00:00.000Z", "eventType": "confirmacao.resposta", "state": "ESTOU_BEM",
         "messageId": message_id}, tokens["idoso"])
 
@@ -63,7 +62,7 @@ def test_falha_ao_emitir_o_pedido_nao_da_500_em_dados(cli, tokens, relogio, monk
     def quebrado(*a, **k):
         raise RuntimeError("emitir quebrou")
 
-    monkeypatch.setattr(server, "_entregar_comando", quebrado)
+    monkeypatch.setattr(caminho_direto, "_entregar_comando", quebrado)
     assert Fluxo(cli, tokens, relogio).provocar_queda().status_code == 200
 
 
@@ -74,7 +73,7 @@ def test_estou_bem_da_200_mesmo_se_o_aviso_de_encerramento_falhar(cli, tokens, r
     def quebrado(*a, **k):
         raise RuntimeError("despacho quebrou")
 
-    monkeypatch.setattr(server, "_despachar", quebrado)
+    monkeypatch.setattr(caminho_direto, "_despachar", quebrado)
     r = _resposta_app(cli, tokens, message_id)
     assert r.status_code == 200 and r.get_json() == {"status": "ok"}
     assert regra_queda._episodios[1].resultado == "CONFIRMADO"

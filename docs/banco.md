@@ -12,7 +12,7 @@ pip install -r requirements.txt
 python -m flow_db provisionar   # cria/ajusta os papeis flow_borda e flow_analise (idempotente)
 python -m flow_db migrar        # aplica as migracoes pendentes (idempotente, com trava)
 python -m flow_db status        # versao aplicada x disponivel
-python server.py                # recusa subir se o banco faltar ou estiver defasado
+python -m borda.server                # recusa subir se o banco faltar ou estiver defasado
 ```
 
 Senhas dos papéis: só letras, números, `_` e `-`, mínimo 16 (`python -c "import secrets; print(secrets.token_urlsafe(24))"`).
@@ -49,5 +49,5 @@ aceitando dados e as mais antigas saem ao estourar o teto.
 ## Fora desta parte
 
 `contas.json`/`sessoes.json` continuam sendo a fonte de autenticação (as tabelas `contas`/`sessoes` já existem e têm
-permissão, mas o `auth.py` ainda não as usa). Processo de análise separado, consumo por cursor e `/health` com
+permissão, mas o `borda/auth.py` ainda não as usa). Processo de análise separado, consumo por cursor e `/health` com
 `saude_pipeline` (a visão e `RepoBorda.ler_saude()` já estão prontos).

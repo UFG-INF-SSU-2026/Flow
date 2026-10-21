@@ -9,7 +9,7 @@ autenticada -> o chamador descarta e responde 200. Nenhuma mensagem de erro daqu
 
 Este modulo vai para borda/ na reorganizacao da etapa S2.
 """
-import const
+from comum import const as const_comum
 from comum import contratos
 
 
@@ -37,10 +37,10 @@ def ler_user_id(valor) -> int | None:
 
 
 def validar_roteamento(corpo: dict) -> tuple[str, int]:
-    """(source, user_id) de /dados e /eventos. 'source' ausente ou fora de const.FONTES_VALIDAS e 'user_id' que nao e
+    """(source, user_id) de /dados e /eventos. 'source' ausente ou fora de const_comum.FONTES_VALIDAS e 'user_id' que nao e
     inteiro levantam CorpoInvalido (400), nessa ordem. Conferir contra o token e o proximo passo (authz)."""
     source = corpo.get("source")
-    if not isinstance(source, str) or source not in const.FONTES_VALIDAS:
+    if not isinstance(source, str) or source not in const_comum.FONTES_VALIDAS:
         raise CorpoInvalido(f"Campo 'source' ausente ou invalido (esperado 'app' ou 'wokwi'): {source}")
     user_id = ler_user_id(corpo.get("user_id"))
     if user_id is None:
@@ -52,9 +52,9 @@ def validar_roteamento(corpo: dict) -> tuple[str, int]:
 def versao_atual_da_fonte(source: str) -> int:
     """Versao mais recente do contrato da fonte ('app' ou 'wokwi'), lida de const.py na hora da chamada."""
     if source == "app":
-        return const.SCHEMA_VERSION_APP
+        return const_comum.SCHEMA_VERSION_APP
     if source == "wokwi":
-        return const.SCHEMA_VERSION_WOKWI
+        return const_comum.SCHEMA_VERSION_WOKWI
     raise ValueError(f"fonte desconhecida: {source!r}")
 
 
@@ -62,13 +62,13 @@ def verificar_versao(payload: dict, versao_atual: int) -> int | None:
     """Verifica `schemaVersion` (raiz do payload) ANTES de interpretar o resto. Nunca levanta excecao.
 
     `versao_atual` e a do contrato da rota (quem chama escolhe) e o piso vem de const.py:
-      - ausente: vale const.SCHEMA_VERSION_PADRAO;
-      - de const.SCHEMA_VERSION_MINIMA ate `versao_atual`: aceita (inclusive versao menor que a atual);
+      - ausente: vale const_comum.SCHEMA_VERSION_PADRAO;
+      - de const_comum.SCHEMA_VERSION_MINIMA ate `versao_atual`: aceita (inclusive versao menor que a atual);
       - invalido: nao inteiro (inclui "3", 3.0, null), booleano, menor que a minima ou maior que `versao_atual`."""
-    v = payload.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
+    v = payload.get("schemaVersion", const_comum.SCHEMA_VERSION_PADRAO)
     if isinstance(v, bool) or not isinstance(v, int):
         return None
-    if v < const.SCHEMA_VERSION_MINIMA or v > versao_atual:
+    if v < const_comum.SCHEMA_VERSION_MINIMA or v > versao_atual:
         return None
     return v
 
@@ -94,10 +94,10 @@ def validar_evento_retorno(payload: dict, source: str) -> dict:
     """Valida e normaliza um evento de POST /eventos. Devolve {eventType, state, messageId, device_id, source}.
     Levanta EventoRetornoInvalido.
 
-    `source` deve ser uma das const.FONTES_VALIDAS e JA conferida com o token pelo chamador (authz.exigir_escopo).
+    `source` deve ser uma das const_comum.FONTES_VALIDAS e JA conferida com o token pelo chamador (authz.exigir_escopo).
     Qualquer outro valor e erro de programacao (ValueError), nao conteudo invalido do cliente."""
-    if source not in const.FONTES_VALIDAS:
-        raise ValueError(f"source deve ser uma de {sorted(const.FONTES_VALIDAS)} (ja conferida com o token): {source!r}")
+    if source not in const_comum.FONTES_VALIDAS:
+        raise ValueError(f"source deve ser uma de {sorted(const_comum.FONTES_VALIDAS)} (ja conferida com o token): {source!r}")
     erros = contratos.validar(f"{source}-eventos-retorno", payload)
     if erros:
         raise EventoRetornoInvalido("; ".join(erros[:3]))

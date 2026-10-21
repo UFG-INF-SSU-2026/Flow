@@ -1,9 +1,11 @@
 """Stream SSE com servidor real: abertura, keepalive, cabecalhos, Last-Event-ID, dado cifrado e reautenticar."""
+from borda import const as const_borda
 import pytest
 
-import canal_app
-import const
-import mensagens
+from borda import canal_app
+from comum import const as const_comum
+from analise import const as const_analise
+from comum import mensagens
 
 
 def _abrir(srv, headers=None):
@@ -46,17 +48,17 @@ def test_data_decifrada_e_o_json_do_contrato(servidor_real):
     leitor = _abrir(servidor_real)
     try:
         leitor.esperar_comentario("conectado")
-        msg = mensagens.criar_pedido_confirmacao(1, "ep-1", const.TIMEOUT_CONFIRMACAO_S, const.MOTIVO_A)
+        msg = mensagens.criar_pedido_confirmacao(1, "ep-1", const_comum.TIMEOUT_CONFIRMACAO_S, const_analise.MOTIVO_A)
         assert canal_app.enviar(1, msg) == "ENTREGUE_AO_CANAL"
 
         recebida = leitor.proximo_push()
         assert leitor.ultimo_id > 0
-        assert recebida["schemaVersion"] == const.SCHEMA_VERSION_MENSAGEM
+        assert recebida["schemaVersion"] == const_comum.SCHEMA_VERSION_MENSAGEM
         assert recebida["messageId"] == msg["messageId"]
         assert recebida["messageType"] == mensagens.TIPO_SOLICITADA
         assert recebida["userId"] == 1 and recebida["episodeId"] == "ep-1"
         assert recebida["expiresAt"] == msg["expiresAt"]
-        assert recebida["payload"]["motivo"] == const.MOTIVO_A
+        assert recebida["payload"]["motivo"] == const_analise.MOTIVO_A
         # o replay/entrega recalcula timeoutMs (tempo que resta), entao fica um pouco abaixo do original
         assert 4000 <= recebida["payload"]["timeoutMs"] <= 5000
     finally:
@@ -64,8 +66,8 @@ def test_data_decifrada_e_o_json_do_contrato(servidor_real):
 
 
 def test_reautenticar_perto_do_vencimento_e_fecha_o_stream(servidor_real, monkeypatch):
-    monkeypatch.setattr(const, "ACCESS_TTL_S", 4)
-    monkeypatch.setattr(const, "AVISO_REAUTENTICAR_S", 3)    # avisa quando restar <= 3 s (em ate ~1 s)
+    monkeypatch.setattr(const_borda, "ACCESS_TTL_S", 4)
+    monkeypatch.setattr(const_borda, "AVISO_REAUTENTICAR_S", 3)    # avisa quando restar <= 3 s (em ate ~1 s)
     leitor = _abrir(servidor_real)
     try:
         leitor.esperar_comentario("conectado")

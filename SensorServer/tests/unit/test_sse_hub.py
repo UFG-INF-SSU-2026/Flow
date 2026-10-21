@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-import const
-import sse_hub
-from sse_hub import Hub, ler_last_event_id
+from borda import const as const_borda
+from borda import sse_hub
+from borda.sse_hub import Hub, ler_last_event_id
 
 CHAVE = (1, "app")
 
@@ -66,7 +66,7 @@ class TestPublicar:
         assert hub.ha_conexao(1, "app") is True and hub.ha_conexao(1, "wokwi") is False
 
     def test_anel_respeita_tamanho_anel(self, hub, monkeypatch):
-        monkeypatch.setattr(const, "TAMANHO_ANEL", 3)
+        monkeypatch.setattr(const_borda, "TAMANHO_ANEL", 3)
         for i in range(5):
             hub.publicar(1, "app", msg(i))
         assert [m["n"] for _, m in hub._anel[CHAVE]] == [2, 3, 4]
@@ -113,7 +113,7 @@ class TestReplay:
         assert esvaziar(conectar(hub, ultimo=hub._base_ids + 1)) == []
 
     def test_replay_e_truncado_pelos_mais_recentes(self, hub, monkeypatch):
-        monkeypatch.setattr(const, "TAMANHO_FILA_CONEXAO", 3)
+        monkeypatch.setattr(const_borda, "TAMANHO_FILA_CONEXAO", 3)
         for i in range(6):
             hub.publicar(1, "app", msg(i))
         itens = esvaziar(conectar(hub))
@@ -127,7 +127,7 @@ class TestReplay:
 # ---------------------- fila cheia e substituicao ----------------------------
 class TestConexoes:
     def test_fila_cheia_fecha_remove_e_nao_conta_como_entregue(self, hub, monkeypatch):
-        monkeypatch.setattr(const, "TAMANHO_FILA_CONEXAO", 2)
+        monkeypatch.setattr(const_borda, "TAMANHO_FILA_CONEXAO", 2)
         lenta = conectar(hub, "lenta")
         saudavel = conectar(hub, "ok")
         assert hub.publicar(1, "app", msg(1)) == 2
@@ -138,7 +138,7 @@ class TestConexoes:
         assert lenta.fila.get_nowait() is sse_hub._FIM      # fechar() descartou o pendente e pos o marcador
 
     def test_apos_fila_cheia_o_replay_traz_o_que_expirou_da_fila(self, hub, monkeypatch):
-        monkeypatch.setattr(const, "TAMANHO_FILA_CONEXAO", 2)
+        monkeypatch.setattr(const_borda, "TAMANHO_FILA_CONEXAO", 2)
         conectar(hub, "lenta")
         for i in range(3):
             hub.publicar(1, "app", msg(i))
@@ -223,14 +223,14 @@ class TestRespostaSse:
         gen.close()
 
     def test_keepalive_quando_a_fila_esta_vazia(self, hub, monkeypatch):
-        monkeypatch.setattr(const, "KEEPALIVE_S", 0.01)
+        monkeypatch.setattr(const_borda, "KEEPALIVE_S", 0.01)
         _, gen = abrir(hub)
         next(gen)
         assert next(gen) == ": keepalive\n\n"
         gen.close()
 
     def test_perto_do_exp_emite_reautenticar_e_encerra(self, hub):
-        _, gen = abrir(hub, exp_token=time.time() + const.AVISO_REAUTENTICAR_S - 1)
+        _, gen = abrir(hub, exp_token=time.time() + const_borda.AVISO_REAUTENTICAR_S - 1)
         assert next(gen) == ": conectado\n\n"
         assert next(gen) == "event: reautenticar\ndata: {}\n\n"
         with pytest.raises(StopIteration):

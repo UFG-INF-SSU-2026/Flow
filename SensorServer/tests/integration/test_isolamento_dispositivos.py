@@ -1,18 +1,16 @@
 """Uma conta nao age em nome do device de outra pessoa: device_id/deviceId do payload = device_id do token."""
 import pytest
 
-import auth
-import regra_imobilidade
-import const
-
-
+from borda import auth
+from analise import regra_imobilidade
+from comum import const as const_comum
 @pytest.fixture
 def bridge2(contas):
     auth.criar_conta("bridge2", "dispositivo", [2], ["wokwi"], "senha-bridge2")
 
 
 def _wokwi(device, seq, user_id=1, **extra):
-    return {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": device, "entityId": "e",
+    return {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": device, "entityId": "e",
             "eventTimeMs": seq * 1000, "sequence": seq, "value": 0.3, "valueMax": 0.4, "unit": "m/s2",
             "state": "NORMAL", "user_id": user_id, "source": "wokwi", **extra}
 
@@ -53,7 +51,7 @@ def test_app_com_device_id_alheio_da_403(cli, tokens):
 
 
 def test_eventos_com_device_alheio_da_403(cli, tokens):
-    ev = {"schemaVersion": const.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "celular-de-outro",
+    ev = {"schemaVersion": const_comum.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "celular-de-outro",
           "event_time": "2026-10-14T12:00:00.000Z", "eventType": "push.ack", "state": "ATIVADO", "messageId": "m"}
     assert cli.post("/eventos", ev, tokens["idoso"]).status_code == 403
     assert cli.post("/eventos", {**ev, "device_id": "cel1"}, tokens["idoso"]).status_code == 200
@@ -66,9 +64,9 @@ def test_sem_device_no_payload_nao_e_conferido(cli, tokens):
 
 def test_403_por_device_vai_para_a_auditoria(cli, tokens):
     import json
-    import const
+    from comum import const as const_comum
     cli.post("/dados", _wokwi("outro", 1), tokens["dispositivo"])
-    with open(f"{const.DATA_DIR}/auditoria.jsonl", encoding="utf-8") as f:
+    with open(f"{const_comum.DATA_DIR}/auditoria.jsonl", encoding="utf-8") as f:
         (linha,) = [json.loads(l) for l in f if l.strip()]
     assert (linha["status"], linha["motivo"], linha["conta"]) == (403, "fora_de_escopo", "bridge1")
 

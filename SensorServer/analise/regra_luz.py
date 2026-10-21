@@ -17,13 +17,14 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 
-import const   # CCT_*, HORA_*, LEITURAS_CONSECUTIVAS_PARA_ALERTA, SCHEMA_VERSION_* (ver const.py)
+from analise import const as const_analise   # CCT_*, HORA_*, LEITURAS_CONSECUTIVAS_PARA_ALERTA, MAX_ESTADOS_LEGADOS
+from comum import const as const_comum       # SCHEMA_VERSION_*
 
 # Versao do schema do payload LeituraAmbiente (mesma ideia aplicada ao
 # contrato do wokwi, ver docs/arquitetura.md secao 4.3). O app atual
-# (MainActivity.kt) envia a versao do contrato do app (const.SCHEMA_VERSION_APP).
+# (MainActivity.kt) envia a versao do contrato do app (const_comum.SCHEMA_VERSION_APP).
 # Eventos sem o campo (app mais antigo/nao atualizado) sao tratados como
-# versao 1 (const.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
+# versao 1 (const_comum.SCHEMA_VERSION_PADRAO) - nao sao rejeitados, apenas logados
 # como desatualizados (ver validar_evento).
 
 
@@ -37,12 +38,12 @@ class EstadoDispositivo:
     ultimo_seq_num: int | None = None
     leituras_consecutivas_condicao: int = 0
     alerta_ativo: bool = False
-    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const.SCHEMA_VERSION_PADRAO, se ausente)
+    ultimo_schema_version: int | None = None  # ultimo schemaVersion recebido (ou const_comum.SCHEMA_VERSION_PADRAO, se ausente)
 
 
 # Estado por (user_id, device_id) (em memoria; reinicia se o servidor reiniciar -
 # aceitavel nesta fase de prototipo, conforme decisao de simplicidade do grupo)
-# Como o device_id vem do cliente, a tabela tem teto (const.MAX_ESTADOS_LEGADOS): estoura, sai o menos usado
+# Como o device_id vem do cliente, a tabela tem teto (const_analise.MAX_ESTADOS_LEGADOS): estoura, sai o menos usado
 # (a ordem do dict e a do ultimo uso).
 @dataclass
 class EstadoLuz:
@@ -62,7 +63,7 @@ def _estado_do(user_id: int, device_id: str, estado: "EstadoLuz | None" = None) 
     with tab.lock:
         atual = tab.estados.pop(chave, None) or EstadoDispositivo()
         tab.estados[chave] = atual   # reinsere no fim: o primeiro do dict e sempre o menos usado
-        while len(tab.estados) > const.MAX_ESTADOS_LEGADOS:
+        while len(tab.estados) > const_analise.MAX_ESTADOS_LEGADOS:
             del tab.estados[next(iter(tab.estados))]
         return atual
 
@@ -72,11 +73,11 @@ def validar_evento(evento: dict) -> None:
     conferida pela borda): faixa fisica plausivel e formato do instante. Levanta EventoInvalido se falhar."""
     # 0. schemaVersion: identificacao/aviso, nao rejeita (mesma ideia do wokwi, ver regra_imobilidade.validar_evento).
     #    App atual sempre manda SCHEMA_VERSION_APP; se ausente (app mais antigo), assume-se SCHEMA_VERSION_PADRAO.
-    schema_version = evento.get("schemaVersion", const.SCHEMA_VERSION_PADRAO)
-    if isinstance(schema_version, int) and schema_version < const.SCHEMA_VERSION_APP:
+    schema_version = evento.get("schemaVersion", const_comum.SCHEMA_VERSION_PADRAO)
+    if isinstance(schema_version, int) and schema_version < const_comum.SCHEMA_VERSION_APP:
         print(
             f"  [app] aviso: evento leitura_ambiente com schemaVersion={schema_version} "
-            f"desatualizado (atual={const.SCHEMA_VERSION_APP}), "
+            f"desatualizado (atual={const_comum.SCHEMA_VERSION_APP}), "
             f"device_id={evento.get('device_id')}"
         )
 
@@ -86,7 +87,7 @@ def validar_evento(evento: dict) -> None:
     if luminosidade < 0:
         raise EventoInvalido(f"luminosidade fora de faixa: {luminosidade}")
 
-    if not (const.CCT_MIN_VALIDO <= cct <= const.CCT_MAX_VALIDO):
+    if not (const_analise.CCT_MIN_VALIDO <= cct <= const_analise.CCT_MAX_VALIDO):
         raise EventoInvalido(f"cct fora de faixa: {cct}")
 
     try:
@@ -107,7 +108,7 @@ def eh_duplicado(user_id: int, evento: dict, estado: EstadoLuz | None = None) ->
 
 def _eh_noite(event_time: datetime) -> bool:
     hora = event_time.hour
-    return hora >= const.HORA_INICIO_NOITE or hora < const.HORA_FIM_NOITE
+    return hora >= const_analise.HORA_INICIO_NOITE or hora < const_analise.HORA_FIM_NOITE
 
 
 def avaliar_regra(user_id: int, evento: dict, estado: EstadoLuz | None = None) -> dict | None:
@@ -122,7 +123,7 @@ def avaliar_regra(user_id: int, evento: dict, estado: EstadoLuz | None = None) -
     do_device = _estado_do(user_id, device_id, estado)
     event_time = datetime.fromisoformat(evento["event_time"])
 
-    condicao_presente = _eh_noite(event_time) and evento["cct"] > const.CCT_LIMIAR_FRIO
+    condicao_presente = _eh_noite(event_time) and evento["cct"] > const_analise.CCT_LIMIAR_FRIO
 
     if not condicao_presente:
         # condicao nao se sustenta -> reseta contador e permite novo episodio no futuro
@@ -136,7 +137,7 @@ def avaliar_regra(user_id: int, evento: dict, estado: EstadoLuz | None = None) -
         # ja alertamos para este episodio, nao repete a cada 10s
         return None
 
-    if do_device.leituras_consecutivas_condicao >= const.LEITURAS_CONSECUTIVAS_PARA_ALERTA:
+    if do_device.leituras_consecutivas_condicao >= const_analise.LEITURAS_CONSECUTIVAS_PARA_ALERTA:
         do_device.alerta_ativo = True
         return {
             "tipo": "alerta_luz_inadequada",
@@ -147,7 +148,7 @@ def avaliar_regra(user_id: int, evento: dict, estado: EstadoLuz | None = None) -
             "seq_num": evento["seq_num"],
             "mensagem": (
                 f"Luz fria (CCT={evento['cct']}K) detectada durante a noite "
-                f"({const.LEITURAS_CONSECUTIVAS_PARA_ALERTA} leituras consecutivas). "
+                f"({const_analise.LEITURAS_CONSECUTIVAS_PARA_ALERTA} leituras consecutivas). "
                 "Pode inibir a producao de melatonina do idoso."
             ),
         }

@@ -8,12 +8,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import const
-import mensagens
-import nucleo
-import regra_imobilidade
-import regra_queda
-import tempo
+from comum import const as const_comum
+from analise import const as const_analise
+from comum import mensagens
+from analise import nucleo
+from analise import regra_imobilidade
+from analise import regra_queda
+from borda import tempo
 
 T0 = datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc)
 TS_APP = 1_760_000_000_000
@@ -26,7 +27,7 @@ def em(segundos: float) -> datetime:
 # ------------------------------------------------------------------ fabricas de entrada
 def wokwi(seq, value, vmax=None, state="NORMAL", evento="imobilidade.leitura", **extra) -> dict:
     """Payload do wokwi como fica gravado em `leituras` (sem `source` e `user_id`)."""
-    p = {"schemaVersion": const.SCHEMA_VERSION_WOKWI, "eventType": evento, "deviceId": "bridge-dev",
+    p = {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "eventType": evento, "deviceId": "bridge-dev",
          "entityId": "idoso-sim", "eventTimeMs": seq * 1000, "sequence": seq, "value": value, "unit": "m/s2",
          "state": state}
     if vmax is not None:
@@ -37,33 +38,33 @@ def wokwi(seq, value, vmax=None, state="NORMAL", evento="imobilidade.leitura", *
 
 def leitura_wokwi(t, seq, value, vmax=None, user_id=1, **kw) -> nucleo.Leitura:
     return nucleo.Leitura(em(t), user_id, "bridge-dev", "wokwi", wokwi(seq, value, vmax, **kw),
-                          const.SCHEMA_VERSION_WOKWI)
+                          const_comum.SCHEMA_VERSION_WOKWI)
 
 
 def leitura_app(t, magnitude, maximo, user_id=1, **extra) -> nucleo.Leitura:
     payload = {"device_id": "cel1", "timestamp_envio": TS_APP + int(t * 1000),
                "acelerometro": {"magnitude": magnitude, "magnitude_max_janela": maximo}}
     payload.update(extra)
-    return nucleo.Leitura(em(t), user_id, "cel1", "app", payload, const.SCHEMA_VERSION_APP)
+    return nucleo.Leitura(em(t), user_id, "cel1", "app", payload, const_comum.SCHEMA_VERSION_APP)
 
 
 def ambiente(t, seq, cct=6500) -> nucleo.Leitura:
-    bloco = {"schemaVersion": const.SCHEMA_VERSION_APP, "device_id": "cel1", "event_time": "2026-10-14T22:00:00+00:00",
+    bloco = {"schemaVersion": const_comum.SCHEMA_VERSION_APP, "device_id": "cel1", "event_time": "2026-10-14T22:00:00+00:00",
              "luminosidade": 5.0, "cct": cct, "seq_num": seq}
     return nucleo.Leitura(em(t), 1, "cel1", "app", {"device_id": "cel1", "leitura_ambiente": bloco},
-                          const.SCHEMA_VERSION_APP)
+                          const_comum.SCHEMA_VERSION_APP)
 
 
 def retorno(message_id, user_id=1, tipo="confirmacao.resposta", state="ESTOU_BEM", t=6) -> nucleo.Resposta:
     ev = {"eventType": tipo, "state": state, "messageId": message_id, "device_id": "cel1", "source": "app"}
-    return nucleo.Resposta(em(t), user_id, "cel1", "app", ev, const.SCHEMA_VERSION_APP)
+    return nucleo.Resposta(em(t), user_id, "cel1", "app", ev, const_comum.SCHEMA_VERSION_APP)
 
 
 # ------------------------------------------------------------------ cenarios
 def queda_wokwi(estado, t0=0, seq0=1) -> list[nucleo.Decisoes]:
     """Leitura normal, impacto e T_POS_IMPACTO_S segundos de repouso: o pedido sai na ultima (instante t0 + 4)."""
     leituras = [leitura_wokwi(t0, seq0, 1.0, 1.5), leitura_wokwi(t0 + 1, seq0 + 1, 3.0, 25.0)]
-    leituras += [leitura_wokwi(t0 + 2 + k, seq0 + 2 + k, 0.3, 0.4) for k in range(int(const.T_POS_IMPACTO_S))]
+    leituras += [leitura_wokwi(t0 + 2 + k, seq0 + 2 + k, 0.3, 0.4) for k in range(int(const_analise.T_POS_IMPACTO_S))]
     return [nucleo.processar_leitura(estado, l) for l in leituras]
 
 
@@ -97,22 +98,22 @@ class TestQuedaPorImpacto:
         saidas = queda_wokwi(estado)
         assert [bool(s.comandos) for s in saidas] == [False, False, False, False, True]
         (cmd,) = saidas[-1].comandos
-        prazo = timedelta(seconds=const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S)
+        prazo = timedelta(seconds=const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S)
         assert cmd.mensagem["messageType"] == mensagens.TIPO_SOLICITADA
         assert cmd.mensagem["issuedAt"] == mensagens.iso_z(em(4))
         assert cmd.mensagem["expiresAt"] == mensagens.iso_z(em(4) + prazo)
         assert (cmd.criado_em, cmd.expira_em) == (em(4), em(4) + prazo)
         ep = cmd.episodio
         assert (ep.episodio_id, ep.estado, ep.tipo, ep.device_id) == (
-            cmd.mensagem["episodeId"], "aguardando_confirmacao", const.MOTIVO_A, "bridge-dev")
+            cmd.mensagem["episodeId"], "aguardando_confirmacao", const_analise.MOTIVO_A, "bridge-dev")
         assert (ep.aberto_em, ep.atualizado_em, ep.encerrado_em) == (em(4), em(4), None)
-        assert estado.queda.episodios[1].prazo == em(4).timestamp() + const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S
+        assert estado.queda.episodios[1].prazo == em(4).timestamp() + const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S
 
     def test_o_registro_episodio_aberto_vira_decisao_com_o_instante_da_leitura(self, sem_relogio):
         saidas = queda_wokwi(nucleo.novo_estado())
         (aberto,) = saidas[-1].confirmacoes
         assert (aberto.tipo, aberto.instante) == ("episodio.aberto", em(4))
-        assert aberto.dados["motivo"] == const.MOTIVO_A and aberto.dados["fonte_do_disparo"] == "wokwi"
+        assert aberto.dados["motivo"] == const_analise.MOTIVO_A and aberto.dados["fonte_do_disparo"] == "wokwi"
 
     def test_app_tambem_abre_pelo_gatilho_a(self, sem_relogio):
         estado = nucleo.novo_estado()
@@ -120,7 +121,7 @@ class TestQuedaPorImpacto:
             leitura_app(0, 9.81, 10.0), leitura_app(1, 20.0, 25.81), leitura_app(2, 9.81, 10.0),
             leitura_app(3, 9.81, 10.0), leitura_app(4, 9.81, 10.0))]
         (cmd,) = [c for s in saidas for c in s.comandos]
-        assert cmd.mensagem["payload"]["motivo"] == const.MOTIVO_A and cmd.episodio.device_id == "cel1"
+        assert cmd.mensagem["payload"]["motivo"] == const_analise.MOTIVO_A and cmd.episodio.device_id == "cel1"
 
     def test_leitura_duplicada_do_app_nao_alimenta_a_regra(self, sem_relogio):
         estado = nucleo.novo_estado()
@@ -140,10 +141,10 @@ class TestImobilidade:
                                                            evento="imobilidade.decisao"))
         (alerta,) = d.alertas
         assert (alerta.tipo, alerta.device_id, alerta.instante) == ("imobilidade", "bridge-dev", em(10))
-        assert alerta.schema_version == const.SCHEMA_VERSION_WOKWI and alerta.dados["tipo"] == "alerta_imobilidade"
+        assert alerta.schema_version == const_comum.SCHEMA_VERSION_WOKWI and alerta.dados["tipo"] == "alerta_imobilidade"
         assert alerta.como_linha()["mensagem"] == alerta.dados["mensagem"]
         (cmd,) = d.comandos
-        assert cmd.episodio.tipo == const.MOTIVO_B
+        assert cmd.episodio.tipo == const_analise.MOTIVO_B
         (r,) = d.estados
         assert r.estado["alerta_ativo"] is True and r.estado["ultima_decisao"] == "ALERTA_IMOBILIDADE"
         assert r.estado["ultima_atualizacao"] == em(10).isoformat()                  # o instante da leitura, nao "agora"
@@ -166,7 +167,7 @@ class TestImobilidade:
         ruim = wokwi(1, 0.3, 0.4)
         del ruim["entityId"]
         d = nucleo.processar_leitura(estado, nucleo.Leitura(em(0), 1, "bridge-dev", "wokwi", ruim,
-                                                            const.SCHEMA_VERSION_WOKWI))
+                                                            const_comum.SCHEMA_VERSION_WOKWI))
         assert [x.motivo for x in d.descartes] == [nucleo.DESCARTE_ESTRUTURA]
         assert estado.imobilidade.estados == {} and estado.queda.estados == {}
 
@@ -189,7 +190,7 @@ class TestLuz:
         saidas = [nucleo.processar_leitura(estado, ambiente(t, seq=t + 1)) for t in range(3)]
         assert [len(s.alertas) for s in saidas] == [0, 0, 1]
         (alerta,) = saidas[-1].alertas
-        assert (alerta.tipo, alerta.instante, alerta.schema_version) == ("luz_inadequada", em(2), const.SCHEMA_VERSION_APP)
+        assert (alerta.tipo, alerta.instante, alerta.schema_version) == ("luz_inadequada", em(2), const_comum.SCHEMA_VERSION_APP)
         assert alerta.dados["tipo"] == "alerta_luz_inadequada"
 
     def test_seq_num_repetido_e_descartado(self):
@@ -246,7 +247,7 @@ class TestRespostaEVigia:
     def test_vigia_expira_so_no_prazo_do_servidor(self, sem_relogio):
         estado = nucleo.novo_estado()
         aberto = self._abrir(estado)
-        prazo = em(4) + timedelta(seconds=const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S)
+        prazo = em(4) + timedelta(seconds=const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S)
         assert not nucleo.vigiar(estado, prazo - timedelta(milliseconds=10))
         d = nucleo.vigiar(estado, prazo)
         (cmd,) = d.comandos
@@ -259,18 +260,18 @@ class TestRespostaEVigia:
     def test_cooldown_conta_a_partir_do_encerramento_no_relogio_recebido(self, sem_relogio):
         estado = nucleo.novo_estado()
         self._abrir(estado)
-        prazo = em(4) + timedelta(seconds=const.TIMEOUT_CONFIRMACAO_S + const.MARGEM_SERVIDOR_S)
+        prazo = em(4) + timedelta(seconds=const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S)
         nucleo.vigiar(estado, prazo)
         antes = [nucleo.processar_leitura(estado, l) for l in queda_wokwi_leituras(t0=12, seq0=100)]
         assert not any(s.comandos for s in antes)                                      # dentro do cooldown
         depois = [nucleo.processar_leitura(estado, l) for l in
-                  queda_wokwi_leituras(t0=(prazo - T0).total_seconds() + const.COOLDOWN_S, seq0=200)]
+                  queda_wokwi_leituras(t0=(prazo - T0).total_seconds() + const_analise.COOLDOWN_S, seq0=200)]
         assert sum(len(s.comandos) for s in depois) == 1
 
 
 def queda_wokwi_leituras(t0, seq0):
     leituras = [leitura_wokwi(t0, seq0, 1.0, 1.5), leitura_wokwi(t0 + 1, seq0 + 1, 3.0, 25.0)]
-    leituras += [leitura_wokwi(t0 + 2 + k, seq0 + 2 + k, 0.3, 0.4) for k in range(int(const.T_POS_IMPACTO_S))]
+    leituras += [leitura_wokwi(t0 + 2 + k, seq0 + 2 + k, 0.3, 0.4) for k in range(int(const_analise.T_POS_IMPACTO_S))]
     return leituras
 
 

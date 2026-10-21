@@ -9,7 +9,7 @@ from collections import deque
 
 from flask import Response
 
-import const   # KEEPALIVE_S, AVISO_REAUTENTICAR_S, TAMANHO_ANEL, TAMANHO_FILA_CONEXAO (lidos na hora do uso)
+from borda import const as const_borda   # KEEPALIVE_S, AVISO_REAUTENTICAR_S, TAMANHO_ANEL, TAMANHO_FILA_CONEXAO (lidos na hora do uso)
 
 _FIM = object()
 
@@ -25,7 +25,7 @@ def ler_last_event_id(valor: str | None) -> int:
 class Conexao:
     def __init__(self, device_id: str):
         self.device_id = device_id
-        self.fila: queue.Queue = queue.Queue(maxsize=const.TAMANHO_FILA_CONEXAO)
+        self.fila: queue.Queue = queue.Queue(maxsize=const_borda.TAMANHO_FILA_CONEXAO)
 
     def fechar(self):
         """Pede o encerramento da conexao. Toda escrita na fila acontece com o lock do Hub tomado, entao nao ha
@@ -66,7 +66,7 @@ class Hub:
         with self._lock:
             self._contador[chave] = self._contador.get(chave, self._base_ids) + 1
             eid = self._contador[chave]
-            self._anel.setdefault(chave, deque(maxlen=const.TAMANHO_ANEL)).append((eid, mensagem))
+            self._anel.setdefault(chave, deque(maxlen=const_borda.TAMANHO_ANEL)).append((eid, mensagem))
             for device_id, c in list(self._conns.get(chave, {}).items()):
                 try:
                     c.fila.put_nowait((eid, mensagem))
@@ -87,7 +87,7 @@ class Hub:
             # uma publicacao concorrente nunca passa a frente e os ids saem em ordem crescente.
             # Cabe na fila (cheia = descartaria): se o anel tem mais pendentes que a fila, vale o mais recente.
             replay = [(eid, m) for eid, m in self._anel.get(chave, []) if eid > last_event_id]
-            for item in replay[-const.TAMANHO_FILA_CONEXAO:]:
+            for item in replay[-const_borda.TAMANHO_FILA_CONEXAO:]:
                 conn.fila.put_nowait(item)   # a serializacao descarta o que ja expirou, ao enviar
             self._conns[chave][device_id] = conn
         return conn
@@ -111,11 +111,11 @@ class Hub:
                 yield ": conectado\n\n"
                 while True:
                     restante = exp_token - time.time()
-                    if restante <= const.AVISO_REAUTENTICAR_S:
+                    if restante <= const_borda.AVISO_REAUTENTICAR_S:
                         yield "event: reautenticar\ndata: {}\n\n"
                         return
                     try:
-                        item = conn.fila.get(timeout=min(const.KEEPALIVE_S, max(restante - const.AVISO_REAUTENTICAR_S, 0.1)))
+                        item = conn.fila.get(timeout=min(const_borda.KEEPALIVE_S, max(restante - const_borda.AVISO_REAUTENTICAR_S, 0.1)))
                     except queue.Empty:
                         yield ": keepalive\n\n"
                         continue

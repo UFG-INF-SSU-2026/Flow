@@ -10,7 +10,7 @@ from _apoio import SEGREDO
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # SensorServer/
 
 _SONDA = (
-    "import threading, server; "
+    "import threading; from borda import server; "
     "print(sorted(t.name for t in threading.enumerate() if t.name.startswith('flow-')))"
 )
 
@@ -25,13 +25,13 @@ def _rodar(args, tmp_path, **extra):
         "FLOW_DB_FAKE": "1",      # sem Docker: banco falso (o teste abaixo, de banco ausente, sobrescreve)
     })
     env.update(extra)
-    # cwd = tmp_path: server.py cria const.DATA_DIR relativo ao diretorio atual
+    # cwd = tmp_path: borda/server.py cria const_comum.DATA_DIR relativo ao diretorio atual
     return subprocess.run([sys.executable, *args], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=30)
 
 
 def test_script_sem_segredo_termina_com_erro(tmp_path):
-    r = _rodar([os.path.join(RAIZ, "server.py")], tmp_path)
+    r = _rodar(["-m", "borda.server"], tmp_path)
     assert r.returncode != 0
     assert "FLOW_JWT_SECRET" in r.stderr
 
@@ -56,7 +56,7 @@ def test_import_com_variavel_de_saida_nao_sobe_threads(tmp_path):
 
 def test_flask_cli_sem_segredo_recusa(tmp_path):
     pytest.importorskip("flask")
-    r = _rodar(["-m", "flask", "--app", "server", "routes"], tmp_path)
+    r = _rodar(["-m", "flask", "--app", "borda.server", "routes"], tmp_path)
     assert r.returncode != 0
     assert "FLOW_JWT_SECRET" in r.stderr
 

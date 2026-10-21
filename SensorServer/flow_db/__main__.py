@@ -1,8 +1,8 @@
-"""CLI: python -m flow_db {provisionar|migrar|status}. Carrega SensorServer/.env (via const.py)."""
+"""CLI: python -m flow_db {provisionar|migrar|status}. Carrega SensorServer/.env (via comum/const.py)."""
 import argparse
 import sys
 
-import const  # noqa: F401  (efeito colateral: carrega o .env; variavel de ambiente do terminal vence)
+from comum import const  # noqa: F401  (efeito colateral: carrega o .env; variavel de ambiente do terminal vence)
 
 from . import config, migracoes, provisionar as prov
 

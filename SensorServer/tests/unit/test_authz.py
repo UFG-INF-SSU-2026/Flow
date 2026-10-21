@@ -5,10 +5,10 @@ from datetime import datetime
 import pytest
 from flask import Flask, g, jsonify
 
-import auth
-import authz
-import const
-
+from borda import auth
+from borda import authz
+from comum import const as const_comum
+from borda import const as const_borda
 PERMISSOES = ["dados:enviar", "eventos:enviar", "push:receber", "dados:ler", "estado:ler"]
 ESPERADO = {
     "idoso": {"dados:enviar", "eventos:enviar", "push:receber"},
@@ -20,7 +20,7 @@ ESPERADO = {
 
 class TestPolitica:
     def test_cobre_exatamente_os_papeis_validos(self):
-        assert set(authz.POLITICA) == const.PAPEIS_VALIDOS == set(ESPERADO)
+        assert set(authz.POLITICA) == const_borda.PAPEIS_VALIDOS == set(ESPERADO)
 
     @pytest.mark.parametrize("papel", sorted(ESPERADO))
     @pytest.mark.parametrize("permissao", PERMISSOES)
@@ -134,10 +134,10 @@ class TestExige:
     def test_fonte_do_papel_errada(self, mini):
         c, _ = mini
         # criar_conta barra esta combinacao; grava direto para simular uma conta mal configurada
-        cs = auth._ler_json(const.CONTAS_PATH, {})
+        cs = auth._ler_json(const_borda.CONTAS_PATH, {})
         cs["idoso-x"] = {"id": "idoso-x", "papel": "idoso", "user_ids": [1], "fontes": ["app", "wokwi"],
                          "hash": auth.hash_senha("senha-x")}
-        auth._gravar_json(const.CONTAS_PATH, cs)
+        auth._gravar_json(const_borda.CONTAS_PATH, cs)
         t = auth.login("idoso-x", "senha-x", "wokwi", "d")["access_token"]
         r = c.get("/enviar", headers=_bearer(t))
         assert r.status_code == 403 and r.get_json()["codigo"] == "fonte_invalida"
@@ -163,7 +163,7 @@ class TestAuditoria:
 
     @staticmethod
     def _ler(nome: str) -> list[dict]:
-        with open(f"{const.DATA_DIR}/{nome}", encoding="utf-8") as f:
+        with open(f"{const_comum.DATA_DIR}/{nome}", encoding="utf-8") as f:
             return [json.loads(l) for l in f if l.strip()]
 
     def test_linha_com_os_campos(self):
@@ -175,7 +175,7 @@ class TestAuditoria:
         datetime.fromisoformat(linha["timestamp"])
 
     def test_rotacao_sobrescreve_o_arquivo_anterior(self, monkeypatch):
-        monkeypatch.setattr(const, "AUDITORIA_MAX_BYTES", 100)   # uma linha ja passa disso
+        monkeypatch.setattr(const_borda, "AUDITORIA_MAX_BYTES", 100)   # uma linha ja passa disso
         self._auditar("a")
         self._auditar("b")      # a vira auditoria.1.jsonl, b abre o novo
         assert [l["motivo"] for l in self._ler("auditoria.1.jsonl")] == ["a"]

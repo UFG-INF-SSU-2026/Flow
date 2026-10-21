@@ -19,7 +19,7 @@ if RAIZ not in sys.path:
 
 from _apoio import SEGREDO, ClienteFlask, ClienteReal  # noqa: E402
 
-# Antes de importar o servidor: segredo e caminhos fora da pasta real. server.py cria const.DATA_DIR ao importar.
+# Antes de importar o servidor: segredo e caminhos fora da pasta real. server.py cria const_comum.DATA_DIR ao importar.
 _TMP = tempfile.mkdtemp(prefix="flow_tests_")
 os.environ["FLOW_SEM_DOTENV"] = "1"    # os testes nunca leem o SensorServer/.env real
 os.environ["FLOW_JWT_SECRET"] = SEGREDO
@@ -28,7 +28,9 @@ os.environ["FLOW_DB_FAKE"] = "1"       # banco falso em memoria: os testes nunca
 os.environ["FLOW_CONTAS_PATH"] = os.path.join(_TMP, "contas.json")
 os.environ["FLOW_SESSOES_PATH"] = os.path.join(_TMP, "sessoes.json")
 
-import const  # noqa: E402
+from analise import const as const_analise  # noqa: E402
+from borda import const as const_borda  # noqa: E402
+from comum import const as const_comum  # noqa: E402
 
 
 def pytest_collection_modifyitems(items):
@@ -40,20 +42,23 @@ def pytest_collection_modifyitems(items):
         elif "integration" in partes:
             item.add_marker("integration")
 
-const.DATA_DIR = os.path.join(_TMP, "dataUsers")
+const_comum.DATA_DIR = os.path.join(_TMP, "dataUsers")
 
 import pytest  # noqa: E402
 from werkzeug.serving import make_server  # noqa: E402
 
-import auth  # noqa: E402
-import mensagens  # noqa: E402
-import regra_imobilidade  # noqa: E402
-import regra_luz  # noqa: E402
-import regra_queda  # noqa: E402
-import repositorios  # noqa: E402
-import server  # noqa: E402
-import tempo  # noqa: E402
-from sse_hub import HUB  # noqa: E402
+from analise import efeitos  # noqa: E402
+from analise import regra_imobilidade  # noqa: E402
+from analise import regra_luz  # noqa: E402
+from analise import regra_queda  # noqa: E402
+from borda import auth  # noqa: E402
+from borda import caminho_direto  # noqa: E402
+from borda import server  # noqa: E402
+from borda import tempo  # noqa: E402
+from borda.sse_hub import HUB  # noqa: E402
+from comum import mensagens  # noqa: E402
+from flow_db import repositorios  # noqa: E402
+
 
 def _limpar_estado() -> None:
     auth._falhas.clear()
@@ -64,7 +69,7 @@ def _limpar_estado() -> None:
         d.clear()
     server._registros_recentes.clear()
     server._fila_leituras.clear()
-    server._estado_gravado.clear()
+    efeitos._estado_gravado.clear()
     server._descartes_leituras = 0
     repositorios.usar_fake()      # banco falso novo (vazio) a cada teste
     HUB._conns.clear()
@@ -76,11 +81,11 @@ def _limpar_estado() -> None:
 def ambiente(tmp_path, monkeypatch):
     """Isola cada teste: segredo, pastas em tmp_path, scrypt barato e estado global zerado."""
     monkeypatch.setenv("FLOW_JWT_SECRET", SEGREDO)
-    monkeypatch.setattr(const, "DATA_DIR", str(tmp_path / "dataUsers"))
-    monkeypatch.setattr(const, "CONTAS_PATH", str(tmp_path / "contas.json"))
-    monkeypatch.setattr(const, "SESSOES_PATH", str(tmp_path / "sessoes.json"))
-    monkeypatch.setattr(const, "SCRYPT_N", 2 ** 4)   # login e criar_conta em milissegundos
-    os.makedirs(const.DATA_DIR, exist_ok=True)
+    monkeypatch.setattr(const_comum, "DATA_DIR", str(tmp_path / "dataUsers"))
+    monkeypatch.setattr(const_borda, "CONTAS_PATH", str(tmp_path / "contas.json"))
+    monkeypatch.setattr(const_borda, "SESSOES_PATH", str(tmp_path / "sessoes.json"))
+    monkeypatch.setattr(const_borda, "SCRYPT_N", 2 ** 4)   # login e criar_conta em milissegundos
+    os.makedirs(const_comum.DATA_DIR, exist_ok=True)
     _limpar_estado()
     yield
     _limpar_estado()
@@ -123,7 +128,7 @@ def tokens(cli):
 def ler_confirmacoes():
     """Le dataUsers/confirmacoes_usuario_<id>.jsonl como lista de dicts (vazia se nao existir)."""
     def _ler(user_id: int) -> list[dict]:
-        caminho = os.path.join(const.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl")
+        caminho = os.path.join(const_comum.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl")
         if not os.path.exists(caminho):
             return []
         with open(caminho, encoding="utf-8") as f:
@@ -188,8 +193,8 @@ def relogio(monkeypatch):
 def servidor_real(contas, monkeypatch):
     """Servidor Flask real (Werkzeug, threaded) numa porta efemera, mais uma thread vigia.
     Devolve um ClienteReal. Contas e constantes de tempo ja prontas; keepalive curto."""
-    monkeypatch.setattr(const, "KEEPALIVE_S", 0.3)
-    monkeypatch.setattr(const, "INTERVALO_VIGIA_S", 0.05)
+    monkeypatch.setattr(const_borda, "KEEPALIVE_S", 0.3)
+    monkeypatch.setattr(const_analise, "INTERVALO_VIGIA_S", 0.05)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
     srv = make_server("127.0.0.1", 0, server.app, threaded=True)
@@ -198,10 +203,10 @@ def servidor_real(contas, monkeypatch):
     def vigia():
         while not parar.is_set():
             try:
-                server._vigia_iteracao()
+                caminho_direto._vigia_iteracao()
             except Exception:  # noqa: BLE001
                 pass
-            parar.wait(const.INTERVALO_VIGIA_S)
+            parar.wait(const_analise.INTERVALO_VIGIA_S)
 
     threads = [threading.Thread(target=srv.serve_forever, daemon=True), threading.Thread(target=vigia, daemon=True)]
     for t in threads:

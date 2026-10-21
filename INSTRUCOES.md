@@ -8,6 +8,10 @@ Este projeto une um app Android, uma simulação Wokwi (ESP32 + acelerômetro + 
 Flow/
 ├── SensorServer/       # servidor central (Flask): autenticação, autorização, análise e push
 │   ├── .env.example    # modelo da configuração do servidor (copie para .env)
+│   ├── borda/          # gateway (rotas, auth, SSE) e o adaptador que chama a análise
+│   ├── analise/        # núcleo e regras (queda, imobilidade, luz)
+│   ├── comum/          # constantes comuns, schemas e contrato da mensagem de push
+│   ├── flow_db/        # banco (migrações, papéis, repositórios)
 │   ├── tests/          # suíte pytest do servidor (unit/ e integration/)
 │   └── simular_queda.py  # simula uma queda sem Wokwi nem celular
 ├── SensorApp/          # app Android (Kotlin): telemetria + recebe o pedido de confirmação
@@ -79,8 +83,8 @@ Crie as duas contas do protótipo (a senha é pedida no terminal). Ambas apontam
 ```bash
 cd SensorServer
 pip install -r requirements.txt
-python auth.py criar-conta --id idoso1  --papel idoso       --user-id 1 --fontes app
-python auth.py criar-conta --id bridge1 --papel dispositivo --user-id 1 --fontes wokwi
+python -m borda.auth criar-conta --id idoso1  --papel idoso       --user-id 1 --fontes app
+python -m borda.auth criar-conta --id bridge1 --papel dispositivo --user-id 1 --fontes wokwi
 ```
 
 > O ID do usuário **não é mais digitado** no app nem no bridge: ele vem da conta. Para simular outra pessoa, crie outro par de contas com outro `--user-id`.
@@ -95,7 +99,7 @@ Com `FLOW_JWT_SECRET` no `SensorServer/.env` (ou definido no mesmo terminal):
 
 ```bash
 cd SensorServer
-python server.py
+python -m borda.server
 ```
 
 Escuta em `0.0.0.0:5000`. Descubra o IP do computador (`ipconfig` no Windows, `ifconfig`/`ip a` no Mac/Linux): o celular vai precisar dele.
@@ -251,11 +255,11 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 
 | O que ajustar | Onde |
 | --- | --- |
-| Tempo do botão "Estou bem" (padrão 5 s) | `TIMEOUT_CONFIRMACAO_S` em `SensorServer/const.py` (vale para app e wokwi, sem recompilar nada) |
-| Limiares de impacto e de repouso | `LIMIAR_IMPACTO` e `LIMIAR_REPOUSO` em `SensorServer/const.py` (valores iniciais, a calibrar) |
-| Validade dos tokens | `ACCESS_TTL_S` e `REFRESH_TTL_S` em `SensorServer/const.py` |
-| Tamanho máximo do corpo de uma requisição (padrão 64 KiB) | `MAX_CONTENT_LENGTH` em `SensorServer/const.py` |
-| Intervalo mínimo entre episódios do mesmo usuário (padrão 60 s) | `COOLDOWN_S` em `SensorServer/const.py` |
+| Tempo do botão "Estou bem" (padrão 5 s) | `TIMEOUT_CONFIRMACAO_S` em `SensorServer/comum/const.py` (vale para app e wokwi, sem recompilar nada) |
+| Limiares de impacto e de repouso | `LIMIAR_IMPACTO` e `LIMIAR_REPOUSO` em `SensorServer/analise/const.py` (valores iniciais, a calibrar) |
+| Validade dos tokens | `ACCESS_TTL_S` e `REFRESH_TTL_S` em `SensorServer/borda/const.py` |
+| Tamanho máximo do corpo de uma requisição (padrão 64 KiB) | `MAX_CONTENT_LENGTH` em `SensorServer/borda/const.py` |
+| Intervalo mínimo entre episódios do mesmo usuário (padrão 60 s) | `COOLDOWN_S` em `SensorServer/analise/const.py` |
 | Intervalo de envio do app | `SEND_INTERVAL_MS` em `MainActivity.kt` (padrão 1 s) |
 
 ## Problemas comuns

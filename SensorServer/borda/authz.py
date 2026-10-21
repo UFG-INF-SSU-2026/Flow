@@ -10,9 +10,10 @@ from datetime import datetime, timezone
 
 from flask import g, jsonify, request
 
-import auth
-import const
-import repositorios   # DATA_DIR (e AUDITORIA_MAX_BYTES)
+from borda import auth
+from borda import const as const_borda
+from comum import const as const_comum
+from flow_db import repositorios
 
 POLITICA: dict[str, set[str]] = {
     "idoso":       {"dados:enviar", "eventos:enviar", "push:receber"},
@@ -32,23 +33,23 @@ _auditoria_lock = threading.Lock()   # Flask roda com uma thread por requisicao:
 
 def auditar(rota: str, status: int, codigo: str, conta: str | None = None) -> None:
     """Registra negacoes (401/403). Nunca grava o conteudo da requisicao.
-    Vai ao banco (borda) e, enquanto const.GRAVAR_ARQUIVOS, tambem ao auditoria.jsonl."""
+    Vai ao banco (borda) e, enquanto const_comum.GRAVAR_ARQUIVOS, tambem ao auditoria.jsonl."""
     linha = {"timestamp": datetime.now(timezone.utc).isoformat(), "rota": rota,
              "status": status, "motivo": codigo, "conta": conta, "ip": request.remote_addr}
     repositorios.tentar_borda("auditoria", lambda b: b.gravar_auditoria({
         "instante": datetime.fromisoformat(linha["timestamp"]), "rota": rota, "status": status,
         "motivo": codigo, "conta": conta, "ip": linha["ip"]}))
-    if not const.GRAVAR_ARQUIVOS:
+    if not const_comum.GRAVAR_ARQUIVOS:
         return
-    os.makedirs(const.DATA_DIR, exist_ok=True)
-    caminho = os.path.join(const.DATA_DIR, "auditoria.jsonl")
+    os.makedirs(const_comum.DATA_DIR, exist_ok=True)
+    caminho = os.path.join(const_comum.DATA_DIR, "auditoria.jsonl")
     with _auditoria_lock:
         # Rotacao por tamanho: o estagio 1 roda antes de decifrar, entao quem esta na rede pode gerar negacoes
-        # sem conhecer a chave. Ao passar de const.AUDITORIA_MAX_BYTES o arquivo vira auditoria.1.jsonl
+        # sem conhecer a chave. Ao passar de const_borda.AUDITORIA_MAX_BYTES o arquivo vira auditoria.1.jsonl
         # (sobrescrevendo o anterior) e um novo comeca. Guarda no maximo ~2x o limite.
         try:
-            if os.path.getsize(caminho) >= const.AUDITORIA_MAX_BYTES:
-                os.replace(caminho, os.path.join(const.DATA_DIR, "auditoria.1.jsonl"))
+            if os.path.getsize(caminho) >= const_borda.AUDITORIA_MAX_BYTES:
+                os.replace(caminho, os.path.join(const_comum.DATA_DIR, "auditoria.1.jsonl"))
         except FileNotFoundError:
             pass
         with open(caminho, "a", encoding="utf-8") as f:
