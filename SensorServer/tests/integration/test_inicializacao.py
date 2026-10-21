@@ -45,7 +45,7 @@ def test_import_sem_segredo_recusa(tmp_path):
 def test_import_com_segredo_sobe_as_threads(tmp_path):
     r = _rodar(["-c", _SONDA], tmp_path, FLOW_JWT_SECRET=SEGREDO)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "['flow-flush', 'flow-vigia']"
+    assert r.stdout.strip() == "['flow-flush', 'flow-laco-analise', 'flow-vigia']"
 
 
 def test_import_com_variavel_de_saida_nao_sobe_threads(tmp_path):

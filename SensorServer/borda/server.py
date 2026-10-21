@@ -481,13 +481,14 @@ _threads_iniciadas = False
 
 
 def iniciar_threads() -> None:
-    """Sobe as threads de fundo uma unica vez: flush do buffer e vigia de episodios vencidos."""
+    """Sobe as threads de fundo uma unica vez: flush do buffer, vigia de episodios vencidos e laco da analise (S3a)."""
     global _threads_iniciadas
     with _threads_lock:
         if _threads_iniciadas:
             return
         threading.Thread(target=_flush_loop, name="flow-flush", daemon=True).start()
         caminho_direto.iniciar_vigia()   # encerra episodios vencidos
+        caminho_direto.iniciar_laco()    # S3a: laco da analise por cursor (so registra decisoes em log)
         _threads_iniciadas = True
 
 

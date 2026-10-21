@@ -6,6 +6,8 @@ Este modulo so importa `comum.const`, e apenas para que o .env ja esteja carrega
 dos contratos, prazos da mensagem de push, pasta de dados) estao em comum/const.py; as da borda, em borda/const.py.
 Ver comum/const.py para as regras de uso.
 """
+import os
+
 from comum import const as _comum  # noqa: F401  (efeito colateral: o .env e carregado antes de qualquer leitura de ambiente)
 
 # ===========================================================================
@@ -108,3 +110,33 @@ HORA_FIM_NOITE = 6
 
 # Debounce: leituras consecutivas com a condicao presente para gerar alerta.
 LEITURAS_CONSECUTIVAS_PARA_ALERTA = 3
+
+# ===========================================================================
+# 5. LACO DA ANALISE POR CURSOR (S3a do split)
+# ===========================================================================
+
+# Liga o laco que le `leituras`, `respostas_dispositivo` e `entregas_push` por cursor (thread do mesmo processo,
+# papel flow_analise). FLOW_LACO_ANALISE=0 desliga. Na S3a o laco so registra as decisoes em log; quem age e o
+# caminho direto.
+LACO_ATIVO = os.environ.get("FLOW_LACO_ANALISE", "1") != "0"
+
+# Espera (s) entre dois ciclos de leitura. E uma das tres esperas do orcamento de latencia (roadmap, secao 9): o pior
+# caso soma esta espera. Se ainda houver dado para ler (lote cheio), o laco nao espera.
+INTERVALO_LEITURA_S = 0.25
+
+# Idade (s), contada do instante da ingestao, acima da qual uma leitura ou resposta so RECONSTROI o estado das regras
+# e nao pode disparar acao (principio 4: agir apenas sobre o recente). Evita alertar com dado velho ao reprocessar
+# apos uma parada. Na S3a so marca a decisao como "reconstrucao" no log e conta nas metricas; a S4 passa a obedecer.
+# Valor inicial, a calibrar.
+IDADE_MAX_ACAO_S = 30
+
+# O vigia do laco usa o relogio real MENOS este atraso (s). Cobre o dado ainda em transito (descarga da borda +
+# leitura da analise) para nao expirar um episodio cuja resposta ja chegou, mas ainda nao foi lida. Igual a soma
+# das duas esperas que antecedem a analise (roadmap, secao 9).
+ATRASO_VIGIA_S = 0.5
+
+# Falha repetida do laco (banco fora do ar, por exemplo): no maximo uma linha de log neste intervalo (s).
+INTERVALO_LOG_FALHA_S = 10
+
+# Identifica o codigo da analise no batimento (`cursor_analise.versao_codigo`).
+VERSAO_CODIGO = "s3a-sombra"
