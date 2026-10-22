@@ -46,7 +46,7 @@ Há **dois dispositivos** concretos, cada um com a sua conta e falando diretamen
 | `WokwiBridge/` | Dispositivo Wokwi: ponte (`bridge.py`) | Parte do dispositivo que o liga à rede: autentica-se, repassa a telemetria da serial ao servidor e traduz as mensagens de push em comandos de texto para o firmware. |
 | `SensorServer/` | Servidor (Flask) | Módulos abaixo. |
 
-Módulos do servidor (pacotes em `SensorServer/`; ainda **um único processo**, a separação em dois serviços é a etapa S5 do roadmap do split):
+Módulos do servidor (pacotes em `SensorServer/`; a etapa S5 do split separa **borda** (`python -m borda`) e **análise** (`python -m analise`) em dois processos, cada um com o seu `.env`, o seu papel de banco e a sua camada de acesso; o processo único `python -m borda.server` segue existindo durante a janela de estabilidade, até a remoção do caminho direto):
 
 | Arquivo | Responsabilidade |
 | --- | --- |
@@ -585,6 +585,7 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | --- | --- | --- |
 | `FLOW_JWT_SECRET` | `SensorServer/.env` ou ambiente | Obrigatório; ≥ 32 bytes. |
 | `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | `SensorServer/.env` ou ambiente | Opcionais; padrão `contas.json`, `sessoes.json`. |
+| `.env.borda`, `.env.analise` | `SensorServer/` | S5: um arquivo por serviço (modelos `.example`); o `.env` fica só administrativo. Cada serviço recusa segredo de outro dono no ambiente (`comum/isolamento.py`). |
 | `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de flush e vigia (e a exigência do segredo na subida); usado pela suíte de testes. |
 | `FLOW_SENHA` | ambiente da CLI `borda/auth.py` | Opcional; senha sem prompt ao criar contas. |
 | `FLOW_SEM_DOTENV` | ambiente (testes) | `1` impede a leitura dos `.env` reais; a suíte do servidor e a do bridge o definem. Variável de ambiente já definida sempre vence o `.env`. |

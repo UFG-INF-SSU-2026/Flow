@@ -28,7 +28,7 @@ from datetime import datetime
 
 from analise import const as const_analise
 from analise import efeitos, laco, nucleo, regra_imobilidade, regra_queda, sombra
-from borda import entrega_push, tempo
+from borda import entrega_push, tempo, via_banco
 from comum import const as const_comum
 from flow_db import repositorios
 
@@ -135,9 +135,7 @@ def estado_do_dispositivo(device_id: str) -> dict | None:
     """Resumo do estado da regra de imobilidade (procura em todos os usuarios), ou None se desconhecido. Com
     acoes_pelo_banco() le `estado_dispositivo` (DS3), onde a analise o grava; a forma da resposta e a mesma."""
     if acoes_pelo_banco():
-        repo = repositorios.borda()
-        linha = None if repo is None else repo.ler_estado_por_dispositivo(device_id)
-        return None if linha is None else linha["estado"]
+        return via_banco.estado_do_dispositivo(device_id)
     return regra_imobilidade.obter_estado(device_id, estado=nucleo.PADRAO.imobilidade)
 
 
@@ -266,3 +264,20 @@ def parar_entrega(timeout: float = 5.0) -> None:
     """Pede o fim da entrega e espera o ciclo em curso terminar (desligamento ordenado, S5)."""
     if _entrega is not None:
         _entrega.parar(timeout)
+
+
+# ---------------------------------------------------------------------------
+# Interface comum dos pipelines da borda (S5): `borda/server.py` so chama estas duas, qualquer que seja o pipeline
+# (este, no processo unico, ou `borda/via_banco.py`, na borda isolada).
+# ---------------------------------------------------------------------------
+def iniciar() -> None:
+    """Sobe vigia, laco da analise e entrega (cada um decide por si se deve subir). Uma unica vez, por server.iniciar_threads."""
+    iniciar_vigia()    # encerra episodios vencidos
+    iniciar_laco()     # S3a/S4
+    iniciar_entrega()  # S4: so com FLOW_ACOES_PELO_BANCO=1
+
+
+def parar(timeout: float = 5.0) -> None:
+    """Desligamento ordenado: o ciclo do laco e o da entrega em curso terminam (o lote chega ao commit do cursor)."""
+    parar_laco(timeout)
+    parar_entrega(timeout)

@@ -135,3 +135,15 @@ JANELA_COMANDOS_S = 60
 
 # Falha repetida da entrega (banco fora do ar): no maximo uma linha de log neste intervalo (s).
 INTERVALO_LOG_FALHA_ENTREGA_S = 10
+
+# ===========================================================================
+# 7. DOIS PROCESSOS (S5 do split)
+# ===========================================================================
+
+# 1 = esta e a BORDA ISOLADA (`python -m borda`): nao decide nada e nem carrega a analise; so aceita, valida, grava,
+# entrega o push a partir de `comandos_push` e le o estado do banco. Quem define e `borda/__main__.py`; 0 (padrao) =
+# processo unico (`python -m borda.server`, flask, WSGI), com o caminho direto ou o laco em thread, como na S4.
+ISOLADA = os.environ.get("FLOW_BORDA_ISOLADA", "0") == "1"
+
+# Desligamento ordenado: tempo maximo (s) para a descarga final das leituras e para as threads terminarem.
+PRAZO_ENCERRAMENTO_S = 10

@@ -69,6 +69,8 @@ Como rodar:
     pip install -r requirements.txt
     FLOW_JWT_SECRET=<segredo> python -m borda.server      (a partir de SensorServer/)
     (sem FLOW_JWT_SECRET o servidor nao sobe; contas se criam com "python -m borda.auth criar-conta")
+    DOIS PROCESSOS (S5): "python -m borda" sobe a borda ISOLADA (le .env.borda, sem a analise) e "python -m analise" sobe
+    a analise (ver borda/servico.py e analise/servico.py). "python -m borda.server" continua sendo o processo unico.
     Tambem vale "flask --app borda.server run" ou WSGI: o segredo e as threads de fundo sao tratados no import
     (FLOW_SEM_THREADS=1 desliga as threads, para os testes).
 """
@@ -81,7 +83,6 @@ from datetime import datetime, timezone
 from flask import Flask, request, jsonify, g
 
 from borda import auth
-from borda import caminho_direto   # o UNICO ponto em que a borda chama a analise (ver caminho_direto.py)
 from borda import canal_app
 from borda import canal_wokwi
 from borda import const as const_borda
@@ -91,6 +92,20 @@ from comum import const as const_comum
 from flow_db import repositorios
 from borda.authz import exige, exigir_dispositivo, exigir_escopo, ForaDeEscopo, negar
 from borda.crypto_utils import decrypt_payload, encrypt_payload, DecryptionError
+from borda.sse_hub import HUB
+
+
+
+def _pipeline():
+    """O pipeline da borda (S5). Borda ISOLADA (`python -m borda`): `borda/via_banco.py`, sem nenhum import de `analise`.
+    Processo unico: `borda/caminho_direto.py`, o UNICO ponto em que a borda chama a analise (importado so aqui, na hora
+    do uso, para a borda isolada nunca carregar a analise). Os dois tem a mesma interface."""
+    if const_borda.ISOLADA:
+        from borda import via_banco
+        return via_banco
+    from borda import caminho_direto
+    return caminho_direto
+
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = const_borda.MAX_CONTENT_LENGTH   # corpo maior: 413 (ver errorhandler abaixo)
@@ -118,6 +133,8 @@ _registros_recentes: list[dict] = []
 # respostas, confirmacoes, auditoria, estado) passam por repositorios.tentar_*: falha vai para o log, nunca vira 500.
 # ---------------------------------------------------------------------------
 _fila_lock = threading.Lock()
+_parar_flush = threading.Event()          # S5: pede o fim da thread de descarga (encerrar())
+_thread_flush: threading.Thread | None = None
 _fila_leituras: list[dict] = []
 _descartes_leituras = 0
 
@@ -169,17 +186,19 @@ def _devolver_lote(lote: list[dict]) -> None:
             _descartes_leituras += excesso
 
 
-def _descarregar_leituras() -> None:
-    """Esvazia a fila em lotes. Chamada SO pela thread de descarga (uma unica escritora de `leituras`)."""
+def _descarregar_leituras() -> bool:
+    """Esvazia a fila em lotes. Chamada SO pela thread de descarga (uma unica escritora de `leituras`; no desligamento,
+    por `encerrar()` depois de a thread parar). Devolve False se a gravacao falhou (o lote voltou para a fila)."""
     for _ in range(20):    # teto por passada: nao monopoliza a thread se a fila estiver enorme
         with _fila_lock:
             lote = _fila_leituras[:const_borda.TAMANHO_LOTE_LEITURAS]
             del _fila_leituras[:len(lote)]
         if not lote:
-            return
+            return True
         if not repositorios.tentar_borda("leituras", lambda b: b.gravar_leituras(lote)):
             _devolver_lote(lote)
-            return
+            return False
+    return True
 
 
 def _agora_iso() -> str:
@@ -253,8 +272,7 @@ def _flush_loop() -> None:
     leituras em lote; a cada const_borda.JANELA_AGREGACAO_S grava tambem uma linha por usuario que recebeu dado
     (de app e/ou wokwi) na janela (telemetria agregada, como antes)."""
     ultima_janela = time.monotonic()
-    while True:
-        time.sleep(const_borda.INTERVALO_DESCARGA_S)
+    while not _parar_flush.wait(const_borda.INTERVALO_DESCARGA_S):    # S5: o desligamento acorda e encerra a thread
         try:
             _descarregar_leituras()
         except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
@@ -376,7 +394,7 @@ def receber_evento():
         "instante_ingestao": agora, "user_id": user_id, "device_id": g.principal.device_id,
         "fonte": g.principal.fonte, "tipo": ev["eventType"], "message_id": ev.get("messageId"),
         "schema_version": versao, "payload": ev}))
-    caminho_direto.analisar_resposta(user_id, g.principal.device_id, g.principal.fonte, ev, versao, agora)
+    _pipeline().analisar_resposta(user_id, g.principal.device_id, g.principal.fonte, ev, versao, agora)
     return jsonify({"status": "ok"}), 200
 
 
@@ -430,9 +448,9 @@ def receber_dados():
     _registrar_no_buffer(user_id, source, dados_fonte)
     _enfileirar_leitura(user_id, source, device_id, dados_fonte, versao, g.principal.conta_id, agora)
 
-    # 4. Analise (luz do app, imobilidade do wokwi, queda), pelo adaptador do caminho direto. A telemetria ja foi
+    # 4. Analise (luz do app, imobilidade do wokwi, queda), pelo pipeline da borda (caminho direto ou, na borda isolada, nada: decide o outro processo). A telemetria ja foi
     #    aceita e enfileirada: falha ao decidir ou aplicar fica no log (la) e nao vira 500.
-    caminho_direto.analisar_leitura(user_id, device_id, source, dados_fonte, versao, agora)
+    _pipeline().analisar_leitura(user_id, device_id, source, dados_fonte, versao, agora)
 
     return jsonify({
         "status": "ok",
@@ -454,7 +472,7 @@ def obter_estado_imobilidade(device_id):
     """Debug/demo: expoe a tabela de estado persistente (nao o buffer de
     1s) de um dispositivo wokwi - evidencia observavel de 'mudanca de
     estado', separada do log em dataUsers/usuario_<id>.jsonl."""
-    estado = caminho_direto.estado_do_dispositivo(device_id)   # procura em todos os usuarios
+    estado = _pipeline().estado_do_dispositivo(device_id)   # procura em todos os usuarios
     if estado is None:
         return jsonify({"status": "erro", "mensagem": f"device_id desconhecido: {device_id}"}), 404
     return jsonify(estado)
@@ -481,21 +499,71 @@ _threads_iniciadas = False
 
 
 def iniciar_threads() -> None:
-    """Sobe as threads de fundo uma unica vez: flush do buffer, vigia de episodios vencidos e laco da analise (S3a)."""
-    global _threads_iniciadas
+    """Sobe as threads de fundo uma unica vez: flush do buffer e o pipeline (vigia, laco da analise e entrega no processo
+    unico; so a entrega na borda isolada)."""
+    global _threads_iniciadas, _thread_flush
     with _threads_lock:
         if _threads_iniciadas:
             return
-        threading.Thread(target=_flush_loop, name="flow-flush", daemon=True).start()
-        caminho_direto.iniciar_vigia()   # encerra episodios vencidos
-        caminho_direto.iniciar_laco()    # S3a: laco da analise por cursor (S4: com FLOW_ACOES_PELO_BANCO=1, age)
-        caminho_direto.iniciar_entrega() # S4: entrega o push a partir de `comandos_push` (so com FLOW_ACOES_PELO_BANCO=1)
+        _parar_flush.clear()
+        _thread_flush = threading.Thread(target=_flush_loop, name="flow-flush", daemon=True)
+        _thread_flush.start()
+        _pipeline().iniciar()
         _threads_iniciadas = True
+
+
+def _descarga_final(prazo_s: float) -> int:
+    """Esvazia a fila de leituras no desligamento. Para ao esvaziar, ao falhar a gravacao ou ao estourar o prazo.
+    Devolve quantas leituras ficaram sem gravar."""
+    fim = time.monotonic() + prazo_s
+    while time.monotonic() < fim:
+        gravou = _descarregar_leituras()
+        with _fila_lock:
+            if not _fila_leituras:
+                return 0
+        if not gravou:
+            break
+    with _fila_lock:
+        return len(_fila_leituras)
+
+
+def encerrar(prazo_s: float | None = None) -> None:
+    """DESLIGAMENTO ORDENADO da borda (S5). Chamado por borda/servico.py depois de parar de aceitar conexoes:
+    1. para a thread de descarga (para a descarga final ter uma unica escritora) e o pipeline (entrega em curso termina);
+    2. encerra os streams SSE (os clientes reconectam quando a borda voltar);
+    3. descarrega o que restou da fila de leituras e do buffer de agregacao;
+    4. fecha os pools do banco.
+    Idempotente. Leitura que nao coube no prazo ou no banco fora do ar e contada no log."""
+    global _threads_iniciadas, _thread_flush
+    prazo = const_borda.PRAZO_ENCERRAMENTO_S if prazo_s is None else prazo_s
+    with _threads_lock:
+        _parar_flush.set()
+        if _thread_flush is not None:
+            _thread_flush.join(prazo)
+        _thread_flush = None
+        try:
+            _pipeline().parar(prazo)
+        except Exception as e:  # noqa: BLE001  (o desligamento segue)
+            print(f"  [borda] falha ao parar o pipeline (segue): {type(e).__name__}: {str(e)[:200]}")
+        print(f"  [borda] encerrando: {HUB.fechar_todas()} stream(s) SSE fechado(s)")
+        perdidas = _descarga_final(prazo)
+        try:
+            _flush_iteracao()
+        except Exception as e:  # noqa: BLE001
+            print(f"  [borda] falha na descarga final do buffer (segue): {type(e).__name__}: {str(e)[:200]}")
+        if perdidas:
+            print(f"  [borda] AVISO: {perdidas} leitura(s) nao gravada(s) no encerramento (banco fora do ar ou prazo)")
+        repositorios.desinstalar()
+        _threads_iniciadas = False
+        print("  [borda] encerrada")
 
 
 if os.environ.get("FLOW_SEM_THREADS") != "1":
     auth.exigir_segredo()   # sem FLOW_JWT_SECRET o servidor nao sobe
-    repositorios.iniciar()  # sem banco (ou com esquema defasado) o servidor nao sobe; FLOW_DB_FAKE=1 usa o banco falso
+    if const_borda.ISOLADA:
+        repositorios.iniciar_borda()   # S5: so o papel flow_borda; sem banco (ou esquema defasado) nao sobe
+    else:
+        repositorios.iniciar()  # sem banco (ou com esquema defasado) o servidor nao sobe; FLOW_DB_FAKE=1 usa o banco falso
     iniciar_threads()
 
 

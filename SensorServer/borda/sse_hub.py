@@ -77,6 +77,15 @@ class Hub:
                     print(f"  [sse] fila cheia: conexao fechada user={user_id} canal={canal} device={device_id}")
         return entregues
 
+    def fechar_todas(self) -> int:
+        """Desligamento ordenado (S5): encerra todos os streams. O cliente reconecta (Last-Event-ID) quando a borda
+        voltar. Devolve quantas conexoes foram fechadas."""
+        with self._lock:
+            conns = [c for por_device in self._conns.values() for c in por_device.values()]
+            for c in conns:
+                c.fechar()
+        return len(conns)
+
     def _registrar(self, chave, device_id, last_event_id, serializar):
         conn = Conexao(device_id)
         with self._lock:

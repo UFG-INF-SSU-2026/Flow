@@ -10,8 +10,8 @@ Regras de uso:
   - Este modulo NAO importa nada do projeto (e um modulo folha). `borda/const.py` e `analise/const.py` so importam
     este, e so para que o .env ja esteja carregado quando elas leem o ambiente.
   - Ao ser importado, carrega SensorServer/.env para o ambiente do processo; variavel de ambiente ja definida no
-    terminal VENCE o arquivo. Ver .env.example e _carregar_dotenv(). Enquanto borda e analise forem o mesmo processo
-    ha um .env so; na separacao (S5) cada servico passa a ler o seu.
+    terminal VENCE o arquivo. Ver .env.example e _carregar_dotenv(). Processo unico: um .env so; dois processos (S5):
+    .env.borda e .env.analise, escolhidos por FLOW_SERVICO (ver SERVICO abaixo).
   - Os demais modulos importam o modulo (`from comum import const as const_comum`) e leem `const_comum.X` NA HORA DO
     USO (nunca `from comum.const import X`), para que um unico ajuste valha para todos os pontos de uso, inclusive
     em testes. Cada constante tem UM dono: ajuste-a no modulo do dono.
@@ -39,8 +39,17 @@ def _carregar_dotenv(caminho: Path) -> bool:
     return load_dotenv(caminho, override=False, interpolate=False, encoding="utf-8-sig")
 
 
-# O .env fica em SensorServer/ (a pasta acima de comum/).
-DOTENV_ARQUIVO = Path(__file__).resolve().parent.parent / ".env"
+# Servico que este processo e (S5). Os pontos de entrada `python -m borda` e `python -m analise` definem FLOW_SERVICO
+# ANTES de importar qualquer modulo do projeto; cada servico le SO o seu arquivo de ambiente e nenhum le o `.env`
+# administrativo (migracoes, provisionamento e compose). Vazio = processo unico / ferramentas (`python -m borda.server`,
+# simuladores, `python -m flow_db`): le o `.env` de sempre.
+SERVICO = os.environ.get("FLOW_SERVICO", "")
+_ARQUIVO_ENV = {"": ".env", "borda": ".env.borda", "analise": ".env.analise"}
+if SERVICO not in _ARQUIVO_ENV:
+    raise RuntimeError(f"FLOW_SERVICO invalido: {SERVICO!r} (use 'borda' ou 'analise', ou deixe vazio)")
+
+# Os arquivos ficam em SensorServer/ (a pasta acima de comum/).
+DOTENV_ARQUIVO = Path(__file__).resolve().parent.parent / _ARQUIVO_ENV[SERVICO]
 DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO)
 
 # ===========================================================================

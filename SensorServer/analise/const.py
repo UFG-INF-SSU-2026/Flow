@@ -169,3 +169,10 @@ SOMBRA_ARQUIVO = "sombra_decisoes.jsonl"
 # Arquivo (dentro de comum.const.DATA_DIR) em que `simular_cenarios.py` anota a janela de tempo de cada cenario, para
 # `relatorio_sombra.py` separar as decisoes por cenario.
 SOMBRA_MANIFESTO = "sombra_cenarios.json"
+
+# ===========================================================================
+# 7. DOIS PROCESSOS (S5 do split)
+# ===========================================================================
+
+# Desligamento ordenado da analise (`python -m analise`): tempo maximo (s) para o ciclo em curso chegar ao commit do cursor.
+PRAZO_ENCERRAMENTO_ANALISE_S = 10

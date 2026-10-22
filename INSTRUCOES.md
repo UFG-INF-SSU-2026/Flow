@@ -314,3 +314,53 @@ Sinalizador `FLOW_ACOES_PELO_BANCO` (padrão `0`). Com `1` (e `FLOW_LACO_ANALISE
 Voltar ao caminho direto: `FLOW_ACOES_PELO_BANCO=0` e reiniciar (o banco continua válido). Com o sinalizador ligado a sombra
 (`FLOW_SOMBRA`) é ignorada: não há caminho direto para comparar. Fora do escopo da S4 (vai para a S6): reconstruir episódios
 abertos ao reiniciar a análise; enquanto isso, reiniciar com episódio aguardando deixa-o sem o encerramento `EXPIRADO`.
+
+## Dois processos: borda e análise (S5 do split)
+
+Em vez de um processo só, o servidor roda em **dois**, ligados apenas pelo banco:
+
+| Processo | Comando (em `SensorServer/`) | Lê | Papel no banco | Porta |
+| --- | --- | --- | --- | --- |
+| Borda | `python -m borda` | `.env.borda` | `flow_borda` | 5000 (a única) |
+| Análise | `python -m analise` | `.env.analise` | `flow_analise` | nenhuma |
+
+O `.env` de sempre passa a ser **só administrativo** (compose, `python -m flow_db provisionar|migrar`): nenhum dos dois serviços o lê.
+`python -m borda.server` continua sendo o processo único (S2 a S4, com o caminho direto ou `FLOW_ACOES_PELO_BANCO`), útil
+para voltar atrás durante a janela de estabilidade.
+
+**1. Arquivos de ambiente (uma vez).** O banco é criado do zero (não há migração dos `.json` antigos). No `.env`
+administrativo ficam `FLOW_DB_PASSWORD`, `FLOW_DB_BORDA_PASSWORD` e `FLOW_DB_ANALISE_PASSWORD`. Depois:
+
+```bash
+cp SensorServer/.env.borda.example   SensorServer/.env.borda     # FLOW_JWT_SECRET + FLOW_DB_BORDA_PASSWORD
+cp SensorServer/.env.analise.example SensorServer/.env.analise   # so FLOW_DB_ANALISE_PASSWORD
+```
+
+(PowerShell: `Copy-Item`.) As senhas dos papéis devem ser **as mesmas** do `.env` administrativo.
+
+**Isolamento de segredos.** Cada serviço se recusa a subir se o ambiente trouxer segredo de outro dono (a mensagem lista só o
+nome da variável): a análise não pode ver `FLOW_JWT_SECRET`, `FLOW_DB_BORDA_PASSWORD`, `FLOW_DB_PASSWORD`, `FLOW_CONTAS_PATH`
+nem `FLOW_SESSOES_PATH`; a borda não pode ver `FLOW_DB_ANALISE_PASSWORD` nem `FLOW_DB_PASSWORD`. Se der esse erro, tire a
+variável do terminal (ou do `.env.<serviço>`). O banco falso (`FLOW_DB_FAKE`) não vale com processos separados.
+
+**2. Subir.** Os scripts de `SensorServer/scripts/` fazem tudo na ordem certa (a ordem entre borda e análise é indiferente):
+
+| Ação | Linux/macOS | Windows (PowerShell) |
+| --- | --- | --- |
+| Banco + papéis + migrações | `scripts/preparar.sh` | `scripts\preparar.ps1` |
+| Só a borda | `scripts/borda.sh` | `scripts\borda.ps1` |
+| Só a análise | `scripts/analise.sh` | `scripts\analise.ps1` |
+| Tudo | `scripts/tudo.sh` | `scripts\tudo.ps1` (uma janela por serviço) |
+
+Contas continuam sendo da borda: `python -m borda.auth criar-conta` (o `contas.json` fica em `SensorServer/`; se mudar
+`FLOW_CONTAS_PATH` no `.env.borda`, defina o mesmo no terminal ao criar a conta).
+
+**3. Desligar.** Ctrl+C (ou SIGTERM; Ctrl+Break no Windows) em cada processo. A análise termina o ciclo em curso e grava o
+cursor; a borda para de aceitar, para a entrega, fecha os streams SSE (os clientes reconectam), descarrega a fila de
+leituras e o buffer e fecha o pool. Reiniciar a análise não desconecta ninguém; reiniciar a borda não perde o estado da análise.
+
+**4. Janela de estabilidade e remoção do caminho direto.** O caminho direto **ainda existe** (decisão: removê-lo só depois de
+alguns dias de uso real sem incidentes com os dois processos). Quando o grupo der a janela por encerrada: apagar
+`borda/caminho_direto.py`, `analise/sombra.py`, `relatorio_sombra.py`, `simular_cenarios.py` (modo sombra), as constantes
+`ACOES_PELO_BANCO`, `LACO_ATIVO`, `SOMBRA_*` e `ISOLADA`, e fazer `borda/server.py` usar `borda/via_banco.py` direto; os testes que
+importam `caminho_direto` migram para o laço (`analise/laco.py`). Fica para a S7.

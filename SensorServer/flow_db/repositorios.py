@@ -5,8 +5,9 @@ Enquanto borda e analise forem o mesmo processo, os dois lados vivem aqui, cada 
 disjuntor. Quem usa (borda/server.py, borda/authz.py, borda/caminho_direto.py, analise/efeitos.py) NUNCA toca em SQL nem em pool: chama borda()/analise() ou
 tentar_borda()/tentar_analise().
 
-  iniciar()    -> sobe os pools e VERIFICA a versao do esquema; falha com mensagem clara (o servidor nao sobe).
-                  Com FLOW_DB_FAKE=1 usa o banco falso em memoria (sem Docker).
+  iniciar()    -> processo unico: sobe os dois pools e VERIFICA a versao do esquema; falha com mensagem clara (o servidor
+                  nao sobe). Com FLOW_DB_FAKE=1 usa o banco falso em memoria (sem Docker).
+  iniciar_borda() / iniciar_analise() -> S5, dois processos: cada servico abre SO o seu pool (o fake nao vale aqui).
   usar_fake()  -> instala um banco falso novo (testes). Devolve o BancoFalso.
   tentar_*()   -> executa uma escrita sem NUNCA levantar excecao: falha vai para o log e aciona o disjuntor.
                   Devolve True se gravou. O fluxo principal (aceitar dados, responder ao dispositivo) nao depende disto.
@@ -34,24 +35,62 @@ def _zerar_disjuntores() -> None:
         lado.disjuntor = Disjuntor(const_comum.DB_PAUSA_APOS_FALHA_S)
 
 
-def iniciar() -> None:
-    """Chamada na subida do servidor. Levanta RuntimeError (mensagem sem senha) se o banco faltar ou estiver defasado."""
+def _recusar_fake_isolado(servico: str) -> None:
     if os.environ.get("FLOW_DB_FAKE") == "1":
-        usar_fake()
-        return
+        raise RuntimeError(f"FLOW_DB_FAKE=1 so vale no processo unico (o banco falso vive na memoria de um processo): "
+                           f"o servico '{servico}' isolado precisa do PostgreSQL.")
+
+
+def _abrir(servico: str):
+    """Abre o pool do papel do servico e VERIFICA a versao do esquema. Devolve o repositorio PG. Levanta
+    RuntimeError (mensagem sem senha). Se a verificacao falhar, o pool aberto e fechado."""
     from flow_db import config, conexao, versao
     from flow_db.pg_analise import PgAnalise
     from flow_db.pg_borda import PgBorda
+    papel, classe = ((config.PAPEL_BORDA, PgBorda) if servico == "borda" else (config.PAPEL_ANALISE, PgAnalise))
     try:
-        pool_borda = conexao.criar_pool(config.PAPEL_BORDA)
-        pool_analise = conexao.criar_pool(config.PAPEL_ANALISE)
-        conexao.verificar_versao_minima(pool_borda, versao.MIGRACAO_MINIMA["borda"], "borda")
-        conexao.verificar_versao_minima(pool_analise, versao.MIGRACAO_MINIMA["analise"], "analise")
+        pool = conexao.criar_pool(papel)
+        try:
+            conexao.verificar_versao_minima(pool, versao.MIGRACAO_MINIMA[servico], servico)
+        except Exception:
+            pool.close()
+            raise
     except (config.ConfigBanco, conexao.BancoIndisponivel, conexao.BancoDesatualizado) as e:
         raise RuntimeError(str(e)) from None
+    return classe(pool)
+
+
+def iniciar() -> None:
+    """Processo UNICO: abre os dois lados. Levanta RuntimeError (mensagem sem senha) se o banco faltar ou estiver defasado."""
+    if os.environ.get("FLOW_DB_FAKE") == "1":
+        usar_fake()
+        return
+    repo_borda = _abrir("borda")
+    try:
+        repo_analise = _abrir("analise")
+    except Exception:
+        repo_borda.fechar()
+        raise
     _zerar_disjuntores()
-    _borda.repo = PgBorda(pool_borda)
-    _analise.repo = PgAnalise(pool_analise)
+    _borda.repo = repo_borda
+    _analise.repo = repo_analise
+
+
+def iniciar_borda() -> None:
+    """S5, processo da BORDA: abre SO o pool do papel flow_borda (o papel da analise nem e lido). tentar_analise()
+    vira no-op. Mesmas falhas de iniciar()."""
+    _recusar_fake_isolado("borda")
+    repo = _abrir("borda")
+    _zerar_disjuntores()
+    _borda.repo = repo
+
+
+def iniciar_analise() -> None:
+    """S5, processo da ANALISE: abre SO o pool do papel flow_analise. tentar_borda() vira no-op."""
+    _recusar_fake_isolado("analise")
+    repo = _abrir("analise")
+    _zerar_disjuntores()
+    _analise.repo = repo
 
 
 def usar_fake():
