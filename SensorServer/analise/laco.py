@@ -16,6 +16,11 @@ O QUE O LACO FAZ NA S3a (e o que nao faz)
   - Leitura de ESTADO por reprocessamento (janela anterior ao cursor) e do S6; aqui o estado das regras comeca vazio
     a cada subida do processo.
 
+S4 (comum.const.ACOES_PELO_BANCO, `agir=True`): o laco passa a AGIR. Cada decisao sobre linha recente e gravada por
+`efeitos.aplicar_na_transacao` na MESMA transacao do cursor (DS5); o vigia grava os encerramentos numa transacao propria.
+Falha do banco desfaz o ciclo e o proximo reaproveita as decisoes ja tomadas (`_decisoes_por_linha`): o estado das regras
+nao e desfeito e uma linha nunca e decidida duas vezes. Quem entrega o push e a borda (borda/entrega_push.py).
+
 GARANTIAS
   - Leitura ou resposta MALFORMADA (nao vira entrada do nucleo) e falha numa regra sao tratadas POR LINHA: registra, conta
     em `cursor_analise.metricas` e segue; o cursor avanca. Uma linha ruim nunca trava nem derruba o laco.
@@ -40,6 +45,7 @@ from typing import Callable
 from analise import const as const_analise
 from analise import nucleo
 from comum import const as const_comum
+from analise import efeitos
 from flow_db import ciclo_analise, repositorios
 from flow_db.repo_analise import RepoAnalise
 
@@ -158,6 +164,9 @@ class LacoAnalise:
       ao_observar  S3b: funcao(decisoes, origem, reconstrucao) chamada para TODA `Decisoes` com algum conteudo, inclusive
                    so resumo de estado ou so descarte (que `ao_decidir` nao recebe). Alimenta a comparacao em modo
                    sombra (analise/sombra.py). Padrao None: nada muda.
+      agir         S4: True = a analise AGE: grava comandos, alertas, confirmacoes, episodios e estado na MESMA transacao do
+                   cursor (efeitos.aplicar_na_transacao) e o vigia grava os encerramentos. Decisao sobre linha mais velha
+                   que IDADE_MAX_ACAO_S nao age (principio 4). Padrao False: so registra (S3a/S3b).
       traduzir_resposta  S3b: funcao(Resposta) -> Resposta aplicada a cada resposta ANTES do nucleo. So a sombra a usa
                    (troca o messageId do caminho direto pelo do pedido equivalente do laco). Padrao None.
     """
@@ -166,13 +175,22 @@ class LacoAnalise:
                  relogio: Callable[[], datetime] = _agora_real, estado: nucleo.EstadoRegras | None = None,
                  ao_decidir: Callable[[nucleo.Decisoes, str, bool], None] = logar_decisoes,
                  ao_observar: Callable[[nucleo.Decisoes, str, bool], None] | None = None,
-                 traduzir_resposta: Callable[[nucleo.Resposta], nucleo.Resposta] | None = None):
+                 traduzir_resposta: Callable[[nucleo.Resposta], nucleo.Resposta] | None = None,
+                 agir: bool = False):
         self._obter_repo = obter_repo
         self._relogio = relogio
         self.estado = estado if estado is not None else nucleo.novo_estado()
         self._ao_decidir = ao_decidir
         self._ao_observar = ao_observar
         self._traduzir_resposta = traduzir_resposta
+        self._agir = agir
+        # --- so com agir (S4) ---
+        self._estado_gravado: dict = {}                   # (user, device) -> assinatura do estado JA no banco (pos-commit)
+        self._assinaturas_novas: dict = {}                # as da tentativa em curso (so entram em _estado_gravado no commit)
+        self._depois_do_commit: list = []                 # arquivos/log da tentativa em curso, para rodar depois do commit
+        self._decisoes_por_linha: dict = {}               # (fluxo, id) -> Decisoes ja decididas num ciclo que nao fez commit
+        self._vigia_pendente = nucleo.Decisoes()          # encerramentos do vigia que ainda nao chegaram ao banco
+        self._episodios_sem_acao: set = set()             # abertos por linha antiga (reconstrucao): o vigia nao age sobre eles
         self._parar = threading.Event()
         self._thread: threading.Thread | None = None
         self._ultimo_log_falha = float("-inf")
@@ -185,29 +203,45 @@ class LacoAnalise:
         repo = self._obter_repo()
         if repo is None:
             return None
-        resultado = ciclo_analise.processar_ciclo(repo, self._processar_lote, versao_codigo=const_analise.VERSAO_CODIGO)
+        self._assinaturas_novas, self._depois_do_commit = {}, []      # tentativa nova (a anterior, se falhou, foi desfeita)
+        versao = const_analise.VERSAO_CODIGO_ACOES if self._agir else const_analise.VERSAO_CODIGO
+        resultado = ciclo_analise.processar_ciclo(repo, self._processar_lote, versao_codigo=versao)
+        if self._agir:
+            self._apos_commit()
         self.passo_vigia()
         return resultado
 
+    def _apos_commit(self) -> None:
+        """O ciclo chegou ao commit: o que foi gravado vale, e o que ficou para depois (arquivos, log) roda agora."""
+        self._estado_gravado.update(self._assinaturas_novas)
+        self._decisoes_por_linha.clear()
+        pendentes, self._depois_do_commit = self._depois_do_commit, []
+        for fazer in pendentes:
+            try:
+                fazer()
+            except Exception as e:  # noqa: BLE001  (arquivo de transicao nunca desfaz o que ja esta no banco)
+                print(f"  [laco] falha em efeito pos-commit (ignorada): {type(e).__name__}: {str(e)[:150]}")
+
     def _processar_lote(self, _tx: RepoAnalise, lote: ciclo_analise.Lote) -> dict:
-        """Roda dentro da transacao do ciclo. Na S3a NAO escreve por `_tx`: so decide e registra."""
+        """Roda dentro da transacao do ciclo. Sem `agir` (S3a/S3b) NAO escreve por `_tx`: so decide e registra. Com `agir`
+        (S4) grava as decisoes recentes por `_tx`."""
         metricas: dict = {}
         agora = self._relogio()
         limite = const_analise.IDADE_MAX_ACAO_S
-        itens: list = []     # leituras antes de respostas: em empate de instante a ordem se mantem (sort estavel)
+        itens: list = []     # (chave da linha, item); leituras antes de respostas: em empate a ordem se mantem (sort estavel)
 
         for linha in lote.leituras:
             try:
-                itens.append(leitura_de_linha(linha))
+                itens.append((("leitura", linha.get("id")), leitura_de_linha(linha)))
             except ValueError as e:     # inclui LinhaMalformada
                 self._malformada("leitura", linha, e, metricas, M_LEITURAS_MALFORMADAS)
         for linha in lote.respostas:
             try:
-                itens.append(resposta_de_linha(linha))
+                itens.append((("resposta", linha.get("id")), resposta_de_linha(linha)))
             except ValueError as e:     # inclui LinhaMalformada
                 self._malformada("resposta", linha, e, metricas, M_RESPOSTAS_MALFORMADAS)
 
-        for item in sorted(itens, key=lambda i: i.instante):
+        for chave_linha, item in sorted(itens, key=lambda ci: ci[1].instante):
             eh_leitura = isinstance(item, nucleo.Leitura)
             antiga = (agora - item.instante).total_seconds() > limite
             if not eh_leitura and self._traduzir_resposta is not None:
@@ -216,7 +250,11 @@ class LacoAnalise:
                 except Exception as e:  # noqa: BLE001  (sem traducao a resposta segue como esta)
                     print(f"  [laco] falha ao traduzir a resposta (ignorada): {type(e).__name__}")
             try:
-                decisoes = (nucleo.processar_leitura if eh_leitura else nucleo.processar_resposta)(self.estado, item)
+                decisoes = self._decisoes_por_linha.get(chave_linha) if self._agir else None
+                if decisoes is None:        # (com agir, uma linha de um ciclo desfeito NAO e decidida de novo: o estado ja a viu)
+                    decisoes = (nucleo.processar_leitura if eh_leitura else nucleo.processar_resposta)(self.estado, item)
+                    if self._agir:
+                        self._decisoes_por_linha[chave_linha] = decisoes
             except Exception as e:  # noqa: BLE001  (uma regra com bug nao pode travar o cursor)
                 metricas[M_FALHAS] = metricas.get(M_FALHAS, 0) + 1
                 print(f"  [laco] falha ao processar {'leitura' if eh_leitura else 'resposta'} user={item.user_id} "
@@ -228,6 +266,11 @@ class LacoAnalise:
                 chave = M_LEITURAS_ANTIGAS if eh_leitura else M_RESPOSTAS_ANTIGAS
                 metricas[chave] = metricas.get(chave, 0) + 1
             _contar(decisoes, metricas, antiga)
+            if self._agir and not antiga:
+                self._depois_do_commit += efeitos.aplicar_na_transacao(
+                    _tx, decisoes, self._estado_gravado, self._assinaturas_novas)
+            elif self._agir:
+                self._episodios_sem_acao.update(c.episodio.episodio_id for c in decisoes.comandos)
             self._decidiu(decisoes, "leitura" if eh_leitura else "resposta", antiga)
 
         for e in lote.entregas:
@@ -267,9 +310,37 @@ class LacoAnalise:
         except Exception as e:  # noqa: BLE001
             print(f"  [laco] falha no vigia (a thread segue): {type(e).__name__}: {str(e)[:200]}")
             return nucleo.Decisoes()
+        if self._agir:
+            self._gravar_vigia(decisoes)
         if decisoes.comandos or decisoes.alertas or decisoes.confirmacoes:
             self._decidiu(decisoes, "vigia", False)
         return decisoes
+
+    def _gravar_vigia(self, decisoes: nucleo.Decisoes) -> None:
+        """S4: grava os encerramentos EXPIRADO numa transacao propria. Se falhar, o estado das regras ja os registrou
+        como encerrados: guarda-os e tenta de novo no proximo passo (nao se perdem). Nunca levanta."""
+        if self._episodios_sem_acao:       # principio 4: episodio reconstruido de dado velho nao vira push nem registro
+            decisoes.comandos[:] = [c for c in decisoes.comandos if c.episodio.episodio_id not in self._episodios_sem_acao]
+            decisoes.confirmacoes[:] = [c for c in decisoes.confirmacoes
+                                        if c.dados.get("episodeId") not in self._episodios_sem_acao]
+        self._vigia_pendente.somar(decisoes)
+        if not self._vigia_pendente:
+            return
+        repo = self._obter_repo()
+        if repo is None:
+            return
+        try:
+            with repo.transacao() as tx:
+                depois = efeitos.aplicar_na_transacao(tx, self._vigia_pendente, self._estado_gravado, {})
+        except Exception as e:  # noqa: BLE001
+            self._falha(e)
+            return
+        self._vigia_pendente = nucleo.Decisoes()
+        for fazer in depois:
+            try:
+                fazer()
+            except Exception as e:  # noqa: BLE001
+                print(f"  [laco] falha em efeito pos-commit do vigia (ignorada): {type(e).__name__}: {str(e)[:150]}")
 
     # ---- thread ----
     def _falha(self, e: Exception) -> None:

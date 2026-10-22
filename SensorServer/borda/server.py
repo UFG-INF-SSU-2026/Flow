@@ -488,7 +488,8 @@ def iniciar_threads() -> None:
             return
         threading.Thread(target=_flush_loop, name="flow-flush", daemon=True).start()
         caminho_direto.iniciar_vigia()   # encerra episodios vencidos
-        caminho_direto.iniciar_laco()    # S3a: laco da analise por cursor (so registra decisoes em log)
+        caminho_direto.iniciar_laco()    # S3a: laco da analise por cursor (S4: com FLOW_ACOES_PELO_BANCO=1, age)
+        caminho_direto.iniciar_entrega() # S4: entrega o push a partir de `comandos_push` (so com FLOW_ACOES_PELO_BANCO=1)
         _threads_iniciadas = True
 
 

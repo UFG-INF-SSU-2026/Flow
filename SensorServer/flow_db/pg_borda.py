@@ -87,6 +87,11 @@ class PgBorda(PgBase, RepoBorda):
             return conn.execute("SELECT * FROM estado_dispositivo WHERE user_id = %s AND device_id = %s",
                                 (user_id, device_id)).fetchone()
 
+    def ler_estado_por_dispositivo(self, device_id: str) -> dict | None:
+        with self._cx() as conn:
+            return conn.execute("SELECT * FROM estado_dispositivo WHERE device_id = %s ORDER BY atualizado_em DESC LIMIT 1",
+                                (device_id,)).fetchone()
+
     def ler_saude(self) -> dict:
         with self._cx() as conn:
             return conn.execute("SELECT atraso_ids, idade_batimento_analise_s, idade_ultimo_comando_entregue_s"

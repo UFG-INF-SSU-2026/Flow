@@ -117,3 +117,21 @@ TAMANHO_LOTE_LEITURAS = 500
 # Fila de leituras em memoria (limitada). Com o banco fora do ar a borda segue aceitando dados; ao estourar o teto,
 # as leituras MAIS ANTIGAS saem (e o descarte e contado e logado). 20 mil leituras = bem mais que minutos de uso real.
 MAX_FILA_LEITURAS = 20_000
+
+# ===========================================================================
+# 6. ENTREGA DE PUSH PELO BANCO (S4 do split; so com comum.const.ACOES_PELO_BANCO)
+# ===========================================================================
+
+# Espera (s) entre dois ciclos de leitura de `comandos_push`: a terceira espera do orcamento de latencia (roadmap, secao 9).
+# Se o lote veio cheio a borda nao espera.
+INTERVALO_LEITURA_COMANDOS_S = 0.25
+
+# Comandos lidos por ciclo.
+LOTE_COMANDOS = 100
+
+# Comando criado ha mais que isto (s) nao e mais lido: ja expirou (o prazo do pedido e o TTL do encerramento sao bem
+# menores). Evita reentregar historico quando a borda volta de uma parada ou o cursor ainda esta em zero.
+JANELA_COMANDOS_S = 60
+
+# Falha repetida da entrega (banco fora do ar): no maximo uma linha de log neste intervalo (s).
+INTERVALO_LOG_FALHA_ENTREGA_S = 10

@@ -141,6 +141,9 @@ INTERVALO_LOG_FALHA_S = 10
 # Identifica o codigo da analise no batimento (`cursor_analise.versao_codigo`).
 VERSAO_CODIGO = "s3a-sombra"
 
+# Idem, quando a analise AGE (comum.const.ACOES_PELO_BANCO, S4).
+VERSAO_CODIGO_ACOES = "s4-acoes"
+
 # ===========================================================================
 # 6. COMPARACAO EM MODO SOMBRA (S3b do split)
 # ===========================================================================

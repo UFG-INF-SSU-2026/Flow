@@ -64,6 +64,11 @@ class RepoBorda(ABC):
         ...
 
     @abstractmethod
+    def ler_estado_por_dispositivo(self, device_id: str) -> dict | None:
+        """O estado gravado para `device_id` (o atualizado por ultimo, se mais de um usuario o usar), ou None.
+        A rota /estado/<device_id> nao sabe o usuario (S4, DS3)."""
+
+    @abstractmethod
     def ler_saude(self) -> dict:
         """{atraso_ids, idade_batimento_analise_s, idade_ultimo_comando_entregue_s} (None quando ainda nao ha dado)."""
 

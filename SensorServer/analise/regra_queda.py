@@ -387,6 +387,16 @@ def coletar_registros():
         _coletor.reset(token)
 
 
+def gravar_arquivo_confirmacao(user_id: int, linha: dict) -> None:
+    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (so enquanto const_comum.GRAVAR_ARQUIVOS). Separada de
+    `registrar` para a analise que age pelo banco (S4) gravar o arquivo DEPOIS do commit da transacao."""
+    if not const_comum.GRAVAR_ARQUIVOS:
+        return
+    os.makedirs(const_comum.DATA_DIR, exist_ok=True)
+    with _lock_arquivo, open(os.path.join(const_comum.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+
+
 def registrar(user_id: int, tipo: str, dados: dict, agora: float | None = None) -> None:
     """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (enquanto const_comum.GRAVAR_ARQUIVOS) e o aviso ao ouvinte
     (banco). E tudo que o servidor faz com a resposta. O `timestamp` da linha e o instante `agora` da decisao.
@@ -397,10 +407,7 @@ def registrar(user_id: int, tipo: str, dados: dict, agora: float | None = None) 
         coletor.append(Registro(user_id, tipo, dict(dados), agora))
         return
     linha = {"timestamp": datetime.fromtimestamp(agora, tz=timezone.utc).isoformat(), "tipo": tipo, **dados}
-    if const_comum.GRAVAR_ARQUIVOS:
-        os.makedirs(const_comum.DATA_DIR, exist_ok=True)
-        with _lock_arquivo, open(os.path.join(const_comum.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl"), "a", encoding="utf-8") as f:
-            f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+    gravar_arquivo_confirmacao(user_id, linha)
     ouvinte = OUVINTE_REGISTRO     # chamado fora de qualquer lock: o ouvinte pode demorar (banco)
     if ouvinte is not None:
         try:

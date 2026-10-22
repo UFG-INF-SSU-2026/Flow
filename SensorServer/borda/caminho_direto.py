@@ -10,6 +10,12 @@ E o UNICO modulo da borda que conhece a analise (conferido por tests/unit/test_f
     iniciar_vigia()             thread que encerra episodios vencidos (o unico passo com relogio real)
     iniciar_laco()              S3a: thread do laco da analise por cursor (so registra decisoes em log; nao age)
     sombra_atual()              S3b: a coleta da comparacao em modo sombra (None se desligada)
+    acoes_pelo_banco()          S4: True quando a analise age pelo banco (FLOW_ACOES_PELO_BANCO=1 e o laco ligado)
+    iniciar_entrega()           S4: thread que le `comandos_push` e entrega por SSE (so com acoes_pelo_banco)
+
+COM acoes_pelo_banco() (S4) este modulo deixa de decidir: analisar_leitura e analisar_resposta nao fazem nada (a leitura
+ja foi para a fila de descarga e a resposta ja foi gravada em `respostas_dispositivo` pela rota; quem decide e o laco da
+analise), o vigia nao sobe (e passo do laco) e estado_do_dispositivo le `estado_dispositivo`. Sem ele, tudo como sempre.
 
 O que fica aqui e so o que e da borda: chamar o nucleo, entregar o push aos canais (SSE) e registrar o resultado da
 entrega. A decisao e do nucleo (`analise/nucleo.py`) e a persistencia das decisoes e de `analise/efeitos.py`.
@@ -22,16 +28,14 @@ from datetime import datetime
 
 from analise import const as const_analise
 from analise import efeitos, laco, nucleo, regra_imobilidade, regra_queda, sombra
-from borda import canal_app, canal_wokwi, tempo
+from borda import entrega_push, tempo
+from comum import const as const_comum
 from flow_db import repositorios
 
-# Canais de push (servidor -> dispositivo). Todos expoem CANAL e enviar(user_id, mensagem).
-CANAIS = [canal_app, canal_wokwi]
-
-RESULTADO_ERRO_NO_CANAL = "ERRO_NO_CANAL"   # canal.enviar levantou excecao (alem de ENTREGUE_AO_CANAL etc. dos canais)
-
-_RESULTADO_ENTREGA = {"ENTREGUE_AO_CANAL": "enviado", "SEM_CANAL_ATIVO": "sem_conexao",
-                      "TIPO_NAO_SUPORTADO": "nao_suportado", "ERRO_NO_CANAL": "erro"}
+# Canais de push, resultado de erro e traducao do resultado: os mesmos da entrega pelo banco (borda/entrega_push.py).
+CANAIS = entrega_push.CANAIS
+RESULTADO_ERRO_NO_CANAL = entrega_push.RESULTADO_ERRO_NO_CANAL
+_RESULTADO_ENTREGA = entrega_push.RESULTADO_ENTREGA
 
 
 def _registro_para_banco(user_id: int, tipo: str, linha: dict) -> None:
@@ -98,9 +102,17 @@ def _aplicar(decisoes: "nucleo.Decisoes", origem: str = sombra.ORIGEM_LEITURA) -
 # ---------------------------------------------------------------------------
 # API para as rotas
 # ---------------------------------------------------------------------------
+def acoes_pelo_banco() -> bool:
+    """S4: a analise age pelo banco (e a borda entrega a partir dele). Exige o laco ligado: sem ele ninguem decidiria,
+    entao o sinalizador e ignorado e o caminho direto segue valendo. Lido na hora do uso."""
+    return const_comum.ACOES_PELO_BANCO and const_analise.LACO_ATIVO
+
+
 def analisar_leitura(user_id: int, device_id: str, fonte: str, dados: dict, versao: int, instante: datetime) -> None:
     """Leitura aceita pela borda -> nucleo -> efeitos. `instante` e o da ingestao (lido UMA vez pela rota).
-    Falha ao decidir ou aplicar fica no log e nao vira 500."""
+    Falha ao decidir ou aplicar fica no log e nao vira 500. Com acoes_pelo_banco() nao faz nada (decide o laco)."""
+    if acoes_pelo_banco():
+        return
     try:
         _aplicar(nucleo.processar_leitura(nucleo.PADRAO, nucleo.Leitura(
             instante, user_id, device_id, fonte, dados, versao)), sombra.ORIGEM_LEITURA)
@@ -111,13 +123,21 @@ def analisar_leitura(user_id: int, device_id: str, fonte: str, dados: dict, vers
 def analisar_resposta(user_id: int, device_id: str | None, fonte: str, evento: dict, versao: int,
                       instante: datetime) -> None:
     """Resposta do dispositivo (evento ja normalizado) -> nucleo -> efeitos. O episodio ja esta encerrado no estado
-    das regras; se o aviso aos dispositivos falhar, so ele se perde (log)."""
+    das regras; se o aviso aos dispositivos falhar, so ele se perde (log). Com acoes_pelo_banco() nao faz nada: a
+    resposta ja esta em `respostas_dispositivo` e quem a correlaciona e a analise (DS1)."""
+    if acoes_pelo_banco():
+        return
     _aplicar(nucleo.processar_resposta(nucleo.PADRAO, nucleo.Resposta(
         instante, user_id, device_id, fonte, evento, versao)), sombra.ORIGEM_RESPOSTA)
 
 
 def estado_do_dispositivo(device_id: str) -> dict | None:
-    """Resumo do estado da regra de imobilidade (procura em todos os usuarios), ou None se desconhecido."""
+    """Resumo do estado da regra de imobilidade (procura em todos os usuarios), ou None se desconhecido. Com
+    acoes_pelo_banco() le `estado_dispositivo` (DS3), onde a analise o grava; a forma da resposta e a mesma."""
+    if acoes_pelo_banco():
+        repo = repositorios.borda()
+        linha = None if repo is None else repo.ler_estado_por_dispositivo(device_id)
+        return None if linha is None else linha["estado"]
     return regra_imobilidade.obter_estado(device_id, estado=nucleo.PADRAO.imobilidade)
 
 
@@ -156,8 +176,11 @@ def _vigia_loop() -> None:
             print(f"  [vigia] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
-def iniciar_vigia() -> threading.Thread:
-    """Sobe a thread do vigia (chamada uma unica vez por borda/server.iniciar_threads)."""
+def iniciar_vigia() -> threading.Thread | None:
+    """Sobe a thread do vigia (chamada uma unica vez por borda/server.iniciar_threads). Com acoes_pelo_banco() o
+    vigia e um passo do laco da analise: nao sobe aqui."""
+    if acoes_pelo_banco():
+        return None
     t = threading.Thread(target=_vigia_loop, name="flow-vigia", daemon=True)
     t.start()
     return t
@@ -181,6 +204,9 @@ def _ativar_sombra() -> "sombra.Sombra | None":
     global _sombra
     if not const_analise.SOMBRA_ATIVA:
         return None
+    if acoes_pelo_banco():
+        print("  [sombra] FLOW_SOMBRA=1 ignorado: com FLOW_ACOES_PELO_BANCO=1 nao ha caminho direto para comparar")
+        return None
     if not const_analise.LACO_ATIVO:
         print("  [sombra] FLOW_SOMBRA=1 ignorado: o laco da analise esta desligado (FLOW_LACO_ANALISE=0)")
         return None
@@ -197,10 +223,16 @@ def iniciar_laco() -> threading.Thread | None:
     global _laco
     if not const_analise.LACO_ATIVO:
         print("  [laco] desligado (FLOW_LACO_ANALISE=0)")
+        if const_comum.ACOES_PELO_BANCO:
+            print("  [laco] AVISO: FLOW_ACOES_PELO_BANCO=1 ignorado sem o laco: o caminho direto segue decidindo")
         return None
+    if const_comum.ACOES_PELO_BANCO:
+        print("  [laco] ACOES PELO BANCO: a analise decide e grava; a borda entrega a partir de comandos_push (S4)")
     coleta = _ativar_sombra()
     observar = None if coleta is None else (lambda d, origem, rec: coleta.registrar(sombra.LADO_SOMBRA, d, origem, rec))
-    if coleta is None:
+    if acoes_pelo_banco():
+        _laco = laco.LacoAnalise(agir=True)
+    elif coleta is None:
         _laco = laco.LacoAnalise()      # sem sombra: como na S3a
     else:
         _laco = laco.LacoAnalise(ao_observar=observar, traduzir_resposta=coleta.traduzir_resposta)
@@ -211,3 +243,26 @@ def parar_laco(timeout: float = 5.0) -> None:
     """Pede o fim do laco e espera o ciclo em curso terminar (desligamento ordenado, S5)."""
     if _laco is not None:
         _laco.parar(timeout)
+
+
+# ---------------------------------------------------------------------------
+# Entrega do push pelo banco (S4): a borda le `comandos_push` por cursor
+# ---------------------------------------------------------------------------
+_entrega: "entrega_push.EntregaPush | None" = None
+
+
+def iniciar_entrega() -> threading.Thread | None:
+    """Sobe a thread que le `comandos_push` por cursor e entrega por SSE (borda/entrega_push.py). So com
+    acoes_pelo_banco(): no caminho direto quem entrega e `_despachar`, e duas entregas duplicariam o push. Chamada
+    uma unica vez por borda/server.iniciar_threads."""
+    global _entrega
+    if not acoes_pelo_banco():
+        return None
+    _entrega = entrega_push.EntregaPush()
+    return _entrega.iniciar()
+
+
+def parar_entrega(timeout: float = 5.0) -> None:
+    """Pede o fim da entrega e espera o ciclo em curso terminar (desligamento ordenado, S5)."""
+    if _entrega is not None:
+        _entrega.parar(timeout)

@@ -163,6 +163,10 @@ class FachadaBorda(RepoBorda):
                                       lambda l: l["user_id"] == user_id and l["device_id"] == device_id)
         return achados[0] if achados else None
 
+    def ler_estado_por_dispositivo(self, device_id):
+        achados = self._b._selecionar(self.PAPEL, "estado_dispositivo", lambda l: l["device_id"] == device_id)
+        return max(achados, key=lambda l: l["atualizado_em"]) if achados else None
+
     def ler_saude(self) -> dict:
         permissoes.exigir(self.PAPEL, "saude_pipeline", "S")
         with self._b._lock:

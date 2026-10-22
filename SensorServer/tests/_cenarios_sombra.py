@@ -17,8 +17,10 @@ PASSOS_POR_VIGIA = 4        # o vigia do caminho direto roda a cada 1 s (const_a
 
 
 class TransporteInterno:
-    def __init__(self, relogio, cli, tokens: dict, banco, lc: "laco.LacoAnalise"):
+    def __init__(self, relogio, cli, tokens: dict, banco, lc: "laco.LacoAnalise", entrega=None):
+        """`entrega` (S4, opcional): a `EntregaPush` da borda; ganha um ciclo a cada passo, depois do laco."""
         self.relogio, self.cli, self.tokens, self.banco, self.laco = relogio, cli, tokens, banco, lc
+        self.entrega = entrega
         self.t0 = relogio.agora()
         self._passos = 0
 
@@ -47,6 +49,8 @@ class TransporteInterno:
         if self._passos % PASSOS_POR_VIGIA == 0:
             caminho_direto._vigia_iteracao()
         self.laco.executar_ciclo()
+        if self.entrega is not None:
+            self.entrega.executar_ciclo()
 
 
 def montar_laco(relogio, banco, coleta: "sombra.Sombra", traduzir: bool = True) -> "laco.LacoAnalise":

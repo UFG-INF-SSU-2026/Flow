@@ -15,6 +15,7 @@ import re
 from datetime import datetime
 
 from comum import const as const_comum
+from analise import regra_queda
 from flow_db import repositorios
 
 # (user_id, device_id) -> ultima "assinatura" do estado gravada no banco: so grava quando algo relevante mudou.
@@ -27,13 +28,15 @@ def nome_seguro(valor: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", valor)[:const_comum.MAX_DEVICE_ID_LEN]
 
 
+def _linha_confirmacao(user_id: int, tipo: str, linha: dict) -> dict:
+    return {"instante": datetime.fromisoformat(linha["timestamp"]), "user_id": user_id, "tipo": tipo, "dados": linha,
+            "episodio_id": linha.get("episodeId"), "message_id": linha.get("messageId"),
+            "schema_version": const_comum.SCHEMA_VERSION_MENSAGEM}
+
+
 def gravar_confirmacao_banco(user_id: int, tipo: str, linha: dict) -> None:
     """Registro do ciclo de confirmacao (episodio.*, push.ack, confirmacao.resposta) -> tabela `confirmacoes`."""
-    instante = datetime.fromisoformat(linha["timestamp"])
-    repositorios.tentar_analise("confirmacao", lambda a: a.gravar_confirmacao({
-        "instante": instante, "user_id": user_id, "tipo": tipo, "dados": linha,
-        "episodio_id": linha.get("episodeId"), "message_id": linha.get("messageId"),
-        "schema_version": const_comum.SCHEMA_VERSION_MENSAGEM}))
+    repositorios.tentar_analise("confirmacao", lambda a: a.gravar_confirmacao(_linha_confirmacao(user_id, tipo, linha)))
 
 
 def gravar_alerta_banco(user_id: int, device_id: str, tipo: str, alerta: dict, schema_version: int,
@@ -65,14 +68,21 @@ def gravar_estado_banco(resumo) -> None:
         print(f"  [db] falha ao preparar estado_dispositivo user={resumo.user_id}: {type(e).__name__}: {str(e)[:200]}")
 
 
-def aplicar_alerta(alerta) -> None:
-    """Arquivo alerta_*.json (enquanto const_comum.GRAVAR_ARQUIVOS), tabela `alertas` e log."""
+def _arquivo_alerta(alerta) -> str:
+    """Arquivo alerta_*.json (enquanto const_comum.GRAVAR_ARQUIVOS). Devolve o nome do arquivo."""
     prefixo = "alerta" if alerta.tipo == "luz_inadequada" else "alerta_imobilidade"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")   # so o nome do arquivo (dupla escrita de transicao)
     filename = f"{prefixo}_{nome_seguro(alerta.device_id)}_{timestamp}.json"
     if const_comum.GRAVAR_ARQUIVOS:
+        os.makedirs(const_comum.DATA_DIR, exist_ok=True)
         with open(os.path.join(const_comum.DATA_DIR, filename), "w", encoding="utf-8") as f:
             json.dump(alerta.dados, f, ensure_ascii=False, indent=2)
+    return filename
+
+
+def aplicar_alerta(alerta) -> None:
+    """Arquivo alerta_*.json (enquanto const_comum.GRAVAR_ARQUIVOS), tabela `alertas` e log."""
+    filename = _arquivo_alerta(alerta)
     gravar_alerta_banco(alerta.user_id, alerta.device_id, alerta.tipo, alerta.dados, alerta.schema_version,
                         alerta.instante)
     print(f"  >>> ALERTA gerado: {filename} -> {alerta.dados['mensagem']}")
@@ -100,3 +110,37 @@ def aplicar(decisoes, entregar=None) -> None:
             if entregar is not None:
                 entregar(cmd)
         _isolar(f"comando episodeId={cmd.episodio.episodio_id} user={cmd.user_id}", comando)
+
+
+# ============================================================================
+# S4: a analise que AGE pelo banco (sinalizador comum.const.ACOES_PELO_BANCO)
+# ============================================================================
+def aplicar_na_transacao(tx, decisoes, assinaturas_gravadas: dict, assinaturas_novas: dict) -> list:
+    """Grava as decisoes POR `tx` (a transacao do ciclo da analise), na mesma ordem de `aplicar`: confirmacoes,
+    alertas, estados e, por fim, cada comando (episodio + comando, DS5/DS6). Nao entrega nada (a borda le
+    `comandos_push`) e NAO engole excecao: falha do banco desfaz o ciclo inteiro, cursor incluido (DS5).
+
+    Arquivos de transicao (confirmacoes_usuario_*.jsonl, alerta_*.json) e o log nao entram na transacao: voltam como
+    lista de funcoes para quem chamou executar DEPOIS do commit (senao um ciclo refeito os duplicaria).
+
+    Estado do dispositivo: so grava quando a assinatura muda. `assinaturas_gravadas` e o que ja esta no banco (so
+    leitura); `assinaturas_novas` recebe o que esta sendo gravado nesta tentativa e so deve ser incorporado ao
+    anterior DEPOIS do commit (um rollback nao pode marcar um estado como gravado)."""
+    depois: list = []
+    for c in decisoes.confirmacoes:
+        linha = {"timestamp": c.instante.isoformat(), "tipo": c.tipo, **c.dados}
+        tx.gravar_confirmacao(_linha_confirmacao(c.user_id, c.tipo, linha))
+        depois.append(lambda u=c.user_id, l=linha: regra_queda.gravar_arquivo_confirmacao(u, l))
+    for a in decisoes.alertas:
+        tx.gravar_alerta(a.como_linha())
+        depois.append(lambda a=a: print(f"  >>> ALERTA gerado: {_arquivo_alerta(a)} -> {a.dados['mensagem']}"))
+    for r in decisoes.estados:
+        chave = (r.user_id, r.device_id)
+        if assinaturas_novas.get(chave, assinaturas_gravadas.get(chave)) == r.assinatura:
+            continue
+        tx.gravar_estado_dispositivo(r.como_linha())
+        assinaturas_novas[chave] = r.assinatura
+    for cmd in decisoes.comandos:
+        tx.gravar_episodio(cmd.episodio.como_linha())
+        tx.gravar_comando(cmd.como_linha())
+    return depois

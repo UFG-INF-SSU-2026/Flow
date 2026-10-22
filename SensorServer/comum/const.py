@@ -121,3 +121,10 @@ TTL_ENCERRAMENTO_S = 10
 # Apos uma falha do banco, as escritas (fora a descarga em lote) sao puladas por este tempo (s), para a requisicao
 # nao esperar o tempo limite do pool a cada chamada durante uma queda. Vale para os dois lados (flow_db/repositorios.py).
 DB_PAUSA_APOS_FALHA_S = 5.0
+
+# Sinalizador do CUTOVER das acoes (roadmap do split, S4). 0 (padrao): o caminho direto decide, grava e entrega (como
+# sempre). 1: a ANALISE (laco por cursor) decide e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e
+# `estado_dispositivo` na mesma transacao do cursor; a BORDA le `comandos_push` por cursor, entrega por SSE e grava
+# `entregas_push`. Exige o laco ligado (FLOW_LACO_ANALISE=1), senao ninguem decidiria: sem ele o sinalizador e ignorado
+# (com aviso). Voltar ao caminho direto = FLOW_ACOES_PELO_BANCO=0 e reiniciar. Fica ate o fim da S5.
+ACOES_PELO_BANCO = os.environ.get("FLOW_ACOES_PELO_BANCO", "0") == "1"

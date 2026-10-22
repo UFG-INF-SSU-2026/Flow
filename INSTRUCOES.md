@@ -298,3 +298,19 @@ decide pelo banco (só registra).
    Arquive-o junto da linha de base da S0. Divergência vira correção ou decisão registrada antes da S4.
 5. Uso real: deixe o servidor rodando com `FLOW_SOMBRA=1` e rode `relatorio_sombra.py` sem manifesto
    (apague `dataUsers/sombra_cenarios.json` ou use `--manifesto` com outro caminho; `--desde <epoca>` limita o período).
+
+## Ações pelo banco (S4 do split)
+
+Sinalizador `FLOW_ACOES_PELO_BANCO` (padrão `0`). Com `1` (e `FLOW_LACO_ANALISE=1`):
+
+- as rotas só aceitam e gravam (`leituras`, `respostas_dispositivo`); o caminho direto não decide, não cria o vigia e
+  `/estado/<device_id>` lê `estado_dispositivo`;
+- a **análise** decide e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e `estado_dispositivo` na mesma
+  transação do cursor; o vigia grava os encerramentos `EXPIRADO`; decisão sobre linha velha (> `IDADE_MAX_ACAO_S`) só
+  reconstrói estado e não age;
+- a **borda** (`borda/entrega_push.py`) lê `comandos_push` por cursor (`cursor_borda`), entrega por SSE a app e wokwi e grava
+  `entregas_push` com `comando_id` (resultado `enviado`, `sem_conexao`, `expirado`...).
+
+Voltar ao caminho direto: `FLOW_ACOES_PELO_BANCO=0` e reiniciar (o banco continua válido). Com o sinalizador ligado a sombra
+(`FLOW_SOMBRA`) é ignorada: não há caminho direto para comparar. Fora do escopo da S4 (vai para a S6): reconstruir episódios
+abertos ao reiniciar a análise; enquanto isso, reiniciar com episódio aguardando deixa-o sem o encerramento `EXPIRADO`.
