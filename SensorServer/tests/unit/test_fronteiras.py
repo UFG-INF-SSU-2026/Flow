@@ -40,7 +40,7 @@ def _proibidos(pacote: str, proibidos: set[str], excecoes: tuple[str, ...] = ())
             if arq not in excecoes and _raizes_importadas(arq) & proibidos]
 
 
-FERRAMENTAS_NA_RAIZ = {"medir_latencia.py", "simular_queda.py"}
+FERRAMENTAS_NA_RAIZ = {"medir_latencia.py", "simular_queda.py", "simular_cenarios.py", "relatorio_sombra.py"}
 
 
 def test_nenhum_modulo_antigo_ficou_na_raiz():

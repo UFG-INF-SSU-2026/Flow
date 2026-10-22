@@ -9,6 +9,7 @@ E o UNICO modulo da borda que conhece a analise (conferido por tests/unit/test_f
     estado_do_dispositivo(id)   /estado/<device_id>: resumo do estado da regra de imobilidade
     iniciar_vigia()             thread que encerra episodios vencidos (o unico passo com relogio real)
     iniciar_laco()              S3a: thread do laco da analise por cursor (so registra decisoes em log; nao age)
+    sombra_atual()              S3b: a coleta da comparacao em modo sombra (None se desligada)
 
 O que fica aqui e so o que e da borda: chamar o nucleo, entregar o push aos canais (SSE) e registrar o resultado da
 entrega. A decisao e do nucleo (`analise/nucleo.py`) e a persistencia das decisoes e de `analise/efeitos.py`.
@@ -20,7 +21,7 @@ import time
 from datetime import datetime
 
 from analise import const as const_analise
-from analise import efeitos, laco, nucleo, regra_imobilidade, regra_queda
+from analise import efeitos, laco, nucleo, regra_imobilidade, regra_queda, sombra
 from borda import canal_app, canal_wokwi, tempo
 from flow_db import repositorios
 
@@ -78,9 +79,19 @@ def _entregar_comando(cmd: "nucleo.Comando") -> None:
     _despachar(cmd.user_id, cmd.mensagem)
 
 
-def _aplicar(decisoes: "nucleo.Decisoes") -> None:
+def _observar_para_sombra(decisoes: "nucleo.Decisoes", origem: str) -> None:
+    """S3b: entrega as decisoes do caminho direto a comparacao em modo sombra, ANTES dos efeitos (o `visto_em` e o
+    momento da decisao, nao o fim da gravacao no banco). Nunca levanta (a Sombra ja se protege)."""
+    coleta = _sombra
+    if coleta is not None and decisoes:
+        coleta.registrar(sombra.LADO_DIRETO, decisoes, origem)
+
+
+def _aplicar(decisoes: "nucleo.Decisoes", origem: str = sombra.ORIGEM_LEITURA) -> None:
     """Efeitos das decisoes (analise/efeitos.py) e, depois de gravar cada comando, a entrega aos canais. A falha de
-    um efeito nao impede os demais e nunca vira 500: a telemetria ja foi aceita."""
+    um efeito nao impede os demais e nunca vira 500: a telemetria ja foi aceita. `origem` (leitura, resposta ou
+    vigia) so serve a comparacao em modo sombra."""
+    _observar_para_sombra(decisoes, origem)
     efeitos.aplicar(decisoes, entregar=lambda cmd: _entregar_comando(cmd))
 
 
@@ -92,7 +103,7 @@ def analisar_leitura(user_id: int, device_id: str, fonte: str, dados: dict, vers
     Falha ao decidir ou aplicar fica no log e nao vira 500."""
     try:
         _aplicar(nucleo.processar_leitura(nucleo.PADRAO, nucleo.Leitura(
-            instante, user_id, device_id, fonte, dados, versao)))
+            instante, user_id, device_id, fonte, dados, versao)), sombra.ORIGEM_LEITURA)
     except Exception as e:  # noqa: BLE001
         print(f"  [queda] falha ao avaliar ou emitir o pedido user={user_id}: {type(e).__name__}: {str(e)[:200]}")
 
@@ -102,7 +113,7 @@ def analisar_resposta(user_id: int, device_id: str | None, fonte: str, evento: d
     """Resposta do dispositivo (evento ja normalizado) -> nucleo -> efeitos. O episodio ja esta encerrado no estado
     das regras; se o aviso aos dispositivos falhar, so ele se perde (log)."""
     _aplicar(nucleo.processar_resposta(nucleo.PADRAO, nucleo.Resposta(
-        instante, user_id, device_id, fonte, evento, versao)))
+        instante, user_id, device_id, fonte, evento, versao)), sombra.ORIGEM_RESPOSTA)
 
 
 def estado_do_dispositivo(device_id: str) -> dict | None:
@@ -133,7 +144,7 @@ def _encerrar(enc: "regra_queda.Encerramento") -> None:
 def _vigia_iteracao() -> None:
     """Uma passada do vigia: o nucleo encerra os episodios vencidos (relogio REAL, o unico passo que o usa) e o
     adaptador aplica e despacha o encerramento de cada um. Cada decisao tem a sua propria protecao."""
-    _aplicar(nucleo.vigiar(nucleo.PADRAO, tempo.agora_utc()))
+    _aplicar(nucleo.vigiar(nucleo.PADRAO, tempo.agora_utc()), sombra.ORIGEM_VIGIA)
 
 
 def _vigia_loop() -> None:
@@ -153,21 +164,46 @@ def iniciar_vigia() -> threading.Thread:
 
 
 # ---------------------------------------------------------------------------
-# Laco da analise por cursor (S3a): roda ao lado do caminho direto, SEM agir
+# Laco da analise por cursor (S3a) e comparacao em modo sombra (S3b): rodam ao lado do caminho direto, SEM agir
 # ---------------------------------------------------------------------------
 _laco: "laco.LacoAnalise | None" = None
+_sombra: "sombra.Sombra | None" = None
+
+
+def sombra_atual() -> "sombra.Sombra | None":
+    """A coleta da comparacao em modo sombra (S3b), ou None se desligada (FLOW_SOMBRA=1 liga)."""
+    return _sombra
+
+
+def _ativar_sombra() -> "sombra.Sombra | None":
+    """S3b: cria a coleta (memoria + dataUsers/sombra_decisoes.jsonl) para o caminho direto e o laco a alimentarem.
+    Exige o laco ligado: sem ele a sombra nunca decide e todo registro do caminho direto viraria `faltando`."""
+    global _sombra
+    if not const_analise.SOMBRA_ATIVA:
+        return None
+    if not const_analise.LACO_ATIVO:
+        print("  [sombra] FLOW_SOMBRA=1 ignorado: o laco da analise esta desligado (FLOW_LACO_ANALISE=0)")
+        return None
+    _sombra = sombra.Sombra(sombra.caminho_padrao())
+    print(f"  [sombra] comparacao em modo sombra LIGADA; decisoes dos dois lados em {sombra.caminho_padrao()}")
+    return _sombra
 
 
 def iniciar_laco() -> threading.Thread | None:
     """Sobe o laco da analise (analise/laco.py) como thread do mesmo processo, com o papel flow_analise. Ele le
     `leituras`, `respostas_dispositivo` e `entregas_push` por cursor e so registra as decisoes em log: o caminho
-    direto continua sendo o unico que age. Desligado por FLOW_LACO_ANALISE=0. Chamada uma unica vez por
-    borda/server.iniciar_threads."""
+    direto continua sendo o unico que age. Desligado por FLOW_LACO_ANALISE=0. Com FLOW_SOMBRA=1 (S3b) tambem entrega
+    as decisoes a comparacao em modo sombra. Chamada uma unica vez por borda/server.iniciar_threads."""
     global _laco
     if not const_analise.LACO_ATIVO:
         print("  [laco] desligado (FLOW_LACO_ANALISE=0)")
         return None
-    _laco = laco.LacoAnalise()
+    coleta = _ativar_sombra()
+    observar = None if coleta is None else (lambda d, origem, rec: coleta.registrar(sombra.LADO_SOMBRA, d, origem, rec))
+    if coleta is None:
+        _laco = laco.LacoAnalise()      # sem sombra: como na S3a
+    else:
+        _laco = laco.LacoAnalise(ao_observar=observar, traduzir_resposta=coleta.traduzir_resposta)
     return _laco.iniciar()
 
 

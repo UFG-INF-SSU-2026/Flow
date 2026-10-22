@@ -155,15 +155,24 @@ class LacoAnalise:
       relogio      relogio REAL (so o vigia e a idade das linhas o usam)
       estado       EstadoRegras do laco (padrao: um novo, independente do estado do caminho direto)
       ao_decidir   funcao(decisoes, origem, reconstrucao) chamada para cada decisao nao vazia (padrao: log)
+      ao_observar  S3b: funcao(decisoes, origem, reconstrucao) chamada para TODA `Decisoes` com algum conteudo, inclusive
+                   so resumo de estado ou so descarte (que `ao_decidir` nao recebe). Alimenta a comparacao em modo
+                   sombra (analise/sombra.py). Padrao None: nada muda.
+      traduzir_resposta  S3b: funcao(Resposta) -> Resposta aplicada a cada resposta ANTES do nucleo. So a sombra a usa
+                   (troca o messageId do caminho direto pelo do pedido equivalente do laco). Padrao None.
     """
 
     def __init__(self, obter_repo: Callable[[], RepoAnalise | None] = repositorios.analise,
                  relogio: Callable[[], datetime] = _agora_real, estado: nucleo.EstadoRegras | None = None,
-                 ao_decidir: Callable[[nucleo.Decisoes, str, bool], None] = logar_decisoes):
+                 ao_decidir: Callable[[nucleo.Decisoes, str, bool], None] = logar_decisoes,
+                 ao_observar: Callable[[nucleo.Decisoes, str, bool], None] | None = None,
+                 traduzir_resposta: Callable[[nucleo.Resposta], nucleo.Resposta] | None = None):
         self._obter_repo = obter_repo
         self._relogio = relogio
         self.estado = estado if estado is not None else nucleo.novo_estado()
         self._ao_decidir = ao_decidir
+        self._ao_observar = ao_observar
+        self._traduzir_resposta = traduzir_resposta
         self._parar = threading.Event()
         self._thread: threading.Thread | None = None
         self._ultimo_log_falha = float("-inf")
@@ -201,6 +210,11 @@ class LacoAnalise:
         for item in sorted(itens, key=lambda i: i.instante):
             eh_leitura = isinstance(item, nucleo.Leitura)
             antiga = (agora - item.instante).total_seconds() > limite
+            if not eh_leitura and self._traduzir_resposta is not None:
+                try:
+                    item = self._traduzir_resposta(item)
+                except Exception as e:  # noqa: BLE001  (sem traducao a resposta segue como esta)
+                    print(f"  [laco] falha ao traduzir a resposta (ignorada): {type(e).__name__}")
             try:
                 decisoes = (nucleo.processar_leitura if eh_leitura else nucleo.processar_resposta)(self.estado, item)
             except Exception as e:  # noqa: BLE001  (uma regra com bug nao pode travar o cursor)
@@ -231,6 +245,11 @@ class LacoAnalise:
         print(f"  [laco] {nome} malformada id={linha.get('id')} ignorada (contada, o cursor avanca): {erro}")
 
     def _decidiu(self, decisoes: nucleo.Decisoes, origem: str, reconstrucao: bool) -> None:
+        if self._ao_observar is not None and decisoes:     # `Decisoes.__bool__` inclui estados e descartes
+            try:
+                self._ao_observar(decisoes, origem, reconstrucao)
+            except Exception as e:  # noqa: BLE001  (observar nunca derruba o laco)
+                print(f"  [laco] falha ao observar a decisao (ignorada): {type(e).__name__}")
         if not (decisoes.comandos or decisoes.alertas or decisoes.confirmacoes):
             return
         try:

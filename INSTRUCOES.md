@@ -278,3 +278,23 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 | Telemetria chega, mas o buzzer nunca toca | simulação pausada (aba oculta); sketch não recompilado depois da mudança; comando expirou antes de chegar (o servidor registra a ausência do ack em `confirmacoes_usuario_1.jsonl`) |
 | Erro de compilação em `tone()`/`noTone()` | core `esp32:esp32` abaixo da versão 3.x; atualize com `arduino-cli core upgrade esp32:esp32` |
 | App não toca o alerta | app em segundo plano ou tela bloqueada; o servidor registra `SEM_CANAL_ATIVO` |
+
+## Comparação em modo sombra (S3b do split)
+
+Provisório: vale só até o cutover da S4. Compara o que o caminho direto decide (e executa) com o que o laço da análise
+decide pelo banco (só registra).
+
+1. Banco de pé e migrado; no `SensorServer/.env`, `FLOW_SOMBRA=1` (o laço precisa estar ligado, `FLOW_LACO_ANALISE=1`).
+2. Suba o servidor normalmente. Ele grava `dataUsers/sombra_decisoes.jsonl` (uma linha por decisão, dos dois lados).
+3. Em outro terminal, na pasta `SensorServer`, rode os cenários (leva alguns minutos por causa do cooldown):
+
+   ```bash
+   FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> FLOW_APP_ID=idoso1 FLOW_APP_SECRET=<senha> python simular_cenarios.py
+   ```
+
+   `FLOW_APP_*` é opcional (sem ele, `luz_inadequada` e `app_e_wokwi_juntos` são pulados); a conta do app deve ser do mesmo
+   usuário do bridge. `--lista` mostra os cenários e `--cenarios a,b` roda só alguns.
+4. Gere o relatório: `python relatorio_sombra.py` (grava `docs/split-sombra-relatorio.md`; sai com 0 se tudo estiver OK).
+   Arquive-o junto da linha de base da S0. Divergência vira correção ou decisão registrada antes da S4.
+5. Uso real: deixe o servidor rodando com `FLOW_SOMBRA=1` e rode `relatorio_sombra.py` sem manifesto
+   (apague `dataUsers/sombra_cenarios.json` ou use `--manifesto` com outro caminho; `--desde <epoca>` limita o período).

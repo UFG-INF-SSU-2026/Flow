@@ -140,3 +140,29 @@ INTERVALO_LOG_FALHA_S = 10
 
 # Identifica o codigo da analise no batimento (`cursor_analise.versao_codigo`).
 VERSAO_CODIGO = "s3a-sombra"
+
+# ===========================================================================
+# 6. COMPARACAO EM MODO SOMBRA (S3b do split)
+# ===========================================================================
+
+# Liga a comparacao: o caminho direto e o laco da analise entregam as suas decisoes a analise/sombra.py, que as grava
+# em dataUsers/<SOMBRA_ARQUIVO> (uma linha JSON por decisao) para `python relatorio_sombra.py` comparar. Desligada por
+# padrao (FLOW_SOMBRA=1 liga): so vale a pena enquanto a S3b e a janela de estabilidade da S5 estiverem em curso, e
+# exige o laco ligado (FLOW_LACO_ANALISE=1). A S4/S5 removem esta secao junto com o caminho direto.
+SOMBRA_ATIVA = os.environ.get("FLOW_SOMBRA", "0") == "1"
+
+# Orcamento de latencia do roadmap (secao 9: 3 esperas de 250 ms). E a TOLERANCIA entre o instante de uma decisao
+# do caminho direto e o da mesma decisao na sombra, e o limite do atraso (relogio de parede) com que a sombra decide
+# depois do caminho direto. Para as decisoes do vigia (relogio real, nao o da ingestao) a tolerancia soma os
+# periodos do vigia e do laco (ver analise/sombra.tolerancia_instante).
+ORCAMENTO_LATENCIA_S = 0.75
+
+# Teto de decisoes guardadas em memoria pela sombra (as mais antigas saem). O arquivo nao tem teto: e a fonte do relatorio.
+SOMBRA_MAX_REGISTROS = 20_000
+
+# Arquivo (dentro de comum.const.DATA_DIR) com as decisoes dos dois lados.
+SOMBRA_ARQUIVO = "sombra_decisoes.jsonl"
+
+# Arquivo (dentro de comum.const.DATA_DIR) em que `simular_cenarios.py` anota a janela de tempo de cada cenario, para
+# `relatorio_sombra.py` separar as decisoes por cenario.
+SOMBRA_MANIFESTO = "sombra_cenarios.json"

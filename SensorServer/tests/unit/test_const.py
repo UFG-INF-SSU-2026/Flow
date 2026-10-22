@@ -36,7 +36,7 @@ def _modulos_do_servidor() -> list[str]:
              for f in sorted(glob.glob(os.path.join(RAIZ, p, "*.py"))) if not f.endswith("__init__.py")]
     # Na raiz so entram as ferramentas conhecidas (modulo velho esquecido na raiz e pego por test_fronteiras).
     # simular_queda fica de fora: script de cliente, executa ao importar.
-    return nomes + ["medir_latencia"]
+    return nomes + ["medir_latencia", "simular_cenarios", "relatorio_sombra"]
 
 
 def _arvore(nome: str) -> ast.Module:
