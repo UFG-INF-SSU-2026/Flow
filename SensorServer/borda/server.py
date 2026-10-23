@@ -86,6 +86,7 @@ from borda import auth
 from borda import canal_app
 from borda import canal_wokwi
 from borda import const as const_borda
+from borda import saude
 from borda import tempo
 from borda import validacao
 from comum import const as const_comum
@@ -285,6 +286,23 @@ def _flush_loop() -> None:
                 print(f"  [flush] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
+def _estatisticas_borda() -> dict:
+    with _fila_lock:
+        return {"fila_leituras": len(_fila_leituras), "leituras_descartadas": _descartes_leituras}
+
+
+_monitor: "saude.MonitorSaude | None" = None
+
+
+def _monitor_saude() -> "saude.MonitorSaude":
+    """O monitor de saude do pipeline (S6), criado na primeira necessidade (a rota /health ou a subida das threads)."""
+    global _monitor
+    if _monitor is None:
+        _monitor = saude.MonitorSaude(monitorada=lambda: _pipeline().analise_monitoravel(),
+                                      estatisticas=_estatisticas_borda)
+    return _monitor
+
+
 @app.errorhandler(413)
 def _corpo_grande(_erro):
     """Corpo acima de const_borda.MAX_CONTENT_LENGTH (o Flask levanta ao ler o corpo). Entra na auditoria como as demais negacoes."""
@@ -480,7 +498,10 @@ def obter_estado_imobilidade(device_id):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    """Disponibilidade da borda (`status`, como sempre) e, desde a S6, o estado do pipeline: se a analise esta decidindo
+    (batimento e atraso lidos do banco) e os contadores locais da fila de leituras. Sempre 200: a borda esta de pe mesmo
+    com a analise parada; quem monitora olha `pipeline.estado` (borda/saude.py)."""
+    return jsonify({"status": "ok", **_monitor_saude().corpo()})
 
 
 @app.route("/", methods=["GET"])
@@ -509,6 +530,8 @@ def iniciar_threads() -> None:
         _thread_flush = threading.Thread(target=_flush_loop, name="flow-flush", daemon=True)
         _thread_flush.start()
         _pipeline().iniciar()
+        if _pipeline().analise_monitoravel():
+            _monitor_saude().iniciar()     # S6: alarmes em log (atraso, batimento velho, descartes); so com a analise pelo banco
         _threads_iniciadas = True
 
 
@@ -542,6 +565,8 @@ def encerrar(prazo_s: float | None = None) -> None:
             _thread_flush.join(prazo)
         _thread_flush = None
         try:
+            if _monitor is not None:
+                _monitor.parar(prazo)
             _pipeline().parar(prazo)
         except Exception as e:  # noqa: BLE001  (o desligamento segue)
             print(f"  [borda] falha ao parar o pipeline (segue): {type(e).__name__}: {str(e)[:200]}")

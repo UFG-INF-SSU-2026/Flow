@@ -176,3 +176,26 @@ SOMBRA_MANIFESTO = "sombra_cenarios.json"
 
 # Desligamento ordenado da analise (`python -m analise`): tempo maximo (s) para o ciclo em curso chegar ao commit do cursor.
 PRAZO_ENCERRAMENTO_ANALISE_S = 10
+
+# ===========================================================================
+# 8. OBSERVABILIDADE E RESILIENCIA (S6 do split)
+# ===========================================================================
+
+# Recuperacao na subida: a analise reconstroi o estado das janelas das regras relendo as leituras dos ULTIMOS
+# JANELA_REPROCESSAMENTO_S segundos que ja estao ANTES do cursor (ja processadas pela instancia anterior). Tem de cobrir
+# com folga a maior janela das regras (fusao, pos-impacto, imobilidade, debounce da luz e a referencia da deduplicacao).
+# Os episodios abertos (e os recentes, para o cooldown e a classificacao de resposta tardia) NAO sao reconstruidos por
+# leitura: vem de `episodios` e `comandos_push`. Nada do que for relido gera acao.
+JANELA_REPROCESSAMENTO_S = 30
+
+# Teto de leituras relidas na recuperacao (as mais recentes ate o cursor). Protege a memoria se a janela tiver muito dado.
+LIMITE_REPROCESSAMENTO = 5_000
+
+# FLOW_RECUPERAR_ESTADO=0 desliga a recuperacao na subida (volta ao comportamento da S5: estado das regras vazio).
+RECUPERAR_AO_INICIAR = os.environ.get("FLOW_RECUPERAR_ESTADO", "1") != "0"
+
+# Alarme de atraso: se a leitura mais antiga de um ciclo ja tem mais que isto (s) ao ser lida, a analise esta atrasada
+# (o log registra). Menor que IDADE_MAX_ACAO_S: avisa ANTES de as acoes comecarem a ser descartadas por idade. No maximo
+# uma linha por INTERVALO_LOG_FALHA_S, que tambem limita o alarme de leituras descartadas por idade (o contador acumula
+# entre uma linha e outra, nada se perde).
+LIMIAR_ATRASO_ANALISE_S = 15

@@ -136,3 +136,33 @@ def test_telemetria_e_auditoria(borda, admin):
 def test_consultar_leituras_mais_recentes_primeiro(borda):
     borda.gravar_leituras([leitura(i) for i in range(3)])
     assert [l["payload"]["x"] for l in borda.consultar_leituras(1, limite=2)] == [2, 1]
+
+
+# ------------------------------------------------------------------ S6: leituras da recuperacao na subida
+def test_leituras_recentes_ate_o_cursor_as_mais_recentes_em_ordem_de_id(borda, analise):
+    borda.gravar_leituras([leitura(i * 10) for i in range(5)])              # t = 0, 10, 20, 30, 40
+    ids = [l["id"] for l in analise.ler_leituras_novas(0)]
+    recentes = analise.ler_leituras_recentes(ids[3], T0 + timedelta(seconds=10), 100)
+    assert [l["payload"]["x"] for l in recentes] == [10, 20, 30]            # nao passa do cursor, nem da janela
+    assert [l["payload"]["x"] for l in analise.ler_leituras_recentes(ids[3], T0, 2)] == [20, 30]   # as MAIS recentes
+    assert analise.ler_leituras_recentes(0, T0, 100) == []
+
+
+def test_episodios_recentes_trazem_os_abertos_de_qualquer_idade(analise):
+    analise.gravar_episodio(episodio(episodio_id="velho-aberto", aberto_em=T0 - timedelta(days=2),
+                                     atualizado_em=T0 - timedelta(days=2)))
+    analise.gravar_episodio(episodio(episodio_id="velho-encerrado", estado="encerrado", aberto_em=T0 - timedelta(days=2),
+                                     atualizado_em=T0 - timedelta(days=2), encerrado_em=T0 - timedelta(days=2),
+                                     motivo_encerramento="EXPIRADO"))
+    analise.gravar_episodio(episodio(episodio_id="recente-encerrado", estado="encerrado", encerrado_em=T0,
+                                     motivo_encerramento="CONFIRMADO"))
+    achados = analise.listar_episodios_recentes(T0 - timedelta(hours=1))
+    assert [e["episodio_id"] for e in achados] == ["velho-aberto", "recente-encerrado"]
+
+
+def test_comandos_de_episodios_trazem_o_message_id(analise):
+    analise.gravar_comando(comando("m1", 0))
+    analise.gravar_comando({**comando("m2", 1), "episodio_id": "outro"})
+    achados = analise.listar_comandos_de_episodios(["e1"])
+    assert [(c["episodio_id"], c["message_id"]) for c in achados] == [("e1", "m1")]
+    assert analise.listar_comandos_de_episodios([]) == []

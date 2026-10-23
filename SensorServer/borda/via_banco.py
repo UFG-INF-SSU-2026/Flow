@@ -7,6 +7,7 @@ nenhum import de `analise`: o processo da borda carrega so o seu pacote.
     analisar_leitura / analisar_resposta   nada a fazer: a leitura ja foi para a fila de descarga e a resposta ja foi
                                            gravada em `respostas_dispositivo` pela rota; quem decide e o OUTRO processo
     estado_do_dispositivo(id)              le `estado_dispositivo` (DS3), onde a analise o grava
+    analise_monitoravel()                  S6: True, a analise e outro processo e o /health acompanha o batimento dela
     iniciar()                              sobe a thread que le `comandos_push` por cursor e entrega por SSE
     parar()                                desligamento ordenado: o ciclo de entrega em curso termina
 """
@@ -31,6 +32,10 @@ def estado_do_dispositivo(device_id: str) -> dict | None:
     repo = repositorios.borda()
     linha = None if repo is None else repo.ler_estado_por_dispositivo(device_id)
     return None if linha is None else linha["estado"]
+
+
+def analise_monitoravel() -> bool:
+    return True
 
 
 _entrega: "entrega_push.EntregaPush | None" = None

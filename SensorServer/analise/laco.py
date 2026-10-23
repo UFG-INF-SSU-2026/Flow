@@ -13,8 +13,8 @@ O QUE O LACO FAZ NA S3a (e o que nao faz)
     enxergam, e a S3b compara o que cada um decidiu.
   - As entregas (`entregas_push`) nao alimentam o nucleo (ele nao tem entrada para elas); o laco as le, avanca o cursor
     e conta por resultado. Na S4 e a partir delas que a analise decide reenvio ou escalonamento (roadmap, secao 10).
-  - Leitura de ESTADO por reprocessamento (janela anterior ao cursor) e do S6; aqui o estado das regras comeca vazio
-    a cada subida do processo.
+  - Leitura de ESTADO por reprocessamento (janela anterior ao cursor): S6, ver `recuperar_estado` abaixo. Sem ela o
+    estado das regras comeca vazio a cada subida do processo.
 
 S4 (comum.const.ACOES_PELO_BANCO, `agir=True`): o laco passa a AGIR. Cada decisao sobre linha recente e gravada por
 `efeitos.aplicar_na_transacao` na MESMA transacao do cursor (DS5); o vigia grava os encerramentos numa transacao propria.
@@ -32,6 +32,21 @@ GARANTIAS
   - O vigia (expiracao de episodios) e um PASSO SEPARADO que usa o relogio real, atrasado de ATRASO_VIGIA_S.
     Sem ele os episodios do laco nunca encerrariam e o estado divergiria do caminho direto.
 
+S6 (observabilidade e resiliencia):
+  - RECUPERACAO NA SUBIDA (`recuperar_estado`, chamada pela thread antes do primeiro ciclo quando o laco AGE): rele as
+    leituras dos ultimos `JANELA_REPROCESSAMENTO_S` s ate o cursor para reconstruir as janelas das regras (maquina de
+    impacto, fusao, imobilidade, luz, deduplicacao) SEM gerar acao, e devolve ao estado os episodios que o banco ja
+    conhece (abertos, e os recentes, para cooldown e resposta tardia) com as `messageId` dos seus pedidos. Depois disso o
+    laco segue do cursor: so age sobre linha recente (principio 4). Se o banco falhar na recuperacao, nenhum ciclo roda
+    (o cursor nem avancaria) e a thread tenta de novo.
+  - LINHA ANTIGA (principio 4), duas regras que a S6 fecha: (1) o episodio que uma linha antiga abre e ficcao (nao virou push
+    nem registro) e SAI do estado na hora, para nao bloquear nem por em cooldown a queda real que vier logo depois;
+    (2) a resposta antiga que encerra um episodio que o banco ja tem (o idoso respondeu enquanto a analise estava parada)
+    NAO e descartada: e escrituracao de um episodio real, e sem ela ele ficaria aberto no banco para sempre.
+  - ALARMES em log: atraso (a leitura mais antiga do ciclo passou de `LIMIAR_ATRASO_ANALISE_S`) e leituras/respostas
+    descartadas por idade (so reconstroem estado). No maximo uma linha por `INTERVALO_LOG_FALHA_S`, com o contador
+    acumulado: nada se perde entre uma linha e outra. O batimento velho e acusado do outro lado, pelo /health da borda.
+
 ORDEM. Dentro de um ciclo, leituras e respostas sao processadas juntas, em ordem de instante de ingestao (estavel: em
 empate, leituras antes de respostas). Os fluxos tem cursores independentes; um lote cortado pelo limite pode deixar
 uma resposta para o ciclo seguinte, o que e inofensivo porque o ciclo seguinte comeca sem espera quando o lote enche.
@@ -39,12 +54,14 @@ uma resposta para o ciclo seguinte, o que e inofensivo porque o ciclo seguinte c
 Sem Flask e sem `borda` (conferido por tests/unit/test_fronteiras.py). A analise nao tem porta de rede.
 """
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from analise import const as const_analise
-from analise import nucleo
+from analise import nucleo, regra_queda
 from comum import const as const_comum
+from comum import mensagens
 from analise import efeitos
 from flow_db import ciclo_analise, repositorios
 from flow_db.repo_analise import RepoAnalise
@@ -145,6 +162,15 @@ def _contar(decisoes: nucleo.Decisoes, metricas: dict, antiga: bool) -> None:
         metricas[M_DECISOES_ANTIGAS] = metricas.get(M_DECISOES_ANTIGAS, 0) + n
 
 
+@dataclass(frozen=True)
+class ResultadoRecuperacao:
+    """O que a recuperacao na subida fez (S6)."""
+    leituras_relidas: int       # leituras reprocessadas (so para reconstruir estado, sem acao)
+    leituras_ignoradas: int     # malformadas ou com falha na regra: ja contadas quando foram processadas de verdade
+    episodios: int              # episodios devolvidos ao estado (abertos e recentes)
+    abertos: int                # destes, os ainda abertos (o vigia vai encerra-los no prazo)
+
+
 # ============================================================================
 # O laco
 # ============================================================================
@@ -169,6 +195,9 @@ class LacoAnalise:
                    que IDADE_MAX_ACAO_S nao age (principio 4). Padrao False: so registra (S3a/S3b).
       traduzir_resposta  S3b: funcao(Resposta) -> Resposta aplicada a cada resposta ANTES do nucleo. So a sombra a usa
                    (troca o messageId do caminho direto pelo do pedido equivalente do laco). Padrao None.
+      recuperar    S6: a thread (`iniciar`) roda `recuperar_estado()` antes do primeiro ciclo. Padrao None = so quando o laco
+                   AGE e const_analise.RECUPERAR_AO_INICIAR. `executar_ciclo()` nunca recupera sozinho (os testes chamam
+                   `recuperar_estado()` quando querem).
     """
 
     def __init__(self, obter_repo: Callable[[], RepoAnalise | None] = repositorios.analise,
@@ -176,7 +205,7 @@ class LacoAnalise:
                  ao_decidir: Callable[[nucleo.Decisoes, str, bool], None] = logar_decisoes,
                  ao_observar: Callable[[nucleo.Decisoes, str, bool], None] | None = None,
                  traduzir_resposta: Callable[[nucleo.Resposta], nucleo.Resposta] | None = None,
-                 agir: bool = False):
+                 agir: bool = False, recuperar: bool | None = None):
         self._obter_repo = obter_repo
         self._relogio = relogio
         self.estado = estado if estado is not None else nucleo.novo_estado()
@@ -184,13 +213,17 @@ class LacoAnalise:
         self._ao_observar = ao_observar
         self._traduzir_resposta = traduzir_resposta
         self._agir = agir
+        self._recuperar = (agir and const_analise.RECUPERAR_AO_INICIAR) if recuperar is None else recuperar
+        self.recuperado = False                           # True depois de recuperar_estado() concluir (S6)
+        self._ultimo_lote: tuple | None = None            # (idade da leitura mais antiga, metricas) do ciclo em curso
+        self._alarme: dict = {"leituras": 0, "respostas": 0, "decisoes": 0, "atraso_s": 0.0}
+        self._ultimo_alarme = float("-inf")
         # --- so com agir (S4) ---
         self._estado_gravado: dict = {}                   # (user, device) -> assinatura do estado JA no banco (pos-commit)
         self._assinaturas_novas: dict = {}                # as da tentativa em curso (so entram em _estado_gravado no commit)
         self._depois_do_commit: list = []                 # arquivos/log da tentativa em curso, para rodar depois do commit
         self._decisoes_por_linha: dict = {}               # (fluxo, id) -> Decisoes ja decididas num ciclo que nao fez commit
         self._vigia_pendente = nucleo.Decisoes()          # encerramentos do vigia que ainda nao chegaram ao banco
-        self._episodios_sem_acao: set = set()             # abertos por linha antiga (reconstrucao): o vigia nao age sobre eles
         self._parar = threading.Event()
         self._thread: threading.Thread | None = None
         self._ultimo_log_falha = float("-inf")
@@ -204,10 +237,12 @@ class LacoAnalise:
         if repo is None:
             return None
         self._assinaturas_novas, self._depois_do_commit = {}, []      # tentativa nova (a anterior, se falhou, foi desfeita)
+        self._ultimo_lote = None
         versao = const_analise.VERSAO_CODIGO_ACOES if self._agir else const_analise.VERSAO_CODIGO
         resultado = ciclo_analise.processar_ciclo(repo, self._processar_lote, versao_codigo=versao)
         if self._agir:
             self._apos_commit()
+        self._alarmar()
         self.passo_vigia()
         return resultado
 
@@ -265,13 +300,21 @@ class LacoAnalise:
             if antiga:
                 chave = M_LEITURAS_ANTIGAS if eh_leitura else M_RESPOSTAS_ANTIGAS
                 metricas[chave] = metricas.get(chave, 0) + 1
-            _contar(decisoes, metricas, antiga)
-            if self._agir and not antiga:
+            # S6: linha antiga so reconstroi estado, EXCETO a resposta que encerra um episodio que o banco ja tem (o idoso
+            # disse "Estou bem" enquanto a analise estava parada): isso e escrituracao de um episodio real, e sem ela o
+            # episodio ficaria aberto no banco para sempre. O encerramento sai com a validade do instante da resposta, e a
+            # borda o marca como `expirado` em vez de entregar.
+            sem_acao = antiga and not (self._agir and not eh_leitura and decisoes.comandos)
+            _contar(decisoes, metricas, sem_acao)
+            if self._agir and not sem_acao:
                 self._depois_do_commit += efeitos.aplicar_na_transacao(
                     _tx, decisoes, self._estado_gravado, self._assinaturas_novas)
             elif self._agir:
-                self._episodios_sem_acao.update(c.episodio.episodio_id for c in decisoes.comandos)
-            self._decidiu(decisoes, "leitura" if eh_leitura else "resposta", antiga)
+                # O episodio que a linha antiga abriu e ficcao: nao virou push nem registro. Sai do estado AGORA, senao
+                # bloquearia (aberto) ou poria em cooldown (encerrado) a queda real que vem logo depois (principio 4).
+                for c in decisoes.comandos:
+                    regra_queda.descartar_episodio(c.user_id, c.episodio.episodio_id, self.estado.queda)
+            self._decidiu(decisoes, "leitura" if eh_leitura else "resposta", sem_acao)
 
         for e in lote.entregas:
             metricas[M_ENTREGAS] = metricas.get(M_ENTREGAS, 0) + 1
@@ -280,6 +323,8 @@ class LacoAnalise:
             metricas[chave] = metricas.get(chave, 0) + 1
             if resultado != "enviado":
                 print(f"  [laco] entrega sem sucesso resultado={resultado} canal={e.get('canal')} user={e.get('user_id')}")
+        idade = (agora - min(item.instante for _, item in itens)).total_seconds() if itens else None
+        self._ultimo_lote = (idade, dict(metricas))      # o alarme so e emitido depois do commit (ciclo refeito nao duplica)
         return metricas
 
     @staticmethod
@@ -300,6 +345,104 @@ class LacoAnalise:
         except Exception as e:  # noqa: BLE001  (registrar nunca derruba o laco)
             print(f"  [laco] falha ao registrar a decisao (ignorada): {type(e).__name__}")
 
+    # ---- recuperacao na subida (S6) ----
+    def recuperar_estado(self) -> ResultadoRecuperacao | None:
+        """Reconstroi o estado das regras depois de uma subida (S6). Devolve None se nao ha banco.
+
+        1. RELE (so leitura) as leituras dos ultimos `JANELA_REPROCESSAMENTO_S` s ate o cursor (as mais recentes, ate
+           `LIMITE_REPROCESSAMENTO`) e as passa pelo nucleo num estado NOVO, em ordem de ingestao. As decisoes saem e sao
+           DESCARTADAS: nada e gravado, nada e entregue. So interessa o que ficou na memoria das regras (maquina do
+           impacto, fusao de fontes, imobilidade, luz, deduplicacao). A janela e ancorada no instante da ultima leitura
+           processada (nao no relogio): reconstroi o estado como ele estava no cursor, qualquer que tenha sido a parada.
+        2. RESTAURA os episodios pelo banco, nao pela releitura: a releitura de uma queda ja tratada abriria um episodio
+           novo (outro id) e o vigia o encerraria como se fosse real. Por isso os episodios e o mapa de mensagens que a
+           releitura deixou sao descartados e substituidos pelos de `episodios` e `comandos_push` (abertos e atualizados na
+           ultima `RETENCAO_MENSAGENS_S`): o aberto continua aberto com as mesmas `messageId` (a resposta do idoso ainda o
+           encerra), o encerrado ainda vale para o cooldown, e a resposta a um episodio velho e classificada como tardia.
+        3. As respostas NAO sao relidas: so mexem em episodios e mensagens, que vem do banco (passo 2).
+
+        Tudo e lido ANTES de o estado ser trocado: se o banco falhar no meio, `self.estado` fica como estava e a excecao
+        SOBE (a thread tenta de novo; sem recuperar, nenhum ciclo age). Chame uma vez, antes do primeiro ciclo: o
+        estado anterior e substituido. Idempotente (rele o mesmo que da outra vez)."""
+        repo = self._obter_repo()
+        if repo is None:
+            return None
+        agora = self._relogio()
+        cursor = repo.ler_cursor()
+        referencia = cursor.get("ultimo_leitura_instante") or agora
+        linhas = repo.ler_leituras_recentes(cursor["ultimo_leitura_id"],
+                                            referencia - timedelta(seconds=const_analise.JANELA_REPROCESSAMENTO_S),
+                                            const_analise.LIMITE_REPROCESSAMENTO)
+        episodios = repo.listar_episodios_recentes(agora - timedelta(seconds=const_analise.RETENCAO_MENSAGENS_S))
+        comandos = repo.listar_comandos_de_episodios([e["episodio_id"] for e in episodios])
+
+        novo = nucleo.novo_estado()
+        ignoradas, itens = 0, []
+        for linha in linhas:
+            try:
+                itens.append(leitura_de_linha(linha))
+            except ValueError:      # inclui LinhaMalformada (ja contada quando a linha foi processada de verdade)
+                ignoradas += 1
+        for leitura in sorted(itens, key=lambda l: l.instante):
+            try:
+                nucleo.processar_leitura(novo, leitura)         # decisoes descartadas: reconstrucao pura
+            except Exception:  # noqa: BLE001  (uma regra com bug nao pode impedir a subida)
+                ignoradas += 1
+
+        regra_queda.limpar_episodios(novo.queda)                # o que a releitura abriu e fantasma
+        mensagens_do_episodio: dict[str, list[str]] = {}
+        for c in comandos:
+            if c.get("tipo") == mensagens.TIPO_SOLICITADA and c.get("message_id"):
+                mensagens_do_episodio.setdefault(c["episodio_id"], []).append(c["message_id"])
+        abertos = 0
+        for e in episodios:                                     # ordem crescente de aberto_em
+            encerrado = e["estado"] == "encerrado"
+            fim = (e.get("encerrado_em") or e["atualizado_em"]) if encerrado else None
+            regra_queda.restaurar_episodio(
+                e["user_id"], e["episodio_id"], e["tipo"], e["aberto_em"].timestamp(),
+                None if fim is None else fim.timestamp(), e.get("motivo_encerramento") if encerrado else None,
+                mensagens_do_episodio.get(e["episodio_id"], ()), novo.queda)
+            abertos += 0 if encerrado else 1
+
+        self.estado = novo                                      # troca no fim: nada fica pela metade
+        self.recuperado = True
+        resultado = ResultadoRecuperacao(len(itens), ignoradas, len(episodios), abertos)
+        print(f"  [laco] recuperacao: {resultado.leituras_relidas} leitura(s) relida(s) (janela de "
+              f"{const_analise.JANELA_REPROCESSAMENTO_S}s ate o cursor), {resultado.episodios} episodio(s) restaurado(s), "
+              f"{resultado.abertos} aberto(s)")
+        return resultado
+
+    # ---- alarmes (S6) ----
+    def _alarmar(self) -> None:
+        """Alarmes de atraso e de leituras/respostas descartadas por idade, depois do commit do ciclo. Acumula entre as
+        linhas de log (no maximo uma por INTERVALO_LOG_FALHA_S): nada que aconteceu entre duas linhas se perde. Nunca levanta."""
+        try:
+            if self._ultimo_lote is None:
+                return
+            idade, metricas = self._ultimo_lote
+            acum = self._alarme
+            acum["leituras"] += metricas.get(M_LEITURAS_ANTIGAS, 0)
+            acum["respostas"] += metricas.get(M_RESPOSTAS_ANTIGAS, 0)
+            acum["decisoes"] += metricas.get(M_DECISOES_ANTIGAS, 0)
+            if idade is not None:
+                acum["atraso_s"] = max(acum["atraso_s"], idade)
+            atrasada = acum["atraso_s"] > const_analise.LIMIAR_ATRASO_ANALISE_S
+            antigas = acum["leituras"] or acum["respostas"]
+            agora = self._relogio().timestamp()
+            if not (atrasada or antigas) or agora - self._ultimo_alarme < const_analise.INTERVALO_LOG_FALHA_S:
+                return
+            self._ultimo_alarme = agora
+            if atrasada:
+                print(f"  [laco] ALARME atraso: a leitura mais antiga lida tinha {acum['atraso_s']:.1f}s "
+                      f"(limiar {const_analise.LIMIAR_ATRASO_ANALISE_S}s); a analise esta atrasada")
+            if antigas:
+                print(f"  [laco] ALARME descartadas por idade: {acum['leituras']} leitura(s) e {acum['respostas']} "
+                      f"resposta(s) com mais de {const_analise.IDADE_MAX_ACAO_S}s so reconstruiram estado, sem acao "
+                      f"({acum['decisoes']} decisao(oes) nao executada(s))")
+            self._alarme = {"leituras": 0, "respostas": 0, "decisoes": 0, "atraso_s": 0.0}
+        except Exception as e:  # noqa: BLE001  (alarme nunca derruba o laco)
+            print(f"  [laco] falha ao emitir alarme (ignorada): {type(e).__name__}")
+
     # ---- vigia ----
     def passo_vigia(self) -> nucleo.Decisoes:
         """Encerra como EXPIRADO os episodios vencidos NO ESTADO DO LACO. Unico passo com relogio real (atrasado de
@@ -319,10 +462,6 @@ class LacoAnalise:
     def _gravar_vigia(self, decisoes: nucleo.Decisoes) -> None:
         """S4: grava os encerramentos EXPIRADO numa transacao propria. Se falhar, o estado das regras ja os registrou
         como encerrados: guarda-os e tenta de novo no proximo passo (nao se perdem). Nunca levanta."""
-        if self._episodios_sem_acao:       # principio 4: episodio reconstruido de dado velho nao vira push nem registro
-            decisoes.comandos[:] = [c for c in decisoes.comandos if c.episodio.episodio_id not in self._episodios_sem_acao]
-            decisoes.confirmacoes[:] = [c for c in decisoes.confirmacoes
-                                        if c.dados.get("episodeId") not in self._episodios_sem_acao]
         self._vigia_pendente.somar(decisoes)
         if not self._vigia_pendente:
             return
@@ -353,6 +492,14 @@ class LacoAnalise:
 
     def _repetir(self) -> None:
         while not self._parar.is_set():
+            if self._recuperar and not self.recuperado:
+                try:
+                    self.recuperar_estado()
+                except Exception as e:  # noqa: BLE001  (sem recuperar nenhum ciclo age: tenta de novo)
+                    self._falha(e)
+                if not self.recuperado:
+                    self._parar.wait(const_analise.INTERVALO_LEITURA_S)
+                continue
             cheio = False
             try:
                 resultado = self.executar_ciclo()

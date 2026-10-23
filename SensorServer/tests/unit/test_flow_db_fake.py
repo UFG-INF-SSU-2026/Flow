@@ -193,3 +193,34 @@ class TestSaudeEAuditoria:
         borda.gravar_auditoria({"instante": T0, "rota": "/dados", "status": 401, "motivo": "token_ausente"})
         borda.gravar_telemetria([{"instante": T0, "user_id": 1, "app": {"a": 1}, "wokwi": None}])
         assert len(borda._b.tabelas["auditoria"]) == 1 and len(borda._b.tabelas["telemetria"]) == 1
+
+
+class TestLeiturasDaRecuperacao:
+    """S6: o mesmo contrato que tests/banco/test_contrato_repos.py confere no Postgres real."""
+
+    def test_leituras_recentes_ate_o_cursor_as_mais_recentes_em_ordem_de_id(self, borda, analise):
+        borda.gravar_leituras([leitura(seg=i * 10) for i in range(5)])
+        ids = [l["id"] for l in analise.ler_leituras_novas(0)]
+        recentes = analise.ler_leituras_recentes(ids[3], T0 + timedelta(seconds=10), 100)
+        assert [l["payload"]["x"] for l in recentes] == [10, 20, 30]
+        assert [l["payload"]["x"] for l in analise.ler_leituras_recentes(ids[3], T0, 2)] == [20, 30]
+        assert analise.ler_leituras_recentes(0, T0, 100) == []
+
+    def test_episodios_recentes_trazem_os_abertos_de_qualquer_idade(self, analise):
+        base = {"user_id": 1, "device_id": None, "tipo": "X", "dados": {}}
+        antigo = T0 - timedelta(days=2)
+        analise.gravar_episodio({**base, "episodio_id": "velho-aberto", "estado": "aguardando_confirmacao",
+                                 "aberto_em": antigo, "atualizado_em": antigo})
+        analise.gravar_episodio({**base, "episodio_id": "velho-encerrado", "estado": "encerrado", "aberto_em": antigo,
+                                 "atualizado_em": antigo, "encerrado_em": antigo, "motivo_encerramento": "EXPIRADO"})
+        analise.gravar_episodio({**base, "episodio_id": "recente-encerrado", "estado": "encerrado", "aberto_em": T0,
+                                 "atualizado_em": T0, "encerrado_em": T0, "motivo_encerramento": "CONFIRMADO"})
+        achados = analise.listar_episodios_recentes(T0 - timedelta(hours=1))
+        assert [e["episodio_id"] for e in achados] == ["velho-aberto", "recente-encerrado"]
+
+    def test_comandos_de_episodios_trazem_o_message_id(self, analise):
+        analise.gravar_comando(comando("m1", 0, episodio_id="e1"))
+        analise.gravar_comando(comando("m2", 1, episodio_id="outro"))
+        achados = analise.listar_comandos_de_episodios(["e1"])
+        assert [(c["episodio_id"], c["message_id"]) for c in achados] == [("e1", "m1")]
+        assert analise.listar_comandos_de_episodios([]) == []

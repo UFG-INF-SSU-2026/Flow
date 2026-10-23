@@ -7,6 +7,7 @@ E o UNICO modulo da borda que conhece a analise (conferido por tests/unit/test_f
     analisar_leitura(...)       /dados:   leitura aceita -> nucleo -> efeitos -> entrega de push
     analisar_resposta(...)      /eventos: resposta do dispositivo -> nucleo -> efeitos -> entrega de push
     estado_do_dispositivo(id)   /estado/<device_id>: resumo do estado da regra de imobilidade
+    analise_monitoravel()       S6: True quando o /health deve acompanhar o batimento da analise (acoes_pelo_banco())
     iniciar_vigia()             thread que encerra episodios vencidos (o unico passo com relogio real)
     iniciar_laco()              S3a: thread do laco da analise por cursor (so registra decisoes em log; nao age)
     sombra_atual()              S3b: a coleta da comparacao em modo sombra (None se desligada)
@@ -129,6 +130,12 @@ def analisar_resposta(user_id: int, device_id: str | None, fonte: str, evento: d
         return
     _aplicar(nucleo.processar_resposta(nucleo.PADRAO, nucleo.Resposta(
         instante, user_id, device_id, fonte, evento, versao)), sombra.ORIGEM_RESPOSTA)
+
+
+def analise_monitoravel() -> bool:
+    """S6: o /health so acompanha o batimento da analise quando ela decide pelo banco (acoes_pelo_banco()). No caminho
+    direto quem decide e este processo, e o laco (se ligado) so registra: o batimento dele nao diz nada sobre as quedas."""
+    return acoes_pelo_banco()
 
 
 def estado_do_dispositivo(device_id: str) -> dict | None:

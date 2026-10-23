@@ -8,7 +8,13 @@ Faz login como o bridge (conta 'dispositivo', fonte wokwi), abre o SSE /push/wok
   - imobilidade:  1 decisao ALERTA_IMOBILIDADE (gatilho B). Tempo = envio da decisao ate o push chegar.
 Entre rodadas espera o episodio expirar e o cooldown passar (const_analise.COOLDOWN_S): por isso cada rodada leva ~1 min.
 
-Uso (na pasta SensorServer, com o servidor rodando):
+S6: com a linha de base da S0 (as medianas medidas ANTES do split) o script diz se o split coube no orcamento do roadmap
+(secao 9: const_analise.ORCAMENTO_LATENCIA_S, 3 esperas de 250 ms). Informe as medianas da S0 em segundos:
+    FLOW_LATENCIA_BASE_QUEDA_S=<mediana da queda>  FLOW_LATENCIA_BASE_IMOB_S=<mediana da imobilidade>
+O veredito compara o PIOR CASO medido com a base mais o orcamento. Fora do orcamento: o roadmap manda avaliar
+LISTEN/NOTIFY, so como complemento ao cursor. Sem a base, o script so imprime os tempos.
+
+Uso (na pasta SensorServer, com o servidor rodando; a borda e a analise sobem por `python -m borda` e `python -m analise`):
     FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python medir_latencia.py [URL_BASE] [RODADAS]
 """
 import json
@@ -124,6 +130,31 @@ def resumo(nome, medidas):
         print(f"  min {min(ok):.2f}  mediana {statistics.median(ok):.2f}  max {max(ok):.2f}")
 
 
+def base_da_s0(nome: str) -> float | None:
+    """Mediana medida na S0 (variavel de ambiente `nome`, em segundos), ou None se nao informada."""
+    bruto = os.environ.get(nome)
+    if not bruto:
+        return None
+    try:
+        return float(bruto.replace(",", "."))
+    except ValueError:
+        raise SystemExit(f"{nome} invalida: {bruto!r} (esperado um numero em segundos)")
+
+
+def veredito(nome, medidas, base):
+    """Compara o pior caso medido com `base` + orcamento de latencia (roadmap, secao 9). Imprime e devolve True (cabe),
+    False (nao cabe) ou None (sem base ou sem medida)."""
+    ok = [m for m in medidas if m is not None]
+    if base is None or not ok:
+        return None
+    orcamento = const_analise.ORCAMENTO_LATENCIA_S
+    acrescimo_mediano, acrescimo_pior = statistics.median(ok) - base, max(ok) - base
+    cabe = acrescimo_pior <= orcamento
+    print(f"  {nome}: base S0 {base:.2f}s; acrescimo mediano {acrescimo_mediano:+.2f}s, pior caso {acrescimo_pior:+.2f}s "
+          f"(orcamento {orcamento:.2f}s) -> {'DENTRO do orcamento' if cabe else 'FORA do orcamento'}")
+    return cabe
+
+
 def main():
     global BASE, RODADAS, H, USER
     BASE = (sys.argv[1] if len(sys.argv) > 1 else BASE).rstrip("/")
@@ -145,6 +176,13 @@ def main():
             esperar_cooldown()
     resumo("queda (impacto -> push; inclui os 3 s de imobilidade exigidos)", queda)
     resumo("imobilidade (decisao -> push)", imob)
+    vereditos = [veredito("queda", queda, base_da_s0("FLOW_LATENCIA_BASE_QUEDA_S")),
+                 veredito("imobilidade", imob, base_da_s0("FLOW_LATENCIA_BASE_IMOB_S"))]
+    if any(v is False for v in vereditos):
+        print("\nO split nao coube no orcamento: avalie LISTEN/NOTIFY como COMPLEMENTO ao cursor (nunca no lugar dele), "
+              "roadmap secao 9.")
+    elif all(v is None for v in vereditos):
+        print("\nSem a base da S0 nao ha veredito (FLOW_LATENCIA_BASE_QUEDA_S e FLOW_LATENCIA_BASE_IMOB_S).")
     print("\nAnote estes numeros em docs/split-linha-de-base.md.")
 
 

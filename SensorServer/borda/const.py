@@ -9,6 +9,22 @@ import os
 
 from comum import const as _comum  # noqa: F401  (efeito colateral: o .env e carregado ANTES de ler o ambiente abaixo)
 
+
+def _numero_do_ambiente(nome: str, padrao: float):
+    """Numero positivo vindo da variavel `nome` (ou `padrao`). Valor invalido derruba a subida com mensagem clara: um
+    limiar de saude errado em silencio faria o /health mentir."""
+    bruto = os.environ.get(nome)
+    if bruto in (None, ""):
+        return padrao
+    try:
+        valor = float(bruto)
+    except ValueError:
+        raise RuntimeError(f"{nome} invalida: {bruto!r} (esperado um numero maior que zero)") from None
+    if not valor > 0:
+        raise RuntimeError(f"{nome} invalida: {bruto!r} (esperado um numero maior que zero)")
+    return int(valor) if isinstance(padrao, int) and valor == int(valor) else valor
+
+
 # ===========================================================================
 # 1. SERVIDOR E AGREGACAO
 # ===========================================================================
@@ -147,3 +163,31 @@ ISOLADA = os.environ.get("FLOW_BORDA_ISOLADA", "0") == "1"
 
 # Desligamento ordenado: tempo maximo (s) para a descarga final das leituras e para as threads terminarem.
 PRAZO_ENCERRAMENTO_S = 10
+
+# ===========================================================================
+# 8. OBSERVABILIDADE: /health E ALARMES (S6 do split)
+# ===========================================================================
+
+# O /health acusa o pipeline "degradado" quando a analise passa deste tempo (s) sem renovar o batimento em
+# `cursor_analise`. A analise renova a cada ciclo (INTERVALO_LEITURA_S, 0,25 s), mesmo sem dado novo: so a analise parada,
+# presa ou sem banco passa disto. Fica abaixo do prazo do pedido de confirmacao (TIMEOUT + MARGEM): a analise parada
+# e acusada antes de um pedido perdido expirar. FLOW_LIMIAR_BATIMENTO_S ajusta.
+LIMIAR_BATIMENTO_ANALISE_S = _numero_do_ambiente("FLOW_LIMIAR_BATIMENTO_S", 5.0)
+
+# Atraso (em leituras, id da ultima leitura gravada menos o do cursor da analise) a partir do qual o /health acusa
+# "degradado". O valor inicial equivale a cerca de 30 s de duas fontes a 1 leitura/s: acima disso a analise ja esta
+# descartando acoes por idade (analise/const.py, IDADE_MAX_ACAO_S). ENTRADA DA RETENCAO DO BANCO (parte 2, B2.4): o
+# limiar de atraso e o que a retencao das tabelas precisa superar com folga. A calibrar com a medicao da S6.
+# FLOW_LIMIAR_ATRASO_LEITURAS ajusta.
+LIMIAR_ATRASO_LEITURAS = _numero_do_ambiente("FLOW_LIMIAR_ATRASO_LEITURAS", 60)
+
+# A thread de monitoramento da borda consulta a saude a cada INTERVALO_MONITOR_SAUDE_S (s) e escreve os alarmes no log.
+INTERVALO_MONITOR_SAUDE_S = 2.0
+
+# O /health reaproveita a ultima consulta por CACHE_SAUDE_S (s): a rota e publica e nao pode virar consulta ao banco por
+# requisicao. 0 desliga o cache (os testes).
+CACHE_SAUDE_S = 1.0
+
+# Enquanto o pipeline segue degradado, o alarme se repete no log a cada INTERVALO_REPETIR_ALARME_S (s) (a entrada, a
+# mudanca de motivo e a volta ao normal sao logadas na hora).
+INTERVALO_REPETIR_ALARME_S = 60.0

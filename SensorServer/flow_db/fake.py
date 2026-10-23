@@ -198,6 +198,23 @@ class FachadaAnalise(RepoAnalise):
     def ler_entregas_novas(self, depois_de_id, instante_minimo=None, limite=500):
         return self._b._ler_novas(self.PAPEL, "entregas_push", "instante", depois_de_id, instante_minimo, limite)
 
+    def ler_leituras_recentes(self, ate_id, instante_minimo, limite=5000):
+        def filtro(l):
+            return l["id"] <= ate_id and l["instante_ingestao"] >= instante_minimo
+        linhas = sorted(self._b._selecionar(self.PAPEL, "leituras", filtro), key=lambda l: l["id"])
+        return linhas[-limite:] if limite > 0 else []
+
+    def listar_episodios_recentes(self, desde):
+        achados = self._b._selecionar(self.PAPEL, "episodios",
+                                      lambda l: l["estado"] != "encerrado" or l["atualizado_em"] >= desde)
+        return sorted(achados, key=lambda l: l["aberto_em"])
+
+    def listar_comandos_de_episodios(self, episodio_ids):
+        ids = set(episodio_ids)
+        achados = self._b._selecionar(self.PAPEL, "comandos_push", lambda l: l.get("episodio_id") in ids)
+        return sorted(({k: l.get(k) for k in ("id", "episodio_id", "message_id", "tipo", "criado_em", "expira_em")}
+                       for l in achados), key=lambda l: l["id"])
+
     def gravar_comando(self, c: dict) -> int:
         if c["canal"] not in _CANAIS_COMANDO:
             raise ValueError(f"canal invalido: {c['canal']!r}")

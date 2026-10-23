@@ -9,6 +9,7 @@ Escreve: comandos_push, alertas, confirmacoes, episodios, estado_dispositivo, cu
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
+from typing import Sequence
 
 from . import config
 from ._lacunas import aplicar_regra_lacunas
@@ -54,6 +55,22 @@ class RepoAnalise(ABC):
                              espera_lacuna_s: float = config.ESPERA_LACUNA_S) -> tuple[list[dict], int]:
         return self._ler_seguras(self.ler_entregas_novas, "instante", depois_de_id, instante_minimo, limite,
                                  espera_lacuna_s)
+
+    # ---- recuperacao na subida (S6): so leitura, nunca avanca cursor ----
+    @abstractmethod
+    def ler_leituras_recentes(self, ate_id: int, instante_minimo: datetime, limite: int = 5000) -> list[dict]:
+        """As leituras mais recentes com id <= ate_id (o cursor) e instante_ingestao >= instante_minimo, ate `limite`
+        (as MAIS RECENTES, se houver mais), em ordem crescente de id. Serve a reconstruir o estado das janelas das regras."""
+
+    @abstractmethod
+    def listar_episodios_recentes(self, desde: datetime) -> list[dict]:
+        """Episodios abertos (de qualquer idade) e os atualizados desde `desde`, em ordem de aberto_em. Reconstroi o
+        episodio aberto, o cooldown e a classificacao de resposta tardia ao reiniciar."""
+
+    @abstractmethod
+    def listar_comandos_de_episodios(self, episodio_ids: Sequence[str]) -> list[dict]:
+        """Comandos de push dos episodios dados, em ordem de id (campos: id, episodio_id, message_id, tipo, criado_em,
+        expira_em). Devolve os `message_id` que ligam a resposta do dispositivo ao episodio."""
 
     @abstractmethod
     def gravar_comando(self, comando: dict) -> int:

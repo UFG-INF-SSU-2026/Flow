@@ -1,6 +1,7 @@
 """RepoAnalise sobre PostgreSQL (papel flow_analise). SQL parametrizado."""
 from contextlib import contextmanager
 from datetime import datetime
+from typing import Sequence
 
 from ._pg import PgBase, _clausula_instante, jsonb
 from .repo_analise import RepoAnalise
@@ -29,6 +30,27 @@ class PgAnalise(PgBase, RepoAnalise):
 
     def ler_entregas_novas(self, depois_de_id, instante_minimo=None, limite=500):
         return self._ler_novas("entregas_push", "instante", depois_de_id, instante_minimo, limite)
+
+    def ler_leituras_recentes(self, ate_id: int, instante_minimo: datetime, limite: int = 5000) -> list[dict]:
+        # As mais recentes primeiro (DESC + LIMIT) e a ordem crescente de volta; o filtro de instante deixa o Timescale
+        # excluir os chunks antigos.
+        with self._cx() as conn:
+            return conn.execute(
+                "SELECT * FROM (SELECT * FROM leituras WHERE id <= %s AND instante_ingestao >= %s"
+                " ORDER BY id DESC LIMIT %s) recentes ORDER BY id", (ate_id, instante_minimo, limite)).fetchall()
+
+    def listar_episodios_recentes(self, desde: datetime) -> list[dict]:
+        with self._cx() as conn:
+            return conn.execute("SELECT * FROM episodios WHERE estado <> 'encerrado' OR atualizado_em >= %s"
+                                " ORDER BY aberto_em", (desde,)).fetchall()
+
+    def listar_comandos_de_episodios(self, episodio_ids: Sequence[str]) -> list[dict]:
+        ids = list(episodio_ids)
+        if not ids:
+            return []
+        with self._cx() as conn:
+            return conn.execute("SELECT id, episodio_id, message_id, tipo, criado_em, expira_em FROM comandos_push"
+                                " WHERE episodio_id = ANY(%s) ORDER BY id", (ids,)).fetchall()
 
     def gravar_comando(self, c: dict) -> int:
         with self._cx() as conn:

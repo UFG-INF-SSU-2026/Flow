@@ -6,6 +6,10 @@ Roda o laco por cursor (analise/laco.py) com `agir=True`: le `leituras`, `respos
 e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e `estado_dispositivo` na mesma transacao do cursor (DS5);
 o vigia de episodios e um passo do laco. A borda (outro processo) entrega o push a partir de `comandos_push`.
 
+Na subida (S6) o laco RECUPERA o estado das regras antes do primeiro ciclo: rele as leituras dos ultimos segundos ate o
+cursor (sem agir), restaura os episodios abertos e recentes a partir do banco e so entao segue do cursor, agindo apenas
+sobre leitura recente (analise/laco.py, `recuperar_estado`). FLOW_RECUPERAR_ESTADO=0 desliga.
+
 Desligamento ordenado (Ctrl+C, SIGTERM, Ctrl+Break no Windows): o ciclo em curso termina e grava o cursor; depois o pool
 do banco e fechado. Reiniciar a analise nao toca nos clientes SSE (eles estao na borda).
 
@@ -52,7 +56,8 @@ def main() -> int:
     print("Analise iniciando (sem porta de rede; decide pelo banco e a borda entrega).")
     print(f"Configuracao: {const_comum.DOTENV_ARQUIVO} "
           + ("carregado" if const_comum.DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente")
-          + f" | versao do codigo: {const_analise.VERSAO_CODIGO_ACOES}")
+          + f" | versao do codigo: {const_analise.VERSAO_CODIGO_ACOES}"
+          + f" | recuperacao na subida: {'sim' if const_analise.RECUPERAR_AO_INICIAR else 'nao'}")
     analise.iniciar()
     try:
         while not parando.wait(0.5):        # com timeout: no Windows um wait() sem prazo nao deixa o sinal chegar

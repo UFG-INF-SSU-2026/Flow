@@ -293,6 +293,47 @@ def anotar_mensagem(user_id: int, episode_id: str, message_id: str, agora: float
         est.mensagens[message_id] = _Mensagem(user_id, episode_id, expira_em)
 
 
+def restaurar_episodio(user_id: int, episode_id: str, motivo: str, aberto_em: float, encerrado_em: float | None = None,
+                       resultado: str | None = None, message_ids=(), estado: EstadoQueda | None = None) -> None:
+    """RECUPERACAO NA SUBIDA (S6): recoloca no estado um episodio que a instancia anterior da analise ja gravou, com as
+    `messageId` dos seus pedidos (e por elas que a resposta do dispositivo sera ligada ao episodio). Nao registra, nao
+    abre nem encerra nada: so devolve ao estado o que o banco ja sabe. `aberto_em` e `encerrado_em` sao instantes em
+    segundos desde a epoca; o prazo e recalculado como em `_abrir`. Chamar em ordem crescente de `aberto_em`: so o
+    episodio MAIS RECENTE de cada usuario fica em `episodios` (o aberto, ou o encerrado que ainda vale para o cooldown),
+    mas toda `messageId` volta ao mapa (uma resposta a episodio anterior e classificada como tardia)."""
+    est = _estado(estado)
+    prazo = aberto_em + const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S
+    with est.lock:
+        for message_id in message_ids:
+            est.mensagens[message_id] = _Mensagem(user_id, episode_id, prazo)
+        atual = est.episodios.get(user_id)
+        if atual is None or atual.aberto_em <= aberto_em:
+            est.episodios[user_id] = Episodio(episode_id, motivo, aberto_em, prazo, encerrado_em, resultado)
+
+
+def descartar_episodio(user_id: int, episode_id: str, estado: EstadoQueda | None = None) -> None:
+    """Esquece UM episodio e as `messageId` dele, como se nunca tivesse sido aberto. Usado pela analise quando o episodio
+    nasceu de leitura antiga demais para agir (principio 4): ele nao virou push nem registro, entao nao pode ficar no
+    estado nem como "aberto" (bloquearia a queda real que chegar logo depois) nem como "encerrado" (o cooldown contaria
+    a partir do relogio de agora, e nao de uma queda que nunca foi tratada)."""
+    est = _estado(estado)
+    with est.lock:
+        ep = est.episodios.get(user_id)
+        if ep is not None and ep.episode_id == episode_id:
+            del est.episodios[user_id]
+        for message_id in [m for m, info in est.mensagens.items() if info.episode_id == episode_id]:
+            del est.mensagens[message_id]
+
+
+def limpar_episodios(estado: EstadoQueda | None = None) -> None:
+    """Esquece os episodios e o mapa de mensagens do estado (a maquina do gatilho A e a deduplicacao ficam). Usado pela
+    recuperacao da analise: o que a releitura das leituras abriu e fantasma (a verdade e o banco), ver `restaurar_episodio`."""
+    est = _estado(estado)
+    with est.lock:
+        est.episodios.clear()
+        est.mensagens.clear()
+
+
 def registrar_retorno(user_id: int, evento: dict, agora: float | None = None,
                       estado: EstadoQueda | None = None) -> Encerramento | None:
     """evento: dict normalizado por validacao.validar_evento_retorno. Grava o retorno com o episodio da sua
