@@ -1,4 +1,4 @@
-"""Apoio comum das implementacoes PostgreSQL."""
+"""Apoio da implementacao PostgreSQL."""
 import json
 from contextlib import contextmanager
 
@@ -27,10 +27,3 @@ class PgBase:
     def fechar(self) -> None:
         if self._conn is None and self._pool is not None:
             self._pool.close()
-
-
-def _clausula_instante(coluna: str, instante_minimo, params: list) -> str:
-    if instante_minimo is None:
-        return ""
-    params.append(instante_minimo)
-    return f" AND {coluna} >= %s"

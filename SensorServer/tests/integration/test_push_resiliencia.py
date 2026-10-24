@@ -17,14 +17,14 @@ from borda import canal_wokwi
 from comum import const as const_comum
 from borda import const as const_borda
 from comum import mensagens
+from analise import nucleo
 from analise import regra_imobilidade
 from analise import regra_luz
 from analise import regra_queda
-from borda import server
 from borda import sse_hub
 from _apoio import aguardar
 from _cenarios import FluxoQueda
-from borda.sse_hub import Hub
+from borda.sse_hub import HUB, Hub
 
 
 @pytest.fixture
@@ -51,11 +51,6 @@ def _linhas(ler_confirmacoes, tipo: str) -> list[dict]:
     return [l for l in ler_confirmacoes(1) if l["tipo"] == tipo]
 
 
-def _entregas(banco) -> list[tuple]:
-    """(canal, resultado) das linhas de `entregas_push` (a entrega e da borda e fica no banco)."""
-    return [(e["canal"], e["resultado"]) for e in banco.tabelas["entregas_push"]]
-
-
 def _unica_mensagem() -> str:
     """messageId do unico pedido emitido (sem precisar de um stream aberto para le-lo)."""
     (mid,) = regra_queda._mensagens
@@ -63,17 +58,16 @@ def _unica_mensagem() -> str:
 
 
 # ------------------------------- sem canal ativo ------------------------------
-def test_sem_canal_ativo_registra_a_entrega_e_o_episodio_expira(fluxo, relogio, ler_confirmacoes, banco):
+def test_sem_canal_ativo_guarda_no_anel_e_o_episodio_expira(fluxo, relogio, ler_confirmacoes, banco):
     fluxo.enviar_queda()
 
-    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 2)
-    assert _entregas(banco) == [("app", "sem_conexao"), ("wokwi", "sem_conexao")]
+    assert aguardar(lambda: len(banco.tabelas["comandos_push"]) >= 1)
+    assert {canal for (_u, canal) in HUB._anel} == {canal_app.CANAL, canal_wokwi.CANAL}   # sem conexao: o anel guarda
 
     relogio.avancar(const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S)
-    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 4)
+    assert aguardar(lambda: len(banco.tabelas["comandos_push"]) >= 2)
     assert regra_queda._episodios[1].resultado == "EXPIRADO"
     assert [l["tipo"] for l in ler_confirmacoes(1)] == ["episodio.aberto", "episodio.encerrado"]
-    assert {r for _c, r in _entregas(banco)} == {"sem_conexao"}
     assert _linhas(ler_confirmacoes, "episodio.encerrado")[0]["resultado"] == "EXPIRADO"
 
 
@@ -81,8 +75,7 @@ def test_sem_canal_ativo_registra_a_entrega_e_o_episodio_expira(fluxo, relogio, 
 def test_cliente_que_conecta_dentro_da_validade_recebe_o_pedido_com_timeout_reduzido(
         fluxo, relogio, abrir_sse, banco):
     fluxo.enviar_queda()                                     # ninguem conectado
-    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 2)
-    entregas = _entregas(banco)
+    assert aguardar(lambda: len(banco.tabelas["comandos_push"]) >= 1)
     relogio.avancar(2)                                       # 2 s depois, ainda dentro do tempo do idoso
 
     leitor = abrir_sse("/push/app", fluxo.tok_app)
@@ -92,8 +85,7 @@ def test_cliente_que_conecta_dentro_da_validade_recebe_o_pedido_com_timeout_redu
     assert pedido["messageType"] == mensagens.TIPO_SOLICITADA
     assert pedido["messageId"] == _unica_mensagem()
     assert pedido["payload"]["timeoutMs"] == (const_comum.TIMEOUT_CONFIRMACAO_S - 2) * 1000
-    assert _entregas(banco) == entregas                      # a linha original nao muda (a borda nao reentrega)
-    assert {r for _c, r in entregas} == {"sem_conexao"}
+    assert len(banco.tabelas["comandos_push"]) == 1          # o comando original nao muda (a borda nao regrava)
 
 
 def test_pedido_com_tempo_do_cliente_esgotado_nao_e_reenviado(fluxo, relogio, abrir_sse):
@@ -199,16 +191,17 @@ def test_cliente_que_nao_consome_enche_a_fila_e_e_desconectado_e_reconecta_com_r
 
 # ------------------------------ reinicio do servidor ---------------------------
 @pytest.fixture
-def reiniciar(monkeypatch):
-    """reiniciar() simula a troca do processo: some o que estava em memoria (episodios, mensagens, buffer, estados
-    das regras, falhas de login e o hub SSE); contas.json e sessoes.json (disco) ficam. O hub novo e criado alguns
+def reiniciar(monkeypatch, pipeline):
+    """reiniciar() simula a troca dos processos: some o que estava em memoria (a analise, com o estado das regras e outro
+    boot_id; as falhas de login; o hub SSE); o banco, contas.json e sessoes.json (disco) ficam. O hub novo e criado alguns
     segundos depois do antigo, como seria num processo novo. Devolve o hub novo."""
 
     def _reiniciar() -> Hub:
         for tabela in (regra_queda._estados, regra_queda._ultimo_log_desatualizada, regra_queda._episodios,
                        regra_queda._mensagens, regra_queda._ultimo_ts_app, regra_imobilidade._estados,
-                       regra_luz._estados, server._buffer, auth._falhas, auth._bloqueado_ate):
+                       regra_luz._estados, auth._falhas, auth._bloqueado_ate):
             tabela.clear()
+        pipeline.reiniciar_analise(nucleo.PADRAO)
         with monkeypatch.context() as m:
             m.setattr(sse_hub, "time", SimpleNamespace(time=lambda: time.time() + 10))   # sse_hub so usa time.time()
             novo = Hub()
@@ -253,15 +246,16 @@ def test_last_event_id_antigo_nao_fica_a_frente_do_contador_depois_do_reinicio(f
     assert novo.ultimo_id > visto                            # o proximo Last-Event-ID do cliente nao "pula" mensagens
 
 
-def test_estou_bem_de_antes_do_reinicio_e_gravado_como_mensagem_desconhecida(fluxo, reiniciar, ler_confirmacoes):
+def test_estou_bem_de_antes_do_reinicio_encerra_o_episodio_restaurado_do_banco(fluxo, reiniciar, ler_confirmacoes):
     fluxo.enviar_queda()
     mid = _unica_mensagem()
-    novo_hub = reiniciar()                                   # o mapa messageId -> episodio e o episodio se perdem
+    novo_hub = reiniciar()                                   # a analise perde o estado; o banco guarda o episodio e a mensagem
+    assert regra_queda._episodios == {}
 
     fluxo.resposta_app(mid)                                  # o app responde ao pedido de antes do reinicio
 
+    assert regra_queda._episodios[1].resultado == "CONFIRMADO"   # o estado foi restaurado do banco antes de a resposta valer
     ultima = ler_confirmacoes(1)[-1]
-    assert ultima["tipo"] == "confirmacao.resposta" and ultima["messageId"] == mid
-    assert ultima["episodeId"] is None and ultima["mensagem_desconhecida"] is True
-    assert regra_queda._episodios == {}                      # nada foi encerrado
-    assert novo_hub._anel == {}                              # e ninguem foi avisado
+    assert ultima["tipo"] == "episodio.encerrado" and ultima["resultado"] == "CONFIRMADO"
+    assert [m["payload"]["resultado"] for _, m in novo_hub._anel[(1, canal_app.CANAL)]
+            if m["messageType"] == mensagens.TIPO_ENCERRADA] == ["CONFIRMADO"]

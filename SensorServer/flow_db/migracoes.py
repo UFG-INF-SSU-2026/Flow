@@ -1,9 +1,9 @@
 """
-Executor de migracoes. Arquivos SQL numerados em flow_db/migrations/ (NNNN_nome.sql), aplicados em ordem, cada um
-numa transacao propria junto com o registro em schema_migrations. Roda como usuario ADMINISTRATIVO.
+Executor de migracoes. Arquivos SQL numerados em flow_db/migrations/ (NNNN_nome.sql), aplicados em ordem, cada um numa
+transacao propria junto com o registro em schema_migrations.
 
 - Trava de aviso (pg_advisory_lock): duas execucoes simultaneas nao se atropelam; a segunda espera e nao acha nada a fazer.
-- Nunca edite uma migracao ja aplicada: crie uma nova. Nao ha "desfazer" (o roadmap preve restauracao por backup).
+- Nunca edite uma migracao ja aplicada: crie uma nova. Nao ha "desfazer".
 """
 import re
 from dataclasses import dataclass
@@ -46,22 +46,13 @@ def ultima_disponivel(diretorio: Path = DIRETORIO) -> int:
     return lista[-1].versao if lista else 0
 
 
-def _exigir_papeis(conn) -> None:
-    linhas = conn.execute("SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)", (list(config.PAPEIS),)).fetchall()
-    existentes = {l[0] for l in linhas}
-    faltam = [p for p in config.PAPEIS if p not in existentes]
-    if faltam:
-        raise MigracaoInvalida(f"papeis ausentes no banco: {', '.join(faltam)}. Rode antes: python -m flow_db provisionar")
-
-
 def aplicar(conn=None, diretorio: Path = DIRETORIO) -> list[int]:
     """Aplica as pendentes. Devolve as versoes aplicadas agora (lista vazia = ja estava em dia)."""
     import psycopg
     proprio = conn is None
     if proprio:
-        conn = psycopg.connect(config.dsn_admin(), autocommit=True)
+        conn = psycopg.connect(config.dsn(), autocommit=True)
     try:
-        _exigir_papeis(conn)
         conn.execute("SELECT pg_advisory_lock(%s)", (CHAVE_TRAVA,))
         try:
             conn.execute("""CREATE TABLE IF NOT EXISTS schema_migrations (

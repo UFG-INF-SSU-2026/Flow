@@ -36,7 +36,7 @@ def _modulos_do_servidor() -> list[str]:
              for f in sorted(glob.glob(os.path.join(RAIZ, p, "*.py"))) if not f.endswith("__init__.py")]
     # Na raiz so entram as ferramentas conhecidas (modulo velho esquecido na raiz e pego por test_fronteiras).
     # simular_queda fica de fora: script de cliente, executa ao importar.
-    return nomes + ["medir_latencia", "simular_cenarios"]
+    return nomes
 
 
 def _arvore(nome: str) -> ast.Module:
@@ -84,7 +84,7 @@ class TestFonteUnica:
         assert len(NOMES_CONST) > 30
 
     def test_constantes_chave_existem(self):
-        obrigatorias = {"MARGEM_SERVIDOR_S", "DATA_DIR", "FONTES_VALIDAS", "SCHEMA_VERSION_APP",
+        obrigatorias = {"MARGEM_SERVIDOR_S", "FONTES_VALIDAS", "SCHEMA_VERSION_APP",
                         "SCHEMA_VERSION_WOKWI", "SCHEMA_VERSION_MENSAGEM", "SCHEMA_VERSION_AUTH",
                         "TOLERANCIA_RELOGIO_S", "TIMEOUT_CONFIRMACAO_S", "COOLDOWN_S", "TTL_ENCERRAMENTO_S"}
         assert obrigatorias <= NOMES_CONST
@@ -292,19 +292,3 @@ class TestRotasSemReferenciaQuebrada:
         corpo = {k: v for k, v in _evento_app().items() if k != "schemaVersion"}
         r = cli.post("/eventos", corpo, tokens["idoso"])
         assert r.status_code == 200 and r.get_json() == {"status": "ok"}
-
-
-def test_padrao_nao_grava_arquivos_legados():
-    """FLOW_GRAVAR_ARQUIVOS: sem a variavel (ou diferente de 1) o servidor grava so no banco."""
-    import subprocess
-    import sys
-
-    def valor(env_extra):
-        env = {k: v for k, v in os.environ.items() if k != "FLOW_GRAVAR_ARQUIVOS"} | env_extra
-        saida = subprocess.run([sys.executable, "-c", "from comum import const; print(const.GRAVAR_ARQUIVOS)"],
-                               capture_output=True, text=True, env=env, cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        return saida.stdout.strip()
-
-    assert valor({}) == "False"
-    assert valor({"FLOW_GRAVAR_ARQUIVOS": "0"}) == "False"
-    assert valor({"FLOW_GRAVAR_ARQUIVOS": "1"}) == "True"

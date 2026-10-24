@@ -1,4 +1,4 @@
-# Banco do SensorServer (PostgreSQL + TimescaleDB). SO o servidor conversa com ele.
+# Banco do SensorServer (PostgreSQL). SO a borda conversa com ele.
 #
 #   Subir:      docker compose up -d
 #   Ver estado: docker compose ps          (aguarde "healthy")
@@ -7,7 +7,7 @@
 #   Parar:      docker compose down        (os dados ficam no volume)
 #   APAGAR TUDO (dados inclusive): docker compose down -v
 #
-# As variaveis FLOW_DB_* vem do arquivo ".env" desta pasta (o mesmo do servidor; ver .env.example).
+# As variaveis FLOW_DB_* vem do arquivo ".env" desta pasta (o mesmo da borda; ver .env.example).
 # ATENCAO: usuario, senha e nome do banco so valem na PRIMEIRA subida (volume vazio). Mudar o .env depois
 # nao altera o banco ja criado; para recomecar do zero, use "down -v".
 
@@ -15,9 +15,8 @@ name: flow
 
 services:
   db:
-    # Imagem oficial com a extensao TimescaleDB ja instalada e habilitada no banco criado.
-    # A versao MAIOR do Postgres (17) fica fixa: trocar exige dump/restore do volume.
-    image: timescale/timescaledb:latest-pg17
+    # Imagem oficial do PostgreSQL. A versao MAIOR (17) fica fixa: trocar exige dump/restore do volume.
+    image: postgres:17
     container_name: flow-db
     restart: unless-stopped
 
@@ -25,9 +24,6 @@ services:
       POSTGRES_USER: ${FLOW_DB_USER:-flow}
       POSTGRES_PASSWORD: ${FLOW_DB_PASSWORD:?defina FLOW_DB_PASSWORD no .env}
       POSTGRES_DB: ${FLOW_DB_NAME:-flow}
-
-    # Sem telemetria de uso para a Timescale (os dados sao de saude/rotina de uma pessoa).
-    command: ["postgres", "-c", "timescaledb.telemetry_level=off"]
 
     # Publicada SO no loopback: o servidor (rodando no host) alcanca em localhost:FLOW_DB_PORT, e nada
     # da rede local alcanca o banco. NAO remova o "127.0.0.1:" (sem ele a porta abre para toda a rede).

@@ -7,11 +7,8 @@ espera real de 3 s de repouso nem de 7 s de prazo. A thread vigia e as conexoes 
   (1) pedido nos dois canais          (5) gatilho B e B ignorado com A aberto
   (2) ack + ESTOU_BEM = CONFIRMADO    (6) segundo episodio dentro do cooldown
   (3) sem resposta = EXPIRADO         (7) telemetria do app dispara o gatilho A
-  (4) resposta tardia                 (8) conteudo do confirmacoes_usuario_<id>.jsonl
+  (4) resposta tardia                 (8) conteudo da tabela confirmacoes
 """
-import glob
-import os
-
 import pytest
 
 from comum import const as const_comum
@@ -22,11 +19,6 @@ from _apoio import aguardar
 from _cenarios import FluxoQueda
 
 TIPOS_CICLO_CONFIRMADO = ["episodio.aberto", "push.ack", "confirmacao.resposta", "episodio.encerrado"]
-
-
-def _entregas(banco) -> list[tuple]:
-    """(canal, resultado) de cada linha de `entregas_push`: a entrega agora e da borda e fica no banco."""
-    return [(e["canal"], e["resultado"]) for e in banco.tabelas["entregas_push"]]
 
 
 class Cenario(FluxoQueda):
@@ -79,8 +71,8 @@ def test_1_pedido_chega_nos_dois_canais(cenario, ler_confirmacoes, banco):
         assert m["payload"]["timeoutMs"] == 5000        # tempo congelado: sem desconto de replay
         assert m["payload"]["motivo"] == const_analise.MOTIVO_A
 
-    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 2)
-    assert set(_entregas(banco)) == {("app", "enviado"), ("wokwi", "enviado")}
+    (comando,) = banco.tabelas["comandos_push"]
+    assert comando["message_id"] == msg_app["messageId"] and comando["episodio_id"] == msg_app["episodeId"]
 
 
 def test_2_ack_e_estou_bem_encerram_como_confirmado(cenario, ler_confirmacoes):
@@ -100,7 +92,7 @@ def test_2_ack_e_estou_bem_encerram_como_confirmado(cenario, ler_confirmacoes):
     assert [l["tipo"] for l in ler_confirmacoes(1)] == TIPOS_CICLO_CONFIRMADO
 
 
-def test_3_sem_resposta_expira_depois_de_timeout_mais_margem(cenario, ler_confirmacoes, banco):
+def test_3_sem_resposta_expira_depois_de_timeout_mais_margem(cenario, ler_confirmacoes):
     pedido, _ = cenario.provocar_queda()
 
     cenario.relogio.avancar(const_comum.TIMEOUT_CONFIRMACAO_S)        # passou o tempo do idoso, falta a margem
@@ -115,8 +107,6 @@ def test_3_sem_resposta_expira_depois_de_timeout_mais_margem(cenario, ler_confir
         assert enc["episodeId"] == pedido["episodeId"]
     assert regra_queda._episodios[1].resultado == "EXPIRADO"
 
-    # a ultima linha de entrega e gravada logo depois do envio; espera ela aparecer
-    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 4)
     assert aguardar(lambda: len(ler_confirmacoes(1)) >= 2)
     assert [l["tipo"] for l in ler_confirmacoes(1)] == ["episodio.aberto", "episodio.encerrado"]
 
@@ -145,7 +135,7 @@ def test_4_resposta_tardia_depois_do_encerramento_e_marcada_como_tardia(cenario,
 
 
 # ------------------------------------------------------------------------ (5)
-def test_5_gatilho_b_abre_episodio_por_imobilidade_prolongada(cenario, ler_confirmacoes):
+def test_5_gatilho_b_abre_episodio_por_imobilidade_prolongada(cenario, ler_confirmacoes, banco):
     cenario.decisao_wokwi("ALERTA_IMOBILIDADE")
 
     msg_app, msg_wk = cenario.pushes()
@@ -158,7 +148,7 @@ def test_5_gatilho_b_abre_episodio_por_imobilidade_prolongada(cenario, ler_confi
     assert aberto["motivo"] == const_analise.MOTIVO_B and aberto["episodeId"] == msg_app["episodeId"]
     assert "fonte_do_disparo" not in aberto                      # so o gatilho A traz os dados da fusao
     # o fluxo legado de imobilidade continua gerando o seu alerta
-    assert glob.glob(os.path.join(const_comum.DATA_DIR, "alerta_imobilidade_*.json"))
+    assert [a["tipo"] for a in banco.tabelas["alertas"]] == ["imobilidade"]
 
 
 def test_5_gatilho_b_e_ignorado_com_episodio_do_gatilho_a_aberto(cenario, ler_confirmacoes):
@@ -226,7 +216,7 @@ def test_7_a_mesma_dinamica_vinda_do_wokwi_nao_dispara(cenario):
 
 
 # ------------------------------------------------------------------------ (8)
-def test_8_conteudo_e_ordem_do_confirmacoes_jsonl(cenario, ler_confirmacoes, banco):
+def test_8_conteudo_e_ordem_da_tabela_confirmacoes(cenario, ler_confirmacoes, banco):
     pedido, _ = cenario.provocar_queda()
     mid, ep = pedido["messageId"], pedido["episodeId"]
     cenario.ack_bridge(mid)
@@ -249,10 +239,5 @@ def test_8_conteudo_e_ordem_do_confirmacoes_jsonl(cenario, ler_confirmacoes, ban
         assert "tardia" not in retorno and "mensagem_desconhecida" not in retorno
     assert encerrado["episodeId"] == ep and encerrado["resultado"] == "CONFIRMADO"
 
-    # as entregas (pedido e encerramento, canal por canal) ficam em `entregas_push`, uma linha por canal
-    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 4)
-    por_mensagem = {}
-    for e in banco.tabelas["entregas_push"]:
-        por_mensagem.setdefault(e["message_id"], set()).add((e["canal"], e["resultado"]))
-    assert por_mensagem == {mid: {("app", "enviado"), ("wokwi", "enviado")},
-                            enc_app["messageId"]: {("app", "enviado"), ("wokwi", "enviado")}}
+    # os dois comandos de push (pedido e encerramento) ficam em `comandos_push`, um por mensagem
+    assert {c["message_id"] for c in banco.tabelas["comandos_push"]} == {mid, enc_app["messageId"]}

@@ -56,3 +56,17 @@ def test_flow_sem_dotenv_desliga_a_leitura(tmp_path, monkeypatch):
     assert const_comum._carregar_dotenv(_env(tmp_path, "FLOW_TESTE_E=x\n")) is False
     import os
     assert "FLOW_TESTE_E" not in os.environ
+
+
+def test_com_prefixo_carrega_so_as_variaveis_dele(tmp_path, monkeypatch):
+    """A analise le do .env so FLOW_ANALISE_*: o segredo JWT e a senha do banco nao entram no ambiente dela."""
+    for nome in ("FLOW_ANALISE_TESTE", "FLOW_JWT_SECRET_TESTE", "FLOW_DB_PASSWORD_TESTE"):
+        monkeypatch.delenv(nome, raising=False)
+    caminho = _env(tmp_path, "FLOW_ANALISE_TESTE=ok\nFLOW_JWT_SECRET_TESTE=segredo\nFLOW_DB_PASSWORD_TESTE=senha\n")
+    assert const_comum._carregar_dotenv(caminho, "FLOW_ANALISE_") is True
+    import os
+    try:
+        assert os.environ["FLOW_ANALISE_TESTE"] == "ok"
+        assert "FLOW_JWT_SECRET_TESTE" not in os.environ and "FLOW_DB_PASSWORD_TESTE" not in os.environ
+    finally:
+        os.environ.pop("FLOW_ANALISE_TESTE", None)

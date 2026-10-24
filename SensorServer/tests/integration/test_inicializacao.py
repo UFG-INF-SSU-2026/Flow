@@ -23,9 +23,9 @@ def _rodar(args, tmp_path, **extra):
         "FLOW_SESSOES_PATH": str(tmp_path / "sessoes.json"),
         "PYTHONPATH": RAIZ,
         "FLOW_DB_FAKE": "1",      # sem Docker: banco falso (o teste abaixo, de banco ausente, sobrescreve)
+        "FLOW_ANALISE_TOKEN": "t" * 24,
     })
     env.update(extra)
-    # cwd = tmp_path: borda/server.py cria const_comum.DATA_DIR relativo ao diretorio atual
     return subprocess.run([sys.executable, *args], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=30)
 
@@ -45,7 +45,13 @@ def test_import_sem_segredo_recusa(tmp_path):
 def test_import_com_segredo_sobe_as_threads(tmp_path):
     r = _rodar(["-c", _SONDA], tmp_path, FLOW_JWT_SECRET=SEGREDO)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "['flow-entrega-push', 'flow-flush', 'flow-saude']"
+    assert r.stdout.strip() == "['flow-flush', 'flow-vigia']"
+
+
+def test_import_sem_token_da_analise_recusa(tmp_path):
+    r = _rodar(["-c", _SONDA], tmp_path, FLOW_JWT_SECRET=SEGREDO, FLOW_ANALISE_TOKEN="")
+    assert r.returncode != 0
+    assert "FLOW_ANALISE_TOKEN" in r.stderr
 
 
 def test_import_com_variavel_de_saida_nao_sobe_threads(tmp_path):
@@ -64,7 +70,7 @@ def test_flask_cli_sem_segredo_recusa(tmp_path):
 def test_import_sem_banco_recusa_com_mensagem_clara(tmp_path):
     """Com o segredo mas sem banco no ar (porta fechada), a subida falha explicando o que fazer, sem vazar senha."""
     r = _rodar(["-c", _SONDA], tmp_path, FLOW_JWT_SECRET=SEGREDO, FLOW_DB_FAKE="0", FLOW_DB_PORT="1",
-               FLOW_DB_BORDA_PASSWORD="b" * 20, FLOW_DB_ANALISE_PASSWORD="a" * 20)
+               FLOW_DB_PASSWORD="b" * 20)
     assert r.returncode != 0
     assert "banco" in r.stderr.lower()
-    assert "b" * 20 not in r.stderr and "a" * 20 not in r.stderr
+    assert "b" * 20 not in r.stderr

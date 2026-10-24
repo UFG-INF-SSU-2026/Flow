@@ -1,22 +1,20 @@
 """
 A BORDA como processo proprio: `python -m borda` (a partir de SensorServer/).
 
-Unico processo com porta de rede, com a chave AES, o segredo JWT e as contas. Le SO o `.env.borda` e o papel de banco
-flow_borda; nao importa a analise (conferido por tests/unit/test_fronteiras.py e tests/unit/test_dois_processos.py).
-Quem decide queda, imobilidade e luz e o processo `python -m analise`; a borda grava as leituras, entrega o push que a
-analise gravar em `comandos_push` e responde as consultas. A ordem de subida entre os dois processos e indiferente.
-(`python -m borda.server`, o modo de desenvolvimento, sobe a mesma borda com o `.env` de sempre e sem o desligamento ordenado.)
+Unico processo com porta de rede, com a chave AES, o segredo JWT, as contas e o banco; nao importa a analise (conferido
+por tests/unit/test_fronteiras.py). Quem decide queda, imobilidade e luz e o processo `python -m analise`, que a borda chama
+por HTTP local (FLOW_ANALISE_URL, FLOW_ANALISE_TOKEN); a borda grava as leituras e as decisoes, entrega o push e responde as
+consultas. A ordem de subida entre os dois processos e indiferente.
+(`python -m borda.server`, o modo de desenvolvimento, sobe a mesma borda sem o desligamento ordenado.)
 
-Desligamento ordenado (Ctrl+C, SIGTERM, Ctrl+Break no Windows): para de aceitar conexoes, para a entrega, fecha os
-streams SSE, descarrega a fila de leituras e o buffer e fecha as conexoes do pool (server.encerrar).
+Desligamento ordenado (Ctrl+C, SIGTERM, Ctrl+Break no Windows): para de aceitar conexoes, para as threads de fundo, fecha os
+streams SSE, descarrega a fila de leituras e fecha o pool do banco (server.encerrar).
 """
-import os
 import signal
 import sys
 import threading
 
 from comum import const as const_comum
-from comum import isolamento
 from borda import const as const_borda
 
 CODIGO_ERRO = 1
@@ -36,14 +34,9 @@ def main() -> int:
     if const_comum.SERVICO != "borda":
         print("erro: inicie a borda por 'python -m borda' (a partir de SensorServer/).", file=sys.stderr)
         return CODIGO_ERRO
-    if os.environ.get("FLOW_DB_FAKE") == "1":
-        print("erro: FLOW_DB_FAKE=1 nao vale para 'python -m borda': o banco falso vive na memoria de um processo e a "
-              "analise e outro processo. Use o PostgreSQL (scripts/preparar).", file=sys.stderr)
-        return CODIGO_ERRO
     try:
-        isolamento.exigir_ambiente("borda")
-        from borda import server        # importar = inicializar: segredo JWT, banco (so flow_borda) e threads de fundo
-    except (isolamento.AmbienteInvalido, RuntimeError) as e:
+        from borda import server        # importar = inicializar: segredo JWT, banco, analise e threads de fundo
+    except RuntimeError as e:
         print(f"erro: {e}", file=sys.stderr)
         return CODIGO_ERRO
 

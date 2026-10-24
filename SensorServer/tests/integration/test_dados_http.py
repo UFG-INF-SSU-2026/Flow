@@ -1,11 +1,7 @@
 """POST /dados e GET /dados, /estado/<id> pelo test_client: telemetria do app e do wokwi, versao, descarte e isolamento de falhas."""
-from borda import const as const_borda
-import json
-import os
 import time
 
 import pytest
-
 from comum import const as const_comum
 from analise import nucleo
 from analise import regra_queda
@@ -29,14 +25,6 @@ def _wokwi(seq=1, **extra) -> dict:
     return corpo
 
 
-def _linhas(user_id: int = 1) -> list[dict]:
-    caminho = os.path.join(const_comum.DATA_DIR, f"usuario_{user_id}.jsonl")
-    if not os.path.exists(caminho):
-        return []
-    with open(caminho, encoding="utf-8") as f:
-        return [json.loads(l) for l in f if l.strip()]
-
-
 @pytest.fixture
 def chamadas_de_avaliar(monkeypatch):
     """Conta quantas vezes a regra de queda foi alimentada."""
@@ -53,59 +41,39 @@ def chamadas_de_avaliar(monkeypatch):
 
 # ------------------------------ telemetria valida ----------------------------
 class TestTelemetriaValida:
-    def test_app_grava_linha_agregada_com_wokwi_nulo(self, cli, tokens):
+    def test_app_vira_uma_leitura_gravada(self, cli, tokens, banco):
         r = cli.post("/dados", _app(), tokens["idoso"])
         assert r.status_code == 200 and r.get_json() == {"status": "ok", "user_id": 1, "source": "app"}
-        server._flush_iteracao()
-        (linha,) = _linhas()
-        assert linha["user_id"] == 1 and linha["wokwi"] is None
-        assert linha["app"]["device_id"] == "cel1" and "source" not in linha["app"] and "user_id" not in linha["app"]
-        assert linha["timestamp"]
+        (l,) = banco.tabelas["leituras"]
+        assert l["user_id"] == 1 and l["fonte"] == "app"
+        assert l["payload"]["device_id"] == "cel1" and "source" not in l["payload"] and "user_id" not in l["payload"]
 
-    def test_wokwi_grava_linha_agregada_com_app_nulo(self, cli, tokens):
+    def test_wokwi_vira_uma_leitura_gravada(self, cli, tokens, banco):
         r = cli.post("/dados", _wokwi(), tokens["dispositivo"])
         assert r.status_code == 200 and r.get_json()["source"] == "wokwi"
-        server._flush_iteracao()
-        (linha,) = _linhas()
-        assert linha["app"] is None and linha["wokwi"]["deviceId"] == "bridge-dev"
+        (l,) = banco.tabelas["leituras"]
+        assert l["fonte"] == "wokwi" and l["payload"]["deviceId"] == "bridge-dev"
 
-    def test_as_duas_fontes_na_mesma_janela_viram_uma_linha(self, cli, tokens):
+    def test_as_duas_fontes_do_mesmo_usuario_viram_duas_leituras(self, cli, tokens, banco):
         cli.post("/dados", _app(), tokens["idoso"])
         cli.post("/dados", _wokwi(), tokens["dispositivo"])
-        server._flush_iteracao()
-        (linha,) = _linhas()
-        assert linha["app"] is not None and linha["wokwi"] is not None
-
-    def test_sem_dado_novo_nao_grava_outra_linha(self, cli, tokens):
-        cli.post("/dados", _app(), tokens["idoso"])
-        server._flush_iteracao()
-        server._flush_iteracao()
-        assert len(_linhas()) == 1
-
-    def test_so_a_leitura_mais_recente_da_fonte_fica_na_janela(self, cli, tokens):
-        cli.post("/dados", _app(device_id="cel1", timestamp_envio=1000), tokens["idoso"])
-        cli.post("/dados", _app(device_id="cel1", timestamp_envio=2000), tokens["idoso"])
-        server._flush_iteracao()
-        (linha,) = _linhas()
-        assert linha["app"]["timestamp_envio"] == 2000
+        assert sorted(l["fonte"] for l in banco.tabelas["leituras"]) == ["app", "wokwi"]
 
 
 # ------------------------------- schemaVersion -------------------------------
 class TestSchemaVersion:
     @pytest.mark.parametrize("versao", [const_comum.SCHEMA_VERSION_APP + 1, 99, 0, -1, "3", 3.0, True, None, [3]],
                              ids=repr)
-    def test_versao_maior_ou_invalida_e_descartada_com_200(self, cli, tokens, versao):
+    def test_versao_maior_ou_invalida_e_descartada_com_200(self, cli, tokens, banco, versao):
         r = cli.post("/dados", _app(schemaVersion=versao), tokens["idoso"])
         assert r.status_code == 200
         assert r.get_json()["descartado"] is True
-        assert server._buffer == {}
-        server._flush_iteracao()
-        assert _linhas() == []
+        assert server._fila_leituras == [] and banco.tabelas["leituras"] == []
 
-    def test_versao_menor_e_aceita(self, cli, tokens):
+    def test_versao_menor_e_aceita(self, cli, tokens, banco):
         r = cli.post("/dados", _app(schemaVersion=const_comum.SCHEMA_VERSION_APP - 1), tokens["idoso"])
         assert r.status_code == 200 and "descartado" not in r.get_json()
-        assert 1 in server._buffer
+        assert len(banco.tabelas["leituras"]) == 1
 
     def test_versao_ausente_e_aceita(self, cli, tokens):
         r = cli.post("/dados", _app(), tokens["idoso"])
@@ -115,18 +83,17 @@ class TestSchemaVersion:
         r = cli.post("/dados", _app(schemaVersion=const_comum.SCHEMA_VERSION_APP), tokens["idoso"])
         assert "descartado" not in r.get_json()
 
-    def test_a_versao_verificada_nao_vai_para_o_arquivo(self, cli, tokens):
+    def test_a_versao_verificada_nao_vai_para_o_payload_gravado(self, cli, tokens, banco):
         cli.post("/dados", _app(), tokens["idoso"])
-        server._flush_iteracao()
-        assert "schemaVersion" not in _linhas()[0]["app"]
+        assert "schemaVersion" not in banco.tabelas["leituras"][0]["payload"]
 
 
 # --------------------------------- sistema.erro ------------------------------
-def test_sistema_erro_do_wokwi_da_200_e_nao_gera_alerta(cli, tokens, chamadas_de_avaliar):
+def test_sistema_erro_do_wokwi_da_200_e_nao_gera_alerta(cli, tokens, chamadas_de_avaliar, banco):
     r = cli.post("/dados", _wokwi(eventType="sistema.erro", state="MPU_NAO_ENCONTRADO"), tokens["dispositivo"])
     assert r.status_code == 200
     assert chamadas_de_avaliar == []
-    assert not [f for f in os.listdir(const_comum.DATA_DIR) if f.startswith("alerta_")]
+    assert banco.tabelas["alertas"] == []
     assert regra_queda._episodios == {}
 
 
@@ -172,13 +139,12 @@ class TestFluxoLegadoDoApp:
         assert r.status_code == 200 and r.get_json()["status"] == "ok"
         assert len(chamadas_de_avaliar) == 1
 
-    def test_falha_ao_avaliar_a_queda_nao_vira_500_e_a_telemetria_e_gravada(self, cli, tokens, monkeypatch):
+    def test_falha_ao_avaliar_a_queda_nao_vira_500_e_a_telemetria_e_gravada(self, cli, tokens, monkeypatch, banco):
         def quebra(*a, **k):
             raise RuntimeError("bug na regra de queda")
         monkeypatch.setattr(nucleo, "_regra_de_queda", quebra)
         assert cli.post("/dados", _app(), tokens["idoso"]).status_code == 200
-        server._flush_iteracao()
-        assert len(_linhas()) == 1
+        assert len(banco.tabelas["leituras"]) == 1
 
     def test_payload_do_app_malformado_no_fluxo_legado_da_200(self, cli, tokens):
         r = cli.post("/dados", _app(leitura_ambiente={"device_id": "cel1"}), tokens["idoso"])   # faltam campos
@@ -189,7 +155,6 @@ class TestFluxoLegadoDoApp:
 class TestRotasDeLeitura:
     def test_get_dados_so_para_admin(self, cli, tokens):
         cli.post("/dados", _app(), tokens["idoso"])
-        server._flush_iteracao()
         r = cli.get("/dados", tokens["admin"])
         assert r.status_code == 200 and len(r.get_json()) == 1
         for papel in ("idoso", "dispositivo"):
@@ -207,10 +172,3 @@ class TestRotasDeLeitura:
 
     def test_get_estado_de_device_desconhecido_da_404(self, cli, tokens):
         assert cli.get("/estado/nao-existe", tokens["admin"]).status_code == 404
-
-    def test_get_dados_guarda_no_maximo_max_em_memoria(self, cli, tokens, monkeypatch):
-        monkeypatch.setattr(const_borda, "MAX_EM_MEMORIA", 2)
-        for i in range(4):
-            cli.post("/dados", _app(timestamp_envio=i), tokens["idoso"])
-            server._flush_iteracao()
-        assert len(cli.get("/dados", tokens["admin"]).get_json()) == 2

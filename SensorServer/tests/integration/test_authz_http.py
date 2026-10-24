@@ -1,10 +1,9 @@
 """Autorizacao pelas rotas HTTP (test_client): matriz rota x papel, escopo e auditoria."""
 from borda import const as const_borda
-import json
 
 import pytest
 
-from comum import const as const_comum  # (metodo, rota) -> status esperado por papel. POST usa corpo `{}`: autorizado chega ao estagio 2 e da 400.
+# (metodo, rota) -> status esperado por papel. POST usa corpo `{}`: autorizado chega ao estagio 2 e da 400.
 MATRIZ = {
     ("POST", "/dados"):        {"idoso": 400, "dispositivo": 400, "admin": 403, "sem_token": 401, "invalido": 401},
     ("POST", "/eventos"):      {"idoso": 400, "dispositivo": 400, "admin": 403, "sem_token": 401, "invalido": 401},
@@ -57,19 +56,11 @@ class TestEscopo:
         assert cli.post(rota, {"user_id": 2}, tokens["idoso"]).status_code == 400
 
 
-def test_auditoria_uma_linha_por_negacao_sem_o_conteudo(cli, tokens):
+def test_negacao_vai_para_o_log_sem_o_conteudo(cli, tokens, capsys):
     marcador = "SEGREDO-XYZ-123"
     assert cli.post("/dados", {"source": "app", "user_id": 2, "nota": marcador}, tokens["idoso"]).status_code == 403
-    assert cli.get("/dados", tokens["idoso"]).status_code == 403
     assert cli.get("/dados").status_code == 401
-
-    with open(f"{const_comum.DATA_DIR}/auditoria.jsonl", encoding="utf-8") as f:
-        texto = f.read()
-    linhas = [json.loads(l) for l in texto.splitlines() if l.strip()]
-    assert [(l["rota"], l["status"], l["motivo"], l["conta"]) for l in linhas] == [
-        ("/dados", 403, "fora_de_escopo", "idoso1"),
-        ("/dados", 403, "sem_permissao", "idoso1"),
-        ("/dados", 401, "token_ausente", None),
-    ]
-    assert all(set(l) == {"timestamp", "rota", "status", "motivo", "conta", "ip"} for l in linhas)
-    assert marcador not in texto
+    saida = capsys.readouterr().out
+    assert "negado 403 fora_de_escopo rota=/dados conta=idoso1" in saida
+    assert "negado 401 token_ausente rota=/dados conta=-" in saida
+    assert marcador not in saida

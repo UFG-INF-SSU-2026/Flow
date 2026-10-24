@@ -1,9 +1,10 @@
-"""Servidor <-> banco (banco falso em memoria): leituras em lote, dupla escrita, identidade do token e resiliencia."""
-import os
+"""Borda <-> banco (banco falso em memoria): leituras em lote, identidade do token, estado e resiliencia a queda do banco e da analise."""
+from datetime import datetime, timezone
 
 from borda import server
 from borda import const as const_borda
 from comum import const as const_comum
+from borda import cliente_analise
 from flow_db import repositorios
 
 
@@ -31,7 +32,7 @@ def _retorno(tipo="push.ack", state="ATIVADO", message_id="m-1", **extra) -> dic
 
 
 def _leituras(banco):
-    return banco.analise().ler_leituras_novas(0)
+    return banco.ler_leituras_recentes(datetime(2000, 1, 1, tzinfo=timezone.utc))
 
 
 # ------------------------------- leituras em lote ----------------------------
@@ -72,20 +73,20 @@ class TestLeituras:
         assert [l["payload"]["n"] for l in server._fila_leituras] == [2, 3, 4] and server._descartes_leituras == 2
 
     def test_com_o_banco_fora_a_borda_aceita_guarda_e_depois_grava_na_ordem(self, cli, tokens, banco, monkeypatch):
-        original = repositorios.borda().gravar_leituras
+        original = repositorios.repo().gravar_leituras
         banco_fora = {"sim": True}
 
         def instavel(lote):
             if banco_fora["sim"]:
                 raise ConnectionError("banco fora")
             return original(lote)
-        monkeypatch.setattr(repositorios.borda(), "gravar_leituras", instavel)
+        monkeypatch.setattr(repositorios.repo(), "gravar_leituras", instavel)
         for n in range(3):
             assert cli.post("/dados", _app(n=n), tokens["idoso"]).status_code == 200
         server._descarregar_leituras()                     # falha: nao levanta, o lote volta para a fila
         assert [l["payload"]["n"] for l in server._fila_leituras] == [0, 1, 2]
+        assert server._fila_analise == []                  # nada foi a analise: o banco nao confirmou
         banco_fora["sim"] = False                          # o banco volta
-        repositorios._borda.disjuntor.sucesso()            # fim da pausa do disjuntor
         server._descarregar_leituras()
         assert [l["payload"]["n"] for l in _leituras(banco)] == [0, 1, 2] and server._fila_leituras == []
 
@@ -95,74 +96,103 @@ class TestLeituras:
         assert server._fila_leituras == []
 
 
-# ----------------------------- telemetria e auditoria (legado) ------------------------
-class TestDuplaEscrita:
-    def test_flush_grava_telemetria_no_banco_e_no_arquivo(self, cli, tokens, banco):
-        cli.post("/dados", _app(), tokens["idoso"])
-        server._flush_iteracao()
-        (t,) = banco.tabelas["telemetria"]
-        assert t["user_id"] == 1 and t["wokwi"] is None and t["app"]["device_id"] == "cel1"
-        assert os.path.exists(os.path.join(const_comum.DATA_DIR, "usuario_1.jsonl"))
-
-    def test_sem_arquivos_so_o_banco(self, cli, tokens, banco, monkeypatch):
-        monkeypatch.setattr(const_comum, "GRAVAR_ARQUIVOS", False)
-        cli.post("/dados", _app(), tokens["idoso"])
-        server._flush_iteracao()
-        cli.post("/dados", _app(), None)                   # 401: auditoria
-        assert len(banco.tabelas["telemetria"]) == 1 and len(banco.tabelas["auditoria"]) == 1
-        assert not os.path.exists(os.path.join(const_comum.DATA_DIR, "usuario_1.jsonl"))
-        assert not os.path.exists(os.path.join(const_comum.DATA_DIR, "auditoria.jsonl"))
-
-    def test_telemetria_legado_pode_ser_desligada(self, cli, tokens, banco, monkeypatch):
-        monkeypatch.setattr(const_borda, "GRAVAR_TELEMETRIA_LEGADO", False)
-        cli.post("/dados", _app(), tokens["idoso"])
-        server._flush_iteracao()
-        assert banco.tabelas["telemetria"] == []
-
-    def test_negacao_vai_para_a_auditoria_do_banco(self, cli, banco):
-        assert cli.post("/dados", _app(), None).status_code == 401
-        (a,) = banco.tabelas["auditoria"]
-        assert (a["rota"], a["status"], a["motivo"]) == ("/dados", 401, "token_ausente")
-
+class TestEstado:
     def test_estado_do_wokwi_e_gravado_uma_vez_enquanto_nao_muda(self, cli, tokens, banco, pipeline):
         cli.post("/dados", _wokwi(seq=1), tokens["dispositivo"])
         cli.post("/dados", _wokwi(seq=2), tokens["dispositivo"])
         (e,) = banco.tabelas["estado_dispositivo"]
         assert (e["user_id"], e["device_id"]) == (1, "bridge-dev") and e["estado"]["device_id"] == "bridge-dev"
 
+
 # --------------------------------- /eventos ----------------------------------
 class TestRespostas:
-    def test_resposta_do_app_vai_ao_banco_com_a_identidade_do_token(self, cli, tokens, banco):
+    def test_resposta_do_app_vai_a_fila_da_analise_com_a_identidade_do_token(self, cli, tokens):
         assert cli.post("/eventos", _retorno(message_id="m-1"), tokens["idoso"]).status_code == 200
-        (r,) = banco.tabelas["respostas_dispositivo"]
-        assert (r["user_id"], r["device_id"], r["fonte"], r["tipo"], r["message_id"]) == (1, "cel1", "app",
-                                                                                          "push.ack", "m-1")
-        assert r["schema_version"] == const_comum.SCHEMA_VERSION_APP and r["payload"]["state"] == "ATIVADO"
+        (r,) = server._fila_analise
+        assert (r.user_id, r.device_id, r.fonte) == (1, "cel1", "app")
+        assert r.evento["eventType"] == "push.ack" and r.evento["messageId"] == "m-1" and r.evento["state"] == "ATIVADO"
+        assert r.schema_version == const_comum.SCHEMA_VERSION_APP
 
-    def test_resposta_do_wokwi_usa_o_device_do_token(self, cli, tokens, banco):
+    def test_resposta_do_wokwi_usa_o_device_do_token(self, cli, tokens):
         corpo = {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "source": "wokwi", "user_id": 1, "deviceId": "bridge-dev",
                  "entityId": "idoso-sim", "eventTimeMs": 1000, "sequence": 1, "eventType": "push.ack",
                  "state": "ATIVADO", "messageId": "m-2"}
         cli.post("/eventos", corpo, tokens["dispositivo"])
-        (r,) = banco.tabelas["respostas_dispositivo"]
-        assert (r["fonte"], r["device_id"]) == ("wokwi", "bridge-dev")
+        (r,) = server._fila_analise
+        assert (r.fonte, r.device_id) == ("wokwi", "bridge-dev")
 
-    def test_evento_invalido_ou_de_versao_futura_nao_e_gravado(self, cli, tokens, banco):
+    def test_evento_invalido_ou_de_versao_futura_nao_vai_a_analise(self, cli, tokens):
         cli.post("/eventos", _retorno(state="ESTADO_QUE_NAO_EXISTE"), tokens["idoso"])
         cli.post("/eventos", _retorno(schemaVersion=99), tokens["idoso"])
-        assert banco.tabelas["respostas_dispositivo"] == []
+        assert server._fila_analise == []
 
-    def test_fora_de_escopo_nao_e_gravado(self, cli, tokens, banco):
+    def test_fora_de_escopo_nao_vai_a_analise(self, cli, tokens):
         assert cli.post("/eventos", _retorno(user_id=2), tokens["idoso"]).status_code == 403
-        assert banco.tabelas["respostas_dispositivo"] == []
+        assert server._fila_analise == []
 
 
-def test_disjuntor_pausa_as_escritas_apos_uma_falha(banco, monkeypatch):
-    chamadas = []
+# ------------------------------ a analise cai e volta -----------------------------
+class TestAnaliseForaDoAr:
+    def test_borda_segue_aceitando_e_gravando_e_o_health_acusa(self, cli, tokens, banco, pipeline):
+        pipeline.fora_do_ar = True
+        for seq in (1, 2):
+            assert cli.post("/dados", _wokwi(seq=seq), tokens["dispositivo"]).status_code == 200
+        assert len(_leituras(banco)) == 2                  # gravadas mesmo sem a analise
+        assert len(server._fila_analise) == 2              # esperando
+        server.passo_vigia()
+        corpo = cli.get("/health").get_json()
+        assert corpo["status"] == "ok" and corpo["analise"] == {"estado": "degradado", "fila": 2}
 
-    def quebra(_r):
-        chamadas.append(1)
-        raise ConnectionError("fora")
-    assert repositorios.tentar_borda("x", quebra) is False
-    assert repositorios.tentar_borda("x", quebra) is False         # pausado: nem tenta
-    assert len(chamadas) == 1
+    def test_ao_voltar_a_analise_recebe_a_fila_e_o_health_normaliza(self, cli, tokens, banco, pipeline):
+        pipeline.fora_do_ar = True
+        cli.post("/dados", _wokwi(seq=1), tokens["dispositivo"])
+        pipeline.fora_do_ar = False
+        pipeline.drenar()
+        assert server._fila_analise == []
+        assert cli.get("/health").get_json()["analise"]["estado"] == "ok"
+        assert banco.tabelas["estado_dispositivo"]
+
+    def test_analise_reiniciada_e_restaurada_antes_de_seguir(self, cli, tokens, banco, pipeline):
+        cli.post("/dados", _wokwi(seq=1), tokens["dispositivo"])
+        antigo = pipeline.analise.boot_id
+        pipeline.reiniciar_analise(estado=None)
+        assert pipeline.analise.boot_id != antigo
+        cli.post("/dados", _wokwi(seq=2), tokens["dispositivo"])
+        assert ("POST", "/restaurar") in pipeline.chamadas[2:]       # alem da restauracao da subida
+
+    def test_a_analise_recusar_o_lote_nao_trava_a_fila(self, cli, tokens, monkeypatch, pipeline):
+        def recusa(*_a, **_k):
+            raise cliente_analise.RequisicaoRecusada("/analisar")
+        monkeypatch.setattr(pipeline.analise, "analisar", recusa)
+        cli.post("/dados", _wokwi(seq=1), tokens["dispositivo"])
+        assert server._fila_analise == []
+
+    def test_fila_de_espera_cheia_descarta_as_mais_antigas(self, cli, tokens, monkeypatch, pipeline):
+        monkeypatch.setattr(const_borda, "MAX_FILA_ANALISE", 2)
+        pipeline.fora_do_ar = True
+        for seq in range(1, 5):
+            cli.post("/dados", _wokwi(seq=seq), tokens["dispositivo"])
+        assert len(server._fila_analise) == 2 and server._descartes_analise == 2
+
+
+class TestBancoForaComDecisoes:
+    def test_decisao_nao_e_aplicada_nem_o_push_sai_enquanto_o_banco_nao_confirma(self, cli, tokens, banco, pipeline,
+                                                                                  relogio, monkeypatch):
+        original = banco.gravar_episodio
+        fora = {"sim": True}
+
+        def instavel(e):
+            if fora["sim"]:
+                raise ConnectionError("banco fora")
+            return original(e)
+        monkeypatch.setattr(banco, "gravar_episodio", instavel)
+        entregas = []
+        server._aplicador._canais = [type("C", (), {"CANAL": "x", "enviar": staticmethod(lambda u, m: entregas.append(m) or "ENTREGUE_AO_CANAL")})]
+        for seq, (v, vmax) in enumerate([(1.0, 1.5), (3.0, 25.0), (0.3, 0.4), (0.3, 0.4), (0.3, 0.4)], start=1):
+            cli.post("/dados", _wokwi(seq=seq, value=v, valueMax=vmax), tokens["dispositivo"])
+            relogio.avancar(1)
+        assert entregas == [] and banco.tabelas["comandos_push"] == []
+        assert server._aplicador.pendentes > 0             # a decisao ficou guardada
+        fora["sim"] = False
+        pipeline.drenar()
+        assert len(banco.tabelas["comandos_push"]) == 1 and len(entregas) == 1 and server._aplicador.pendentes == 0

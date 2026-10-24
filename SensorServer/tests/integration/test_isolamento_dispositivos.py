@@ -64,15 +64,6 @@ def test_sem_device_no_payload_nao_e_conferido(cli, tokens):
     assert cli.post("/dados", dado, tokens["idoso"]).status_code == 200
 
 
-def test_403_por_device_vai_para_a_auditoria(cli, tokens):
-    import json
-    from comum import const as const_comum
-    cli.post("/dados", _wokwi("outro", 1), tokens["dispositivo"])
-    with open(f"{const_comum.DATA_DIR}/auditoria.jsonl", encoding="utf-8") as f:
-        (linha,) = [json.loads(l) for l in f if l.strip()]
-    assert (linha["status"], linha["motivo"], linha["conta"]) == (403, "fora_de_escopo", "bridge1")
-
-
 def test_mesmo_device_id_em_dois_usuarios_nao_compartilha_estado(cli, tokens, bridge2):
     tok2 = cli.login("bridge2", "senha-bridge2", "wokwi", "bridge-dev")["access_token"]   # mesmo device_id do usuario 1
 

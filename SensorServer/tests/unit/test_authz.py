@@ -1,13 +1,10 @@
-"""authz.py: tabela de politica, escopo, decorador exige e auditoria."""
-import json
-from datetime import datetime
+"""authz.py: tabela de politica, escopo, decorador exige e registro da negacao."""
 
 import pytest
 from flask import Flask, g, jsonify
 
 from borda import auth
 from borda import authz
-from comum import const as const_comum
 from borda import const as const_borda
 PERMISSOES = ["dados:enviar", "eventos:enviar", "push:receber", "dados:ler", "estado:ler"]
 ESPERADO = {
@@ -154,32 +151,10 @@ class TestExige:
         assert c.get("/so-wokwi", headers=_bearer(tok["bridge"])).status_code == 200
 
 
-class TestAuditoria:
-    @staticmethod
-    def _auditar(motivo: str) -> None:
+class TestRegistroDaNegacao:
+    def test_linha_de_log_com_rota_motivo_conta_e_ip_sem_conteudo(self, capsys):
         app = Flask("aud")
         with app.test_request_context("/rota-x", environ_base={"REMOTE_ADDR": "10.1.2.3"}):
-            authz.auditar("/rota-x", 403, motivo, "idoso1")
-
-    @staticmethod
-    def _ler(nome: str) -> list[dict]:
-        with open(f"{const_comum.DATA_DIR}/{nome}", encoding="utf-8") as f:
-            return [json.loads(l) for l in f if l.strip()]
-
-    def test_linha_com_os_campos(self):
-        self._auditar("sem_permissao")
-        (linha,) = self._ler("auditoria.jsonl")
-        assert set(linha) == {"timestamp", "rota", "status", "motivo", "conta", "ip"}
-        assert (linha["rota"], linha["status"], linha["motivo"], linha["conta"], linha["ip"]) == \
-               ("/rota-x", 403, "sem_permissao", "idoso1", "10.1.2.3")
-        datetime.fromisoformat(linha["timestamp"])
-
-    def test_rotacao_sobrescreve_o_arquivo_anterior(self, monkeypatch):
-        monkeypatch.setattr(const_borda, "AUDITORIA_MAX_BYTES", 100)   # uma linha ja passa disso
-        self._auditar("a")
-        self._auditar("b")      # a vira auditoria.1.jsonl, b abre o novo
-        assert [l["motivo"] for l in self._ler("auditoria.1.jsonl")] == ["a"]
-        assert [l["motivo"] for l in self._ler("auditoria.jsonl")] == ["b"]
-        self._auditar("c")      # b sobrescreve o .1, c abre o novo; a some
-        assert [l["motivo"] for l in self._ler("auditoria.1.jsonl")] == ["b"]
-        assert [l["motivo"] for l in self._ler("auditoria.jsonl")] == ["c"]
+            authz.auditar("/rota-x", 403, "sem_permissao", "idoso1")
+        saida = capsys.readouterr().out
+        assert "negado 403 sem_permissao rota=/rota-x conta=idoso1 ip=10.1.2.3" in saida

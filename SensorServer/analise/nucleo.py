@@ -1,8 +1,8 @@
 """
 Nucleo das regras: "processar este lote com este relogio e este estado".
 
-Entra: leituras e respostas de dispositivo, cada uma com o seu INSTANTE DE INGESTAO (o `instante_ingestao` que a
-borda grava em `leituras` / `respostas_dispositivo`), e o `EstadoRegras` de quem esta processando.
+Entra: leituras e respostas de dispositivo, cada uma com o seu INSTANTE DE INGESTAO (o que a borda anotou ao aceitar o
+dado), e o `EstadoRegras` de quem esta processando. Os tipos de entrada e saida moram em `comum/contrato_analise.py`.
 Sai: `Decisoes` (dados puros): comandos de push (cada um com a mudanca de episodio que deve ser gravada junto),
 alertas, registros de confirmacao, resumos de estado e descartes.
 
@@ -15,19 +15,19 @@ O que o nucleo NAO faz (e por que ele serve ao laco da analise, aos testes e as 
     de regra (usado por chamadas avulsas e testes); `novo_estado()` da um estado limpo e independente (o do laco).
 
 Ordem das decisoes: para o mesmo instante, quem aplica deve aplicar `confirmacoes`, depois `alertas`/`estados`, depois
-`comandos` (cada um grava episodio + comando juntos). E a ordem de `efeitos.aplicar_na_transacao`.
+`comandos` (cada um grava episodio + comando juntos). E a ordem de `borda/efeitos.py`.
 
-Validacao: a estrutura ja foi conferida pela borda para aceitar o dado, mas a analise precisa tratar do mesmo jeito
-o que ja esta no banco (leitura estruturalmente invalida e gravada e depois descartada, como hoje). Por isso o
-nucleo repete a conferencia estrutural, chamando o MESMO validador e os MESMOS schemas da borda
-(`comum.contratos.validar`, contratos de schemas/), sem copia de regra. A analise nao importa a borda: o que as duas
-partilham mora em `comum/`. Quando a borda passar a recusar com 400, essa chamada sai daqui.
+Validacao: a borda confere o envelope e o roteamento; o nucleo repete a conferencia estrutural do payload da fonte,
+chamando o MESMO validador e os MESMOS schemas (`comum.contratos.validar`, contratos de schemas/), sem copia de regra.
+A analise nao importa a borda: o que as duas partilham mora em `comum/`.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 
 from comum import const as const_comum
 from comum import contratos, mensagens
+from comum.contrato_analise import (  # noqa: F401  (reexportados: o nucleo e quem os usa)
+    Alerta, Comando, Confirmacao, Decisoes, Descarte, Leitura, MudancaEpisodio, Resposta, ResumoEstado, exigir_utc)
 from analise import regra_imobilidade
 from analise import regra_luz
 from analise import regra_queda
@@ -45,167 +45,6 @@ DESCARTE_FALHA = "falha_na_regra"
 
 
 # ============================================================================
-# Entrada
-# ============================================================================
-def _exigir_utc(instante: datetime) -> datetime:
-    if not isinstance(instante, datetime) or instante.tzinfo is None:
-        raise ValueError("instante deve ser um datetime com fuso (UTC)")
-    return instante
-
-
-@dataclass(frozen=True)
-class Leitura:
-    """Uma leitura aceita pela borda (a linha de `leituras`).
-
-    `payload` e o que foi gravado: os dados da fonte SEM `source` e `user_id`. `schema_version` e a versao ja
-    verificada (coluna `schema_version`); o nucleo a coloca no `schemaVersion` que as regras enxergam, como
-    server.py sempre fez."""
-    instante: datetime          # instante_ingestao (UTC)
-    user_id: int
-    device_id: str
-    fonte: str                  # "app" | "wokwi"
-    payload: dict
-    schema_version: int
-
-    def __post_init__(self):
-        _exigir_utc(self.instante)
-
-
-@dataclass(frozen=True)
-class Resposta:
-    """Uma resposta de dispositivo (a linha de `respostas_dispositivo`): o evento JA normalizado por
-    `borda.validacao.validar_evento_retorno` ({eventType, state, messageId, device_id, source}). A identidade
-    (`user_id`, `device_id`) vem do token, nunca do corpo."""
-    instante: datetime          # instante_ingestao (UTC)
-    user_id: int
-    device_id: str | None
-    fonte: str
-    evento: dict
-    schema_version: int
-
-    def __post_init__(self):
-        _exigir_utc(self.instante)
-
-
-# ============================================================================
-# Saida
-# ============================================================================
-@dataclass(frozen=True)
-class MudancaEpisodio:
-    """Estado novo de um episodio (linha de `episodios`). `tipo` e o motivo na abertura e "DESCONHECIDO" no
-    encerramento (o repositorio nao sobrescreve o tipo de um episodio que ja existe)."""
-    episodio_id: str
-    user_id: int
-    device_id: str | None
-    tipo: str
-    estado: str                 # "aguardando_confirmacao" | "encerrado"
-    aberto_em: datetime
-    atualizado_em: datetime
-    encerrado_em: datetime | None
-    motivo_encerramento: str | None
-    dados: dict
-
-    def como_linha(self) -> dict:
-        return {"episodio_id": self.episodio_id, "user_id": self.user_id, "device_id": self.device_id,
-                "tipo": self.tipo, "estado": self.estado, "aberto_em": self.aberto_em,
-                "atualizado_em": self.atualizado_em, "encerrado_em": self.encerrado_em,
-                "motivo_encerramento": self.motivo_encerramento, "dados": dict(self.dados)}
-
-
-@dataclass(frozen=True)
-class Comando:
-    """Mensagem de push a entregar (linha de `comandos_push`), com a mudanca de episodio que vai na MESMA transacao.
-    O `message_id` e gerado aqui, pelo nucleo."""
-    user_id: int
-    device_id: str | None       # dispositivo que originou o episodio (informativo)
-    mensagem: dict              # contrato push-mensagem
-    criado_em: datetime
-    expira_em: datetime | None
-    episodio: MudancaEpisodio
-
-    def como_linha(self) -> dict:
-        return {"criado_em": self.criado_em, "user_id": self.user_id, "device_id": None, "canal": "todos",
-                "message_id": self.mensagem["messageId"], "tipo": self.mensagem["messageType"],
-                "payload": self.mensagem, "expira_em": self.expira_em, "episodio_id": self.episodio.episodio_id}
-
-
-@dataclass(frozen=True)
-class Alerta:
-    """Alerta de regra (linha de `alertas`): `tipo` e "luz_inadequada" ou "imobilidade"."""
-    user_id: int
-    device_id: str
-    tipo: str
-    dados: dict                 # o dicionario devolvido pela regra
-    schema_version: int
-    instante: datetime
-
-    def como_linha(self) -> dict:
-        return {"instante": self.instante, "user_id": self.user_id, "device_id": self.device_id, "tipo": self.tipo,
-                "mensagem": self.dados.get("mensagem"), "dados": self.dados, "schema_version": self.schema_version}
-
-
-@dataclass(frozen=True)
-class Confirmacao:
-    """Registro do ciclo de confirmacao (episodio.aberto, push.ack, confirmacao.resposta, episodio.encerrado...)."""
-    user_id: int
-    tipo: str
-    dados: dict
-    instante: datetime
-
-
-@dataclass(frozen=True)
-class ResumoEstado:
-    """Resumo do estado da regra de imobilidade de um dispositivo (linha de `estado_dispositivo`)."""
-    user_id: int
-    device_id: str
-    instante: datetime
-    versao_regra: int
-    estado: dict
-
-    @property
-    def assinatura(self) -> tuple:
-        """So o que justifica uma nova gravacao: quem aplica grava apenas quando isto muda."""
-        return (self.estado.get("estado_atual"), self.estado.get("ultima_decisao"), self.estado.get("alerta_ativo"))
-
-    def como_linha(self) -> dict:
-        return {"user_id": self.user_id, "device_id": self.device_id, "atualizado_em": self.instante,
-                "versao_regra": self.versao_regra, "estado": self.estado}
-
-
-@dataclass(frozen=True)
-class Descarte:
-    """Leitura que nao chegou a alimentar uma regra (para metricas e log; nunca derruba o laco)."""
-    user_id: int
-    device_id: str | None
-    motivo: str
-    detalhe: str = ""
-
-
-@dataclass
-class Decisoes:
-    comandos: list[Comando] = field(default_factory=list)
-    alertas: list[Alerta] = field(default_factory=list)
-    confirmacoes: list[Confirmacao] = field(default_factory=list)
-    estados: list[ResumoEstado] = field(default_factory=list)
-    descartes: list[Descarte] = field(default_factory=list)
-
-    @property
-    def episodios(self) -> list[MudancaEpisodio]:
-        return [c.episodio for c in self.comandos]
-
-    def somar(self, outra: "Decisoes") -> "Decisoes":
-        self.comandos += outra.comandos
-        self.alertas += outra.alertas
-        self.confirmacoes += outra.confirmacoes
-        self.estados += outra.estados
-        self.descartes += outra.descartes
-        return self
-
-    def __bool__(self) -> bool:
-        return bool(self.comandos or self.alertas or self.confirmacoes or self.estados or self.descartes)
-
-
-# ============================================================================
 # Estado
 # ============================================================================
 @dataclass
@@ -214,6 +53,16 @@ class EstadoRegras:
     queda: regra_queda.EstadoQueda = field(default_factory=regra_queda.EstadoQueda)
     imobilidade: regra_imobilidade.EstadoImobilidade = field(default_factory=regra_imobilidade.EstadoImobilidade)
     luz: regra_luz.EstadoLuz = field(default_factory=regra_luz.EstadoLuz)
+
+
+def limpar_estado(estado: EstadoRegras) -> None:
+    """Esvazia, NO LUGAR, todas as tabelas do estado (quem guarda referencia a elas, como os modulos de regra com o PADRAO,
+    continua enxergando as mesmas). Usado na restauracao da analise."""
+    for sub in (estado.queda, estado.imobilidade, estado.luz):
+        for f in fields(sub):
+            valor = getattr(sub, f.name)
+            if isinstance(valor, dict):
+                valor.clear()
 
 
 def novo_estado() -> EstadoRegras:
@@ -399,7 +248,7 @@ def processar_resposta(estado: EstadoRegras, resposta: Resposta) -> Decisoes:
 def vigiar(estado: EstadoRegras, instante: datetime) -> Decisoes:
     """Passo SEPARADO do laco: encerra como EXPIRADO os episodios com prazo vencido em `instante`. E o unico passo
     cujo relogio e o do mundo real: quem chama passa `tempo.agora_utc()`."""
-    _exigir_utc(instante)
+    exigir_utc(instante)
     d = Decisoes()
     with regra_queda.coletar_registros() as anotados:
         try:

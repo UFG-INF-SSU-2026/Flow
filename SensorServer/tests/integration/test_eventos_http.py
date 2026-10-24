@@ -8,7 +8,6 @@ from borda import canal_wokwi
 from comum import const as const_comum
 from comum import mensagens
 from analise import regra_queda
-from borda import server
 from borda.sse_hub import HUB
 
 pytestmark = pytest.mark.usefixtures("pipeline")     # a analise e a entrega rodam em memoria apos cada POST
@@ -36,7 +35,7 @@ def _sem(corpo: dict, *campos) -> dict:
 
 
 def _abrir_episodio(user_id: int = 1):
-    """Abre um episodio (gatilho B) e registra a mensagem do pedido, (o episodio fica no estado PADRAO, que e o do laco dos testes).
+    """Abre um episodio (gatilho B) e registra a mensagem do pedido, (o episodio fica no estado PADRAO, que e o da analise em memoria dos testes).
     Devolve (pedido, mensagem). Nao grava comando: nada e entregue aos canais."""
     pedido = regra_queda.abrir_por_imobilidade(user_id)
     msg = mensagens.criar_pedido_confirmacao(user_id, pedido.episode_id, pedido.timeout_s, pedido.motivo)
@@ -86,9 +85,9 @@ class TestEventosValidos:
             assert r.status_code == 200 and r.get_json() == {"status": "ok"}
         assert len(ler_confirmacoes(1)) == 3
 
-    def test_nao_passa_pelo_buffer_de_agregacao(self, cli, tokens):
+    def test_nao_vira_leitura(self, cli, tokens, banco):
         cli.post("/eventos", _app(), tokens["idoso"])
-        assert server._buffer == {}
+        assert banco.tabelas["leituras"] == []
 
 
 # ------------------------------ evento invalido ------------------------------
@@ -183,8 +182,6 @@ class TestMensagemConhecida:
         resposta, encerrado = _sem_abertura(ler_confirmacoes)
         assert resposta["episodeId"] == pedido.episode_id and "mensagem_desconhecida" not in resposta
         assert encerrado["resultado"] == "CONFIRMADO"
-        assert {(e["canal"], e["resultado"]) for e in banco.tabelas["entregas_push"]} == {("app", "sem_conexao"),
-                                                                                         ("wokwi", "sem_conexao")}
         for canal, guardadas in _encerramentos_no_anel().items():   # sem conexao, mas o anel guarda para o replay
             assert [m["payload"]["resultado"] for m in guardadas] == ["CONFIRMADO"], canal
             assert guardadas[0]["episodeId"] == pedido.episode_id

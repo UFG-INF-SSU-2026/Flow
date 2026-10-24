@@ -19,12 +19,10 @@ ESTADO EXPLICITO. Todo o estado mora num `EstadoQueda`. As funcoes recebem `esta
 do modulo (os nomes `_estados`, `_episodios`... abaixo sao apelidos DAS MESMAS tabelas do PADRAO: limpar uma limpa
 a outra). O nucleo pode, assim, trabalhar com um estado proprio (o do laco da analise, simulacao, teste) sem tocar no PADRAO.
 
-REGISTROS. `registrar` grava a linha em arquivo. Dentro de `coletar_registros()` ela so ANOTA o registro (sem I/O): e
-assim que o nucleo transforma o registro em decisao, e o laco da analise o grava no banco (e no arquivo) depois.
+REGISTROS. `registrar` so ANOTA, dentro de `coletar_registros()` (sem I/O): e assim que o nucleo transforma o registro em
+decisao, e a borda o grava na tabela `confirmacoes`.
 """
-import json
 import math
-import os
 import threading
 import uuid
 from contextlib import contextmanager
@@ -33,9 +31,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from analise import const as const_analise   # limiares, cooldown, janelas e retencao
-from comum import const as const_comum       # prazos do pedido (timeout, margem), pasta de dados, versao padrao
+from comum import const as const_comum       # prazos do pedido (timeout, margem), versao padrao
 
-_lock_arquivo = threading.Lock()     # so o append em confirmacoes_usuario_<id>.jsonl
 
 
 @dataclass
@@ -424,24 +421,11 @@ def coletar_registros():
         _coletor.reset(token)
 
 
-def gravar_arquivo_confirmacao(user_id: int, linha: dict) -> None:
-    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (so enquanto const_comum.GRAVAR_ARQUIVOS). Separada de
-    `registrar` para a analise gravar o arquivo DEPOIS do commit da transacao (efeitos.aplicar_na_transacao)."""
-    if not const_comum.GRAVAR_ARQUIVOS:
-        return
-    os.makedirs(const_comum.DATA_DIR, exist_ok=True)
-    with _lock_arquivo, open(os.path.join(const_comum.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps(linha, ensure_ascii=False) + "\n")
-
-
 def registrar(user_id: int, tipo: str, dados: dict, agora: float | None = None) -> None:
-    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (enquanto const_comum.GRAVAR_ARQUIVOS). O `timestamp` da
-    linha e o instante `agora` da decisao. Dentro de coletar_registros() so anota (ver acima); o banco e escrito pelo
-    laco da analise, nunca por aqui."""
+    """Anota um registro do ciclo de confirmacao. Dentro de coletar_registros() a lista fica com quem pediu (o nucleo a
+    devolve em `Decisoes.confirmacoes`, e a borda a grava em `confirmacoes`); fora dele nao ha onde anotar e o registro
+    e descartado (chamadas avulsas das regras, como nos testes)."""
     agora = _agora() if agora is None else agora
     coletor = _coletor.get()
     if coletor is not None:
         coletor.append(Registro(user_id, tipo, dict(dados), agora))
-        return
-    linha = {"timestamp": datetime.fromtimestamp(agora, tz=timezone.utc).isoformat(), "tipo": tipo, **dados}
-    gravar_arquivo_confirmacao(user_id, linha)

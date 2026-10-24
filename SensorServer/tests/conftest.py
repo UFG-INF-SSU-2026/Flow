@@ -1,10 +1,9 @@
 """
 Fixtures compartilhadas (unit e integration).
 
-Estado global do servidor (episodios, hub SSE, falhas de login...) e limpo entre testes por uma fixture autouse.
+Estado global do servidor (episodios, hub SSE, falhas de login, filas...) e limpo entre testes por uma fixture autouse.
 Constantes de tempo sao ajustadas com monkeypatch.setattr(const, ...) em cada teste que precisa.
 """
-import json
 import logging
 import os
 import sys
@@ -19,18 +18,16 @@ if RAIZ not in sys.path:
 
 from _apoio import SEGREDO, ClienteFlask, ClienteReal  # noqa: E402
 
-# Antes de importar o servidor: segredo e caminhos fora da pasta real. server.py cria const_comum.DATA_DIR ao importar.
+# Antes de importar o servidor: segredo e caminhos fora da pasta real.
 _TMP = tempfile.mkdtemp(prefix="flow_tests_")
 os.environ["FLOW_SEM_DOTENV"] = "1"    # os testes nunca leem o SensorServer/.env real
 os.environ["FLOW_JWT_SECRET"] = SEGREDO
-os.environ["FLOW_SEM_THREADS"] = "1"   # importar server nao sobe flush nem vigia
+os.environ["FLOW_SEM_THREADS"] = "1"   # importar server nao sobe as threads de fundo
 os.environ["FLOW_DB_FAKE"] = "1"       # banco falso em memoria: os testes nunca falam com PostgreSQL (so tests/banco)
 os.environ["FLOW_CONTAS_PATH"] = os.path.join(_TMP, "contas.json")
 os.environ["FLOW_SESSOES_PATH"] = os.path.join(_TMP, "sessoes.json")
 
-from analise import const as const_analise  # noqa: E402
 from borda import const as const_borda  # noqa: E402
-from comum import const as const_comum  # noqa: E402
 
 
 def pytest_collection_modifyitems(items):
@@ -42,8 +39,6 @@ def pytest_collection_modifyitems(items):
         elif "integration" in partes:
             item.add_marker("integration")
 
-const_comum.DATA_DIR = os.path.join(_TMP, "dataUsers")
-
 import pytest  # noqa: E402
 from werkzeug.serving import make_server  # noqa: E402
 
@@ -51,6 +46,7 @@ from analise import regra_imobilidade  # noqa: E402
 from analise import regra_luz  # noqa: E402
 from analise import regra_queda  # noqa: E402
 from borda import auth  # noqa: E402
+from borda import efeitos  # noqa: E402
 from borda import server  # noqa: E402
 from borda import tempo  # noqa: E402
 from borda.sse_hub import HUB  # noqa: E402
@@ -64,11 +60,15 @@ def _limpar_estado() -> None:
     auth._bloqueado_ate.clear()
     for d in (regra_queda._estados, regra_queda._ultimo_log_desatualizada, regra_queda._episodios,
               regra_queda._mensagens, regra_queda._ultimo_ts_app, regra_imobilidade._estados,
-              regra_luz._estados, server._buffer):
+              regra_luz._estados):
         d.clear()
-    server._registros_recentes.clear()
+    server._recentes.clear()
     server._fila_leituras.clear()
+    server._fila_analise.clear()
     server._descartes_leituras = 0
+    server._descartes_analise = 0
+    server._cliente = None
+    server._aplicador = efeitos.Aplicador()
     repositorios.usar_fake()      # banco falso novo (vazio) a cada teste
     HUB._conns.clear()
     HUB._anel.clear()
@@ -77,16 +77,11 @@ def _limpar_estado() -> None:
 
 @pytest.fixture(autouse=True)
 def ambiente(tmp_path, monkeypatch):
-    """Isola cada teste: segredo, pastas em tmp_path, scrypt barato e estado global zerado."""
+    """Isola cada teste: segredo, contas em tmp_path, scrypt barato e estado global zerado."""
     monkeypatch.setenv("FLOW_JWT_SECRET", SEGREDO)
-    monkeypatch.setattr(const_comum, "DATA_DIR", str(tmp_path / "dataUsers"))
-    # O padrao do servidor e NAO gravar arquivos (FLOW_GRAVAR_ARQUIVOS=0). Os testes dos arquivos legados ligam a flag aqui;
-    # os que provam o padrao desligado a desligam de novo (tests/unit/test_const.py, test_banco_servidor.py).
-    monkeypatch.setattr(const_comum, "GRAVAR_ARQUIVOS", True)
     monkeypatch.setattr(const_borda, "CONTAS_PATH", str(tmp_path / "contas.json"))
     monkeypatch.setattr(const_borda, "SESSOES_PATH", str(tmp_path / "sessoes.json"))
     monkeypatch.setattr(const_borda, "SCRYPT_N", 2 ** 4)   # login e criar_conta em milissegundos
-    os.makedirs(const_comum.DATA_DIR, exist_ok=True)
     _limpar_estado()
     yield
     _limpar_estado()
@@ -94,17 +89,16 @@ def ambiente(tmp_path, monkeypatch):
 
 @pytest.fixture
 def banco():
-    """O BancoFalso do teste atual (borda e analise enxergam o mesmo). Use .borda()/.analise() para ler pelos repositorios
-    ou .tabelas[...] para inspecionar."""
+    """O BancoFalso do teste atual. E o proprio Repo (use os metodos dele) e tem .tabelas[...] para inspecionar."""
     return repositorios.banco_falso()
 
 
 @pytest.fixture
 def pipeline(request, monkeypatch):
-    """A analise e a entrega de push em memoria (tests/_pipeline.py). Quem a pede enxerga, depois de cada POST em /dados e
-    /eventos do `cli` (e do `servidor_real`), as decisoes ja gravadas e o push ja entregue, como no sistema de dois processos.
-    O vigia do laco usa o relogio sem atraso (o relogio dos testes e congelado ou explicito)."""
-    monkeypatch.setattr(const_analise, "ATRASO_VIGIA_S", 0)
+    """A analise em memoria ligada a borda (tests/_pipeline.py). Quem a pede enxerga, depois de cada POST em /dados e /eventos
+    do `cli` (e do `servidor_real`), as decisoes ja gravadas e o push ja entregue, como no sistema de dois processos.
+    O vigia usa o relogio sem atraso (o relogio dos testes e congelado ou explicito)."""
+    monkeypatch.setattr(const_borda, "ATRASO_VIGIA_S", 0)
     p = Pipeline()
     request.getfixturevalue("cli").apos_postar = p.drenar
     return p
@@ -137,15 +131,15 @@ def tokens(cli):
 
 
 @pytest.fixture
-def ler_confirmacoes():
-    """Le dataUsers/confirmacoes_usuario_<id>.jsonl como lista de dicts (vazia se nao existir)."""
-    def _ler(user_id: int) -> list[dict]:
-        caminho = os.path.join(const_comum.DATA_DIR, f"confirmacoes_usuario_{user_id}.jsonl")
-        if not os.path.exists(caminho):
-            return []
-        with open(caminho, encoding="utf-8") as f:
-            return [json.loads(l) for l in f if l.strip()]
-    return _ler
+def ler_confirmacoes(banco):
+    """Os registros do ciclo de confirmacao de um usuario, como lista de dicts ({timestamp, tipo, ...}): os gravados na
+    tabela `confirmacoes` (pela borda) e os anotados por chamadas diretas as regras (`regra_queda.registrar`)."""
+    with regra_queda.coletar_registros() as avulsos:
+        def _ler(user_id: int) -> list[dict]:
+            linhas = [{"timestamp": datetime.fromtimestamp(r.instante, tz=timezone.utc).isoformat(), "tipo": r.tipo, **r.dados}
+                      for r in avulsos if r.user_id == user_id]            # as avulsas vieram antes (testes as abrem a mao)
+            return linhas + [l["dados"] for l in banco.tabelas["confirmacoes"] if l["user_id"] == user_id]
+        yield _ler
 
 
 class _TempoFalso:

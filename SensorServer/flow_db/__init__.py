@@ -1,16 +1,14 @@
 """
-Pacote comum de banco do Flow (PostgreSQL + TimescaleDB).
+Camada de banco do Flow (PostgreSQL). Quem fala com o banco e a borda (Servidor 1), por uma unica interface:
 
-Dois servicos falam com o banco, cada um com o seu papel e a sua camada de acesso:
+    repo.py     a interface `Repo` (o que a borda precisa gravar e ler)
+    pg.py       `Pg`, a implementacao sobre PostgreSQL
+    fake.py     `BancoFalso`, a mesma interface em memoria (testes e `FLOW_DB_FAKE=1`, sem Docker)
 
-    borda   -> RepoBorda   (repo_borda.py),   implementado por PgBorda   (pg_borda.py)   e FachadaBorda   (fake.py)
-    analise -> RepoAnalise (repo_analise.py), implementado por PgAnalise (pg_analise.py) e FachadaAnalise (fake.py)
-
-Este pacote NAO importa Flask nem nenhum modulo do SensorServer. O driver (psycopg) so e importado dentro das
-funcoes que o usam, para que o banco falso (testes sem Docker) funcione sem ele.
+Este pacote NAO importa Flask nem nenhum modulo do SensorServer alem de `comum`. O driver (psycopg) so e importado dentro
+das funcoes que o usam, para que o banco falso funcione sem ele.
 
 Comandos (a partir de SensorServer/):
-    python -m flow_db provisionar   # cria/ajusta os papeis flow_borda e flow_analise (usa o usuario administrativo)
-    python -m flow_db migrar        # aplica as migracoes pendentes (usa o usuario administrativo)
-    python -m flow_db status        # mostra versao aplicada e papeis
+    python -m flow_db migrar    # aplica as migracoes pendentes
+    python -m flow_db status    # mostra a versao aplicada
 """

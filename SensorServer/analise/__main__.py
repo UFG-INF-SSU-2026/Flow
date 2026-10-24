@@ -1,7 +1,7 @@
 """python -m analise  ->  a ANALISE como processo proprio. Ver analise/servico.py.
 
-FLOW_SERVICO precisa existir ANTES de qualquer outro import do projeto: comum/const.py escolhe o arquivo de ambiente
-(.env.analise) por ele."""
+FLOW_SERVICO precisa existir ANTES de qualquer outro import do projeto: comum/const.py decide por ele que variaveis do .env
+ler (so as FLOW_ANALISE_*)."""
 import os
 import sys
 

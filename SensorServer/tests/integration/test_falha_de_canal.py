@@ -3,7 +3,7 @@ import pytest
 
 from comum import const as const_comum
 from analise import const as const_analise
-from borda import canal_app, canal_wokwi, entrega_push
+from borda import canal_app, canal_wokwi, efeitos
 
 pytestmark = pytest.mark.usefixtures("pipeline")
 from comum import mensagens
@@ -36,10 +36,6 @@ class Fluxo:
         return r
 
 
-def _entregas(banco):
-    return [(l["canal"], l["resultado"]) for l in banco.tabelas["entregas_push"]]
-
-
 def _resposta_app(cli, tokens, message_id):
     return cli.post("/eventos", {
         "schemaVersion": const_comum.SCHEMA_VERSION_APP, "source": "app", "user_id": 1, "device_id": "cel1",
@@ -47,7 +43,7 @@ def _resposta_app(cli, tokens, message_id):
         "messageId": message_id}, tokens["idoso"])
 
 
-def test_canal_app_falha_e_o_wokwi_ainda_recebe_o_pedido(cli, tokens, relogio, monkeypatch, banco):
+def test_canal_app_falha_e_o_wokwi_ainda_recebe_o_pedido(cli, tokens, relogio, monkeypatch):
     def quebrado(user_id, msg):
         raise RuntimeError("canal app quebrado")
 
@@ -55,7 +51,6 @@ def test_canal_app_falha_e_o_wokwi_ainda_recebe_o_pedido(cli, tokens, relogio, m
     r = Fluxo(cli, tokens, relogio).provocar_queda()
 
     assert r.status_code == 200                                      # nao virou 500
-    assert _entregas(banco) == [("app", "erro"), ("wokwi", "sem_conexao")]
     (guardada,) = [m for _, m in HUB._anel[(1, canal_wokwi.CANAL)]]    # o wokwi publicou (ficou no anel)
     assert guardada["messageType"] == mensagens.TIPO_SOLICITADA
     assert (1, canal_app.CANAL) not in HUB._anel
@@ -66,7 +61,7 @@ def test_falha_na_entrega_do_pedido_nao_da_500_em_dados(cli, tokens, relogio, mo
     def quebrado(*a, **k):
         raise RuntimeError("entrega quebrou")
 
-    monkeypatch.setattr(entrega_push.EntregaPush, "_entregar", quebrado)
+    monkeypatch.setattr(efeitos.Aplicador, "_entregar", quebrado)
     assert Fluxo(cli, tokens, relogio).provocar_queda().status_code == 200
 
 
@@ -77,13 +72,13 @@ def test_estou_bem_da_200_mesmo_se_o_aviso_de_encerramento_falhar(cli, tokens, r
     def quebrado(*a, **k):
         raise RuntimeError("entrega quebrou")
 
-    monkeypatch.setattr(entrega_push.EntregaPush, "_entregar", quebrado)
+    monkeypatch.setattr(efeitos.Aplicador, "_entregar", quebrado)
     r = _resposta_app(cli, tokens, message_id)
     assert r.status_code == 200 and r.get_json() == {"status": "ok"}
     assert regra_queda._episodios[1].resultado == "CONFIRMADO"
 
 
-def test_canal_que_falha_no_encerramento_nao_impede_o_outro(cli, tokens, relogio, monkeypatch, banco):
+def test_canal_que_falha_no_encerramento_nao_impede_o_outro(cli, tokens, relogio, monkeypatch):
     Fluxo(cli, tokens, relogio).provocar_queda()
     (message_id,) = regra_queda._mensagens
 
@@ -92,7 +87,6 @@ def test_canal_que_falha_no_encerramento_nao_impede_o_outro(cli, tokens, relogio
 
     monkeypatch.setattr(canal_app, "enviar", quebrado)
     assert _resposta_app(cli, tokens, message_id).status_code == 200
-    assert _entregas(banco)[-2:] == [("app", "erro"), ("wokwi", "sem_conexao")]
     encerradas = [m for _, m in HUB._anel[(1, canal_wokwi.CANAL)]
                   if m["messageType"] == mensagens.TIPO_ENCERRADA]
     assert len(encerradas) == 1 and encerradas[0]["payload"]["resultado"] == "CONFIRMADO"

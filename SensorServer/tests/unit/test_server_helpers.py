@@ -1,8 +1,7 @@
-"""Funcoes auxiliares da borda: verificar_versao, _ler_user_id; efeitos.nome_seguro."""
+"""Funcoes auxiliares da borda: verificar_versao, versao_atual_da_fonte, _ler_user_id."""
 import pytest
 
 from comum import const as const_comum
-from analise import efeitos
 from borda import server
 
 
@@ -50,18 +49,3 @@ class TestLerUserId:
     @pytest.mark.parametrize("v", [True, False, 1.0, 1.9, "1", "01", " 1", None, [], {}, float("nan")])
     def test_o_resto_e_rejeitado(self, v):
         assert server._ler_user_id(v) is None
-
-
-class TestNomeSeguro:
-    def test_normal(self):
-        assert efeitos.nome_seguro("cel-1_a.b") == "cel-1_a.b"
-
-    @pytest.mark.parametrize("entrada,esperado", [("../x", ".._x"), ("a/b\\c", "a_b_c"), ("ação", "a__o")])
-    def test_troca_o_que_sai_do_conjunto(self, entrada, esperado):
-        assert efeitos.nome_seguro(entrada) == esperado
-
-    def test_limite_de_tamanho(self):
-        assert len(efeitos.nome_seguro("a" * 500)) == const_comum.MAX_DEVICE_ID_LEN
-
-    def test_nao_sai_da_pasta(self):
-        assert "/" not in efeitos.nome_seguro("../../etc/passwd")

@@ -1,76 +1,40 @@
 """
-Servidor centralizado de dados de sensores (Marco 3 - integracao ubiqua).
+BORDA (Servidor 1) do SensorServer: unico servico com porta de rede, com acesso ao banco, aos dispositivos, aos segredos de
+transporte (chave AES, segredo JWT) e as contas. NAO decide nada: aceita, valida, grava, pergunta a analise e entrega.
 
-Agora o mesmo servidor recebe dados de DUAS fontes diferentes, que podem
-pertencer ao MESMO usuario (o mesmo idoso pode estar com o celular e com um
-dispositivo wokwi ao mesmo tempo):
+Duas fontes de dados, que podem pertencer ao MESMO usuario (o mesmo idoso pode estar com o celular e com um dispositivo
+wokwi ao mesmo tempo):
 
-    App Android (SensorApp)
-        -> cifra o JSON (AES-256-GCM, ver crypto_utils.py)
-        -> POST /dados  {"nonce": ..., "ciphertext": ...}
-        -> payload decifrado inclui "user_id" (int) e "source": "app"
+    App Android (SensorApp)   -> cifra o JSON (AES-256-GCM, ver crypto_utils.py) -> POST /dados {"nonce", "ciphertext"}
+    Wokwi (via WokwiBridge)   -> o bridge le a serial do ESP32, anexa "user_id" e "source": "wokwi", cifra e -> POST /dados
 
-    Wokwi (via WokwiBridge/bridge.py)
-        -> bridge le a serial do ESP32 simulado, anexa "user_id" e
-           "source": "wokwi" ao evento, cifra (mesma chave/algoritmo) e
-        -> POST /dados  {"nonce": ..., "ciphertext": ...}
+Autenticacao e autorizacao: nenhuma rota de dados e aberta. O cliente faz login em POST /auth/login (identificador, segredo,
+fonte e device_id, cifrados com a mesma chave) e recebe, tambem cifrados, um access token e um refresh token (auth.py). O
+refresh e de uso unico: POST /auth/refresh devolve um par novo. Todas as demais rotas exigem "Authorization: Bearer <token>".
+Em cada uma, authz.py checa a permissao do papel da conta (estagio 1, antes de decifrar o corpo) e, nas rotas com corpo,
+que o user_id e a source declarados sao os do token (estagio 2). O que nao esta na politica e negado.
 
-Como as duas fontes agora enviam a cada 1 segundo (mas de forma
-assincrona, sem sincronizacao entre si), o servidor NAO grava um arquivo
-por requisicao. Em vez disso:
+Caminho de uma leitura (a borda NAO decide; quem decide e a analise, `python -m analise`, outro processo):
 
-    1. Cada payload decifrado que chega e guardado em um buffer em memoria,
-       na chave do "user_id", sobrescrevendo a leitura mais recente daquela
-       fonte ("app" ou "wokwi") dentro da janela atual.
-    2. Uma thread de fundo "dispara" a cada 1 segundo (janela fixa) e, para
-       cada usuario que recebeu QUALQUER dado desde o ultimo disparo, grava
-       UMA linha no arquivo dataUsers/usuario_<user_id>.jsonl, no formato:
+    1. Cada leitura aceita vai para uma fila em memoria e, em lotes (a cada 250 ms), para a tabela `leituras`.
+    2. Gravado o lote, a borda o manda a analise (borda/cliente_analise.py: POST /analisar). A analise responde com
+       DECISOES (comandos de push, alertas, registros de confirmacao, estado do dispositivo).
+    3. A borda grava as decisoes numa transacao (borda/efeitos.py) e, so depois do commit, entrega o push pelo SSE:
+       GET /push/app (app) e GET /push/wokwi (bridge), cifrado e com replay para quem reconectar (sse_hub.py).
+    4. O dispositivo responde com POST /eventos ("push.ack", "confirmacao.resposta"): a borda valida e manda a resposta a
+       analise pelo mesmo caminho, com a identidade vinda do TOKEN (nunca do corpo).
+    5. Uma thread de vigia chama POST /vigiar da analise para encerrar por expiracao os episodios que ninguem respondeu.
+    6. GET /estado/<device_id> le o resumo gravado em `estado_dispositivo`; GET /health mostra se a analise responde.
 
-           {
-             "timestamp": "<hora do flush, ISO 8601>",
-             "user_id": <int>,
-             "app": {...} | null,
-             "wokwi": {...} | null
-           }
-
-       Se uma das fontes nao mandou nada naquela janela de 1s, a chave dela
-       fica como null (nao repete o ultimo valor conhecido).
-
-Alem disso, cada leitura aceita vira uma linha de `leituras` (descarga em lote, a cada 250 ms), independente do buffer
-acima: e dela que a analise (outro processo) decide luz inadequada, imobilidade e queda, sem esperar o flush de 1s.
-
-Autenticacao e autorizacao: nenhuma rota de dados e aberta. O cliente faz login em POST /auth/login
-(identificador, segredo, fonte e device_id, cifrados com a mesma chave) e recebe, tambem cifrados, um
-access token e um refresh token (auth.py). O refresh e de uso unico: POST /auth/refresh devolve um par
-novo. Todas as demais rotas exigem "Authorization: Bearer <access_token>". Em cada uma, authz.py
-checa a permissao do papel da conta (estagio 1, antes de decifrar o corpo) e, nas rotas com corpo, que o
-user_id e a source declarados sao os do token (estagio 2). O que nao esta na politica e negado.
-
-Caminho de volta (servidor -> dispositivo), tambem do Marco 3. A borda NAO decide: quem decide e a analise
-(`python -m analise`, outro processo, sem porta de rede), e o banco e o unico elo entre as duas:
-
-    1. Cada leitura aceita vai para uma fila em memoria e, em lotes, para a tabela `leituras` (com o instante da
-       ingestao). A analise le `leituras` por cursor e o nucleo das regras (analise/nucleo.py: luz, imobilidade e queda)
-       transforma cada leitura em DECISOES. Ao concluir QUEDA PROVAVEL (impacto seguido de imobilidade, ou imobilidade
-       prolongada), uma das decisoes e um comando de push (comum/mensagens.py), gravado em `comandos_push`.
-    2. A borda le `comandos_push` por cursor (borda/entrega_push.py) e entrega cada mensagem a TODOS os canais:
-       GET /push/app (SSE para o app) e GET /push/wokwi (SSE para o bridge). Cada mensagem vai cifrada com a mesma chave e
-       passa pelo hub de conexoes (sse_hub.py), que guarda as mensagens ainda validas para quem reconectar. O resultado de
-       cada entrega vai para `entregas_push`.
-    3. O dispositivo responde com POST /eventos: "push.ack" (ativou ou rejeitou o push) e "confirmacao.resposta"
-       (ESTOU_BEM ou SEM_RESPOSTA). A borda valida o evento e o grava em `respostas_dispositivo`, com a identidade vinda do
-       TOKEN (nunca do corpo). Quem associa a messageId ao episodio e, se for ESTOU_BEM de um episodio aberto, o encerra e
-       a analise.
-    4. O vigia da analise encerra por expiracao os episodios que ninguem respondeu. Todo encerramento (resposta ou
-       expiracao) vira um comando "queda.confirmacao_encerrada", entregue pelos canais como os demais.
-    5. GET /estado/<device_id> le o resumo que a analise grava em `estado_dispositivo` e GET /health acusa quando a
-       analise para de decidir (batimento velho ou atraso, borda/saude.py).
+Se a analise cai, a borda segue aceitando e gravando leituras (a fila de espera e limitada) e o /health acusa "degradado"; ao
+voltar (ou reiniciar), a analise recebe o estado de volta (/restaurar) e a fila. Se o banco cai, as leituras ficam na fila
+limitada e nenhuma decisao e aplicada nem push enviado ate o banco voltar.
 
 Como rodar (a partir de SensorServer/; scripts/ faz tudo na ordem certa):
-    python -m borda      sobe a borda (le .env.borda; contas se criam com "python -m borda.auth criar-conta")
-    python -m analise    sobe a analise (le .env.analise)
-    "python -m borda.server" (ou "flask --app borda.server run", ou WSGI) sobe a MESMA borda sem desligamento ordenado, lendo o
-    .env de sempre: serve ao desenvolvimento. Sem a analise rodando ninguem decide queda, imobilidade nem luz.
+    python -m borda      sobe a borda (contas se criam com "python -m borda.auth criar-conta")
+    python -m analise    sobe a analise (so escuta em 127.0.0.1)
+    "python -m borda.server" (ou "flask --app borda.server run", ou WSGI) sobe a MESMA borda sem desligamento ordenado: serve
+    ao desenvolvimento. Sem a analise rodando ninguem decide queda, imobilidade nem luz.
     Sem FLOW_JWT_SECRET o servidor nao sobe. O segredo, o banco e as threads de fundo sao tratados no import
     (FLOW_SEM_THREADS=1 desliga as threads, para os testes).
 """
@@ -79,23 +43,24 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, g
 
 from borda import auth
 from borda import canal_app
 from borda import canal_wokwi
+from borda import cliente_analise
 from borda import const as const_borda
-from borda import saude
+from borda import efeitos
 from borda import tempo
 from borda import validacao
-from borda import via_banco
 from comum import const as const_comum
+from comum.contrato_analise import Leitura, Resposta, instante_para_json
 from flow_db import repositorios
 from borda.authz import exige, exigir_dispositivo, exigir_escopo, ForaDeEscopo, negar
 from borda.crypto_utils import decrypt_payload, encrypt_payload, DecryptionError
 from borda.sse_hub import HUB
-
 
 
 app = Flask(__name__)
@@ -103,31 +68,24 @@ app.config["MAX_CONTENT_LENGTH"] = const_borda.MAX_CONTENT_LENGTH   # corpo maio
 app.register_blueprint(canal_app.bp)
 app.register_blueprint(canal_wokwi.bp)
 
-os.makedirs(const_comum.DATA_DIR, exist_ok=True)
-
 # ---------------------------------------------------------------------------
-# Buffer de agregacao por usuario (protegido por lock, pois a thread de
-# flush roda em paralelo com as requisicoes HTTP recebidas pelo Flask).
-#
-#   _buffer[user_id] = {"app": <payload ou None>, "wokwi": <payload ou None>}
-# ---------------------------------------------------------------------------
-_buffer_lock = threading.Lock()
-_buffer: dict[int, dict[str, dict | None]] = {}
-
-# Guarda os ultimos registros gravados (limite: const_borda.MAX_EM_MEMORIA), so para o GET /dados de debug.
-_registros_recentes: list[dict] = []
-
-# ---------------------------------------------------------------------------
-# Banco (PostgreSQL). Cada leitura aceita entra numa FILA limitada em memoria e a thread de descarga a grava em
-# lotes (tabela `leituras`). Nenhuma requisicao espera o banco: se ele cair, a fila segue enchendo ate o teto e as
-# leituras mais antigas saem (descarte contado e logado). As demais escritas (alertas, episodios, comandos, entregas,
-# respostas, confirmacoes, auditoria, estado) passam por repositorios.tentar_*: falha vai para o log, nunca vira 500.
+# Filas em memoria (limitadas). Nenhuma requisicao espera o banco nem a analise.
+#   _fila_leituras  leituras aceitas que ainda nao foram gravadas em `leituras` (a thread de fundo as grava em lote)
+#   _fila_analise   itens (leituras ja gravadas e respostas dos dispositivos) que esperam a analise
+# Se o banco ou a analise cair, as filas enchem ate o teto e os itens mais antigos saem (descarte contado e logado).
 # ---------------------------------------------------------------------------
 _fila_lock = threading.Lock()
-_parar_flush = threading.Event()          # pede o fim da thread de descarga (encerrar())
+_parar_flush = threading.Event()          # pede o fim das threads de fundo (encerrar())
 _thread_flush: threading.Thread | None = None
+_thread_vigia: threading.Thread | None = None
 _fila_leituras: list[dict] = []
+_fila_analise: list = []
 _descartes_leituras = 0
+_descartes_analise = 0
+_recentes: deque = deque(maxlen=const_borda.MAX_EM_MEMORIA)   # so para o GET /dados de debug
+_ultimo_log_falha = float("-inf")
+_cliente: "cliente_analise.ClienteAnalise | None" = None
+_aplicador = efeitos.Aplicador()
 
 
 def _instante_origem(source: str, dados: dict) -> datetime | None:
@@ -143,11 +101,20 @@ def _instante_origem(source: str, dados: dict) -> datetime | None:
         return None
 
 
+def _log_falha(mensagem: str) -> None:
+    """Falha repetida (banco ou analise fora do ar): no maximo uma linha de log por INTERVALO_LOG_FALHA_S."""
+    global _ultimo_log_falha
+    agora = time.monotonic()
+    if agora - _ultimo_log_falha >= const_borda.INTERVALO_LOG_FALHA_S:
+        _ultimo_log_falha = agora
+        print(f"  [pipeline] {mensagem}")
+
+
 def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, versao: int, conta_id: str | None,
                         instante: datetime) -> None:
-    """`instante` e o instante da ingestao (lido UMA vez em receber_dados): o mesmo que o nucleo das regras usa."""
+    """`instante` e o instante da ingestao (lido UMA vez em receber_dados): o mesmo que as regras usam."""
     global _descartes_leituras
-    if repositorios.borda() is None:
+    if repositorios.repo() is None:
         return
     if source == "wokwi":
         tipo = dados.get("eventType")
@@ -156,6 +123,8 @@ def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, 
     leitura = {"instante_ingestao": instante, "user_id": user_id, "device_id": device_id,
                "fonte": source, "tipo_evento": tipo if isinstance(tipo, str) else None, "schema_version": versao,
                "instante_origem": _instante_origem(source, dados), "conta_id": conta_id, "payload": dados}
+    _recentes.append({"timestamp": instante.isoformat(), "user_id": user_id, "source": source, "device_id": device_id,
+                      "dados": dados})
     with _fila_lock:
         _fila_leituras.append(leitura)
         excesso = len(_fila_leituras) - const_borda.MAX_FILA_LEITURAS
@@ -164,6 +133,22 @@ def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, 
             _descartes_leituras += excesso
             print(f"  [db] fila de leituras cheia: {excesso} leitura(s) mais antiga(s) descartada(s) "
                   f"(total {_descartes_leituras})")
+
+
+def _entrar_na_fila_analise(itens: list, no_inicio: bool = False) -> None:
+    """Poe itens na fila da analise (no inicio, se estao sendo devolvidos), respeitando o teto."""
+    global _descartes_analise
+    with _fila_lock:
+        if no_inicio:
+            _fila_analise[0:0] = itens
+        else:
+            _fila_analise.extend(itens)
+        excesso = len(_fila_analise) - const_borda.MAX_FILA_ANALISE
+        if excesso > 0:
+            del _fila_analise[:excesso]
+            _descartes_analise += excesso
+            print(f"  [analise] fila de espera cheia: {excesso} item(ns) mais antigo(s) descartado(s) "
+                  f"(total {_descartes_analise})")
 
 
 def _devolver_lote(lote: list[dict]) -> None:
@@ -177,119 +162,133 @@ def _devolver_lote(lote: list[dict]) -> None:
             _descartes_leituras += excesso
 
 
+def _leitura_de_linha(linha: dict) -> Leitura:
+    return Leitura(linha["instante_ingestao"], linha["user_id"], linha["device_id"], linha["fonte"], linha["payload"],
+                   linha["schema_version"])
+
+
 def _descarregar_leituras() -> bool:
-    """Esvazia a fila em lotes. Chamada SO pela thread de descarga (uma unica escritora de `leituras`; no desligamento,
-    por `encerrar()` depois de a thread parar). Devolve False se a gravacao falhou (o lote voltou para a fila)."""
+    """Esvazia a fila de leituras em lotes: grava no banco e passa cada lote gravado para a fila da analise. Chamada SO
+    pela thread de fundo (uma unica escritora de `leituras`; no desligamento, por `encerrar()` depois de a thread parar).
+    Devolve False se a gravacao falhou (o lote voltou para a fila)."""
     for _ in range(20):    # teto por passada: nao monopoliza a thread se a fila estiver enorme
         with _fila_lock:
             lote = _fila_leituras[:const_borda.TAMANHO_LOTE_LEITURAS]
             del _fila_leituras[:len(lote)]
         if not lote:
             return True
-        if not repositorios.tentar_borda("leituras", lambda b: b.gravar_leituras(lote)):
+        try:
+            repo = repositorios.repo()
+            if repo is None:
+                raise RuntimeError("sem banco")
+            repo.gravar_leituras(lote)
+        except Exception as e:  # noqa: BLE001  (o banco nunca derruba a borda)
             _devolver_lote(lote)
+            _log_falha(f"banco indisponivel: {len(lote)}+ leitura(s) esperam na fila: {type(e).__name__}: {str(e)[:200]}")
+            return False
+        _entrar_na_fila_analise([_leitura_de_linha(l) for l in lote])
+    return True
+
+
+def _montar_restauracao() -> dict:
+    """O que a analise precisa para reconstruir o estado (POST /restaurar): as leituras dos ultimos segundos, os episodios
+    abertos e recentes e as mensagens deles, tudo do banco. Os itens ainda na fila da analise ficam de fora das leituras
+    (eles serao enviados de qualquer jeito). Levanta se o banco falhar."""
+    repo = repositorios.repo()
+    if repo is None:
+        raise RuntimeError("sem banco")
+    agora = tempo.agora_utc()
+    with _fila_lock:
+        antes_de = min((i.instante for i in _fila_analise), default=None)
+    linhas = repo.ler_leituras_recentes(agora - timedelta(seconds=const_borda.JANELA_RESTAURACAO_S), antes_de,
+                                        const_borda.LIMITE_RESTAURACAO)
+    episodios = repo.listar_episodios_recentes(agora - timedelta(seconds=const_borda.RETENCAO_EPISODIOS_S))
+    comandos = repo.listar_comandos_de_episodios([e["episodio_id"] for e in episodios])
+    leituras = []
+    for linha in linhas:
+        try:
+            leituras.append(_leitura_de_linha(linha).para_json())
+        except (KeyError, ValueError):
+            continue
+    return {"leituras": leituras,
+            "episodios": [{**e, **{k: instante_para_json(e.get(k)) for k in ("aberto_em", "atualizado_em", "encerrado_em")}}
+                          for e in episodios],
+            "mensagens": [{"episodio_id": c["episodio_id"], "message_id": c["message_id"], "tipo": c["tipo"]}
+                          for c in comandos]}
+
+
+def configurar_analise(transporte) -> "cliente_analise.ClienteAnalise":
+    """Liga a borda a analise por `transporte` (HTTP em producao; chamada direta nos testes)."""
+    global _cliente
+    _cliente = cliente_analise.ClienteAnalise(transporte, _montar_restauracao)
+    return _cliente
+
+
+def _analisar_fila() -> bool:
+    """Manda a fila de espera a analise em lotes e aplica as decisoes (borda/efeitos.py). Chamada pela thread de fundo.
+    Devolve False se a analise ou o banco falharam (o lote fica na fila; as decisoes ja tomadas ficam guardadas)."""
+    if _cliente is None:
+        return True
+    if not _aplicador.aplicar():                   # decisoes de antes que ainda nao chegaram ao banco
+        return False
+    for _ in range(20):
+        with _fila_lock:
+            lote = _fila_analise[:const_borda.TAMANHO_LOTE_LEITURAS]
+        if not lote:
+            return True
+        try:
+            decisoes = _cliente.analisar(lote)
+        except cliente_analise.AnaliseIndisponivel as e:
+            _log_falha(f"analise fora do ar ({e}): {len(lote)}+ item(ns) esperam na fila")
+            return False
+        except cliente_analise.RequisicaoRecusada:
+            decisoes = None
+            print(f"  [analise] lote de {len(lote)} item(ns) recusado pela analise: descartado")
+        with _fila_lock:
+            del _fila_analise[:len(lote)]
+        if decisoes is not None and not _aplicador.aplicar(decisoes):
             return False
     return True
+
+
+def ciclo_pipeline() -> None:
+    """Um passo da thread de fundo: grava as leituras e passa pela analise. Nao levanta."""
+    try:
+        _descarregar_leituras()
+        _analisar_fila()
+    except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
+        print(f"  [pipeline] falha no passo (a thread segue): {type(e).__name__}: {str(e)[:200]}")
+
+
+def passo_vigia() -> None:
+    """Encerra por expiracao os episodios vencidos (a analise decide; a borda grava e entrega). Usa o relogio real MENOS
+    ATRASO_VIGIA_S, para o dado ainda em transito ser analisado antes. Nao levanta."""
+    if _cliente is None:
+        return
+    try:
+        instante = tempo.agora_utc() - timedelta(seconds=const_borda.ATRASO_VIGIA_S)
+        decisoes = _cliente.vigiar(instante)
+    except cliente_analise.AnaliseIndisponivel as e:
+        _log_falha(f"analise fora do ar ({e}): o vigia nao encerra episodios ate ela voltar")
+        return
+    except Exception as e:  # noqa: BLE001
+        print(f"  [vigia] falha (a thread segue): {type(e).__name__}: {str(e)[:200]}")
+        return
+    _aplicador.aplicar(decisoes)
 
 
 def _agora_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _arquivo_usuario(user_id: int) -> str:
-    return os.path.join(const_comum.DATA_DIR, f"usuario_{user_id}.jsonl")
-
-
-def _registrar_no_buffer(user_id: int, source: str, dados: dict) -> None:
-    """Guarda a leitura mais recente de 'source' para 'user_id' na janela atual."""
-    with _buffer_lock:
-        slot = _buffer.setdefault(user_id, {"app": None, "wokwi": None})
-        slot[source] = dados
-
-
-def _gravar_usuario(user_id: int, fontes: dict) -> None:
-    """Grava a linha de um usuario no flush. Pode levantar excecao (disco, permissao, dado nao serializavel)."""
-    dado_app = fontes.get("app")
-    dado_wokwi = fontes.get("wokwi")
-
-    if dado_app is None and dado_wokwi is None:
-        return  # nada chegou dessa vez para esse usuario
-
-    registro = {
-        "timestamp": _agora_iso(),
-        "user_id": user_id,
-        "app": dado_app,
-        "wokwi": dado_wokwi,
-    }
-
-    filepath = _arquivo_usuario(user_id)
-    if const_comum.GRAVAR_ARQUIVOS:
-        with open(filepath, "a", encoding="utf-8") as f:
-            f.write(json.dumps(registro, ensure_ascii=False) + "\n")
-
-    _registros_recentes.append(registro)
-    if len(_registros_recentes) > const_borda.MAX_EM_MEMORIA:
-        _registros_recentes.pop(0)
-
-    if const_borda.GRAVAR_TELEMETRIA_LEGADO:   # dupla escrita: mesma linha, agora tambem na tabela `telemetria`
-        repositorios.tentar_borda("telemetria", lambda b: b.gravar_telemetria([{
-            "instante": datetime.fromisoformat(registro["timestamp"]), "user_id": user_id,
-            "app": dado_app, "wokwi": dado_wokwi}]))
-
-    print(
-        f"[{registro['timestamp']}] usuario={user_id} "
-        f"app={'ok' if dado_app else 'null'} "
-        f"wokwi={'ok' if dado_wokwi else 'null'} -> {filepath}"
-    )
-
-
-def _flush_iteracao() -> None:
-    """Uma passada do flush: esvazia o buffer e grava uma linha por usuario.
-    Cada usuario tem a sua propria protecao: a falha de um nao impede a gravacao dos outros.
-    A linha do usuario que falhou se perde (o buffer ja foi esvaziado); o erro fica no log."""
-    with _buffer_lock:
-        _buffer_local_copy = {uid: dict(v) for uid, v in _buffer.items()}
-        _buffer.clear()
-
-    for user_id, fontes in _buffer_local_copy.items():
-        try:
-            _gravar_usuario(user_id, fontes)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [flush] falha ao gravar usuario={user_id} (linha perdida): {type(e).__name__}: {str(e)[:200]}")
-
-
-def _flush_loop() -> None:
-    """Roda em thread separada (a UNICA que grava `leituras`). A cada const_borda.INTERVALO_DESCARGA_S descarrega a fila de
-    leituras em lote; a cada const_borda.JANELA_AGREGACAO_S grava tambem uma linha por usuario que recebeu dado
-    (de app e/ou wokwi) na janela (telemetria agregada, como antes)."""
-    ultima_janela = time.monotonic()
-    while not _parar_flush.wait(const_borda.INTERVALO_DESCARGA_S):    # o desligamento acorda e encerra a thread
-        try:
-            _descarregar_leituras()
-        except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
-            print(f"  [flush] falha na descarga de leituras (a thread segue): {type(e).__name__}: {str(e)[:200]}")
-        if time.monotonic() - ultima_janela >= const_borda.JANELA_AGREGACAO_S:
-            ultima_janela = time.monotonic()
-            try:
-                _flush_iteracao()
-            except Exception as e:  # noqa: BLE001
-                print(f"  [flush] falha na iteracao (a thread segue): {type(e).__name__}: {str(e)[:200]}")
+def _loop(passo, intervalo_s: float) -> None:
+    while not _parar_flush.wait(intervalo_s):      # o desligamento acorda e encerra a thread
+        passo()
 
 
 def _estatisticas_borda() -> dict:
     with _fila_lock:
         return {"fila_leituras": len(_fila_leituras), "leituras_descartadas": _descartes_leituras}
-
-
-_monitor: "saude.MonitorSaude | None" = None
-
-
-def _monitor_saude() -> "saude.MonitorSaude":
-    """O monitor de saude do pipeline, criado na primeira necessidade (a rota /health ou a subida das threads)."""
-    global _monitor
-    if _monitor is None:
-        _monitor = saude.MonitorSaude(estatisticas=_estatisticas_borda)
-    return _monitor
 
 
 @app.errorhandler(413)
@@ -372,7 +371,7 @@ def refresh():
 @app.route("/eventos", methods=["POST"])
 @exige("eventos:enviar")
 def receber_evento():
-    """Eventos discretos de retorno (push.ack, confirmacao.resposta). NAO passa pelo buffer de 1s."""
+    """Eventos discretos de retorno (push.ack, confirmacao.resposta): vao a analise pela fila, como as leituras."""
     corpo = _decifrar_corpo()
     if isinstance(corpo, tuple):
         return corpo
@@ -395,12 +394,9 @@ def receber_evento():
     except validacao.EventoRetornoInvalido as e:
         print(f"  [eventos] descartado (invalido): {e}")
         return jsonify({"status": "ok", "descartado": True}), 200   # conteudo invalido: 200, como em /dados
-    # Resposta crua do dispositivo -> banco (borda). Identidade SEMPRE do token, nunca do corpo.
-    agora = tempo.agora_utc()   # instante da ingestao (respostas_dispositivo.instante_ingestao): a analise decide por ele
-    repositorios.tentar_borda("resposta", lambda b: b.gravar_resposta({
-        "instante_ingestao": agora, "user_id": user_id, "device_id": g.principal.device_id,
-        "fonte": g.principal.fonte, "tipo": ev["eventType"], "message_id": ev.get("messageId"),
-        "schema_version": versao, "payload": ev}))
+    # Resposta do dispositivo -> fila da analise. Identidade SEMPRE do token, nunca do corpo.
+    agora = tempo.agora_utc()   # instante da ingestao: a analise decide por ele
+    _entrar_na_fila_analise([Resposta(agora, user_id, g.principal.device_id, g.principal.fonte, ev, versao)])
     return jsonify({"status": "ok"}), 200
 
 
@@ -431,12 +427,11 @@ def receber_dados():
     if versao is None:
         return _descartar_por_versao("dados", payload)
 
-    # payload especifico da fonte, sem os campos de roteamento (ja estao no
-    # nivel superior do registro gravado: user_id/timestamp)
+    # payload especifico da fonte, sem os campos de roteamento (a coluna user_id e a fonte da leitura os guardam)
     dados_fonte = {k: v for k, v in payload.items() if k not in ("source", "user_id")}
 
     # versao verificada acompanha o payload (a validacao do contrato a enxerga). Feito DEPOIS de montar
-    # dados_fonte, para nao alterar o registro gravado no jsonl nem a leitura gravada em `leituras`.
+    # dados_fonte, para nao alterar a leitura gravada em `leituras`.
     payload["schemaVersion"] = versao
 
     if source == "app":   # contrato tolerante: so avisa (sem o conteudo); a telemetria segue como sempre
@@ -448,10 +443,8 @@ def receber_dados():
 
     print(f"[{_agora_iso()}] Dados decifrados: user_id={user_id} source={source} device_id={device_id}")
 
-    # 3. Guarda no buffer de agregacao (vira 1 linha no jsonl do usuario no
-    #    proximo flush de 1s, junto com a outra fonte, se houver)
+    # 3. Enfileira a leitura (a thread de fundo a grava em `leituras` e a manda a analise)
     agora = tempo.agora_utc()   # o UNICO relogio lido na requisicao: instante da ingestao (leituras.instante_ingestao), que a analise usa
-    _registrar_no_buffer(user_id, source, dados_fonte)
     _enfileirar_leitura(user_id, source, device_id, dados_fonte, versao, g.principal.conta_id, agora)
 
     # 4. Fim da borda: a leitura segue para a tabela `leituras` (descarga em lote) e quem decide luz, imobilidade e queda e a
@@ -467,28 +460,36 @@ def receber_dados():
 @app.route("/dados", methods=["GET"])
 @exige("dados:ler")
 def listar_dados():
-    """Debug: lista os ultimos registros ja gravados (pos-flush)."""
-    return jsonify(_registros_recentes)
+    """Debug: lista as ultimas leituras aceitas (so em memoria, ate MAX_EM_MEMORIA)."""
+    return jsonify(list(_recentes))
 
 
 @app.route("/estado/<device_id>", methods=["GET"])
 @exige("estado:ler")
 def obter_estado_imobilidade(device_id):
-    """Debug/demo: expoe a tabela de estado persistente (nao o buffer de
-    1s) de um dispositivo wokwi - evidencia observavel de 'mudanca de
-    estado', separada do log em dataUsers/usuario_<id>.jsonl."""
-    estado = via_banco.estado_do_dispositivo(device_id)   # le `estado_dispositivo`, onde a analise grava; procura em todos os usuarios
-    if estado is None:
+    """Debug/demo: expoe o estado persistente de imobilidade de um dispositivo (`estado_dispositivo`, gravado a partir das
+    decisoes da analise); procura em todos os usuarios."""
+    try:
+        repo = repositorios.repo()
+        linha = None if repo is None else repo.ler_estado_por_dispositivo(device_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [estado] banco indisponivel: {type(e).__name__}")
+        return jsonify({"status": "erro", "mensagem": "banco indisponivel"}), 503
+    if linha is None:
         return jsonify({"status": "erro", "mensagem": f"device_id desconhecido: {device_id}"}), 404
-    return jsonify(estado)
+    return jsonify(linha["estado"])
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Disponibilidade da borda (`status`, como sempre) e o estado do pipeline: se a analise esta decidindo
-    (batimento e atraso lidos do banco) e os contadores locais da fila de leituras. Sempre 200: a borda esta de pe mesmo
-    com a analise parada; quem monitora olha `pipeline.estado` (borda/saude.py)."""
-    return jsonify({"status": "ok", **_monitor_saude().corpo()})
+    """Disponibilidade da borda (`status`, como sempre) e a saude da analise: `analise.estado` e "degradado" quando a ultima
+    chamada a ela falhou (o vigia a chama a cada INTERVALO_VIGIA_S, entao a queda aparece em instantes). Sempre 200: a borda
+    esta de pe mesmo com a analise parada."""
+    with _fila_lock:
+        espera = len(_fila_analise)
+    degradado = _cliente is not None and _cliente.degradado
+    return jsonify({"status": "ok", "analise": {"estado": "degradado" if degradado else "ok", "fila": espera},
+                    "borda": _estatisticas_borda()})
 
 
 @app.route("/", methods=["GET"])
@@ -499,25 +500,26 @@ def status():
 
 # ---------------------------------------------------------------------------
 # Inicializacao. Roda no import, para valer tambem em "flask --app borda.server run" e em servidores WSGI
-# (o "flask" CLI usa o "app" do modulo): sem FLOW_JWT_SECRET valido a importacao falha, e as threads de descarga, de
-# entrega e de saude sobem. FLOW_SEM_THREADS=1 desliga todas (usado pela suite de testes).
+# (o "flask" CLI usa o "app" do modulo): sem FLOW_JWT_SECRET valido a importacao falha, e as threads de descarga e de vigia
+# sobem. FLOW_SEM_THREADS=1 desliga tudo isto (usado pela suite de testes, que liga a analise por `configurar_analise`).
 # ---------------------------------------------------------------------------
 _threads_lock = threading.Lock()
 _threads_iniciadas = False
 
 
 def iniciar_threads() -> None:
-    """Sobe as threads de fundo uma unica vez: descarga das leituras e do buffer, entrega do push (le `comandos_push`) e
-    monitoramento da saude do pipeline."""
-    global _threads_iniciadas, _thread_flush
+    """Sobe as threads de fundo uma unica vez: descarga das leituras + analise, e o vigia dos episodios."""
+    global _threads_iniciadas, _thread_flush, _thread_vigia
     with _threads_lock:
         if _threads_iniciadas:
             return
         _parar_flush.clear()
-        _thread_flush = threading.Thread(target=_flush_loop, name="flow-flush", daemon=True)
+        _thread_flush = threading.Thread(target=_loop, args=(ciclo_pipeline, const_borda.INTERVALO_DESCARGA_S),
+                                         name="flow-flush", daemon=True)
+        _thread_vigia = threading.Thread(target=_loop, args=(passo_vigia, const_borda.INTERVALO_VIGIA_S),
+                                         name="flow-vigia", daemon=True)
         _thread_flush.start()
-        via_banco.iniciar()
-        _monitor_saude().iniciar()     # alarmes em log (atraso, batimento velho, descartes)
+        _thread_vigia.start()
         _threads_iniciadas = True
 
 
@@ -538,30 +540,21 @@ def _descarga_final(prazo_s: float) -> int:
 
 def encerrar(prazo_s: float | None = None) -> None:
     """DESLIGAMENTO ORDENADO da borda. Chamado por borda/servico.py depois de parar de aceitar conexoes:
-    1. para a thread de descarga (para a descarga final ter uma unica escritora) e o pipeline (entrega em curso termina);
+    1. para as threads de fundo;
     2. encerra os streams SSE (os clientes reconectam quando a borda voltar);
-    3. descarrega o que restou da fila de leituras e do buffer de agregacao;
-    4. fecha os pools do banco.
+    3. descarrega o que restou da fila de leituras;
+    4. fecha o pool do banco.
     Idempotente. Leitura que nao coube no prazo ou no banco fora do ar e contada no log."""
-    global _threads_iniciadas, _thread_flush
+    global _threads_iniciadas, _thread_flush, _thread_vigia
     prazo = const_borda.PRAZO_ENCERRAMENTO_S if prazo_s is None else prazo_s
     with _threads_lock:
         _parar_flush.set()
-        if _thread_flush is not None:
-            _thread_flush.join(prazo)
-        _thread_flush = None
-        try:
-            if _monitor is not None:
-                _monitor.parar(prazo)
-            via_banco.parar(prazo)
-        except Exception as e:  # noqa: BLE001  (o desligamento segue)
-            print(f"  [borda] falha ao parar o pipeline (segue): {type(e).__name__}: {str(e)[:200]}")
+        for t in (_thread_flush, _thread_vigia):
+            if t is not None:
+                t.join(prazo)
+        _thread_flush = _thread_vigia = None
         print(f"  [borda] encerrando: {HUB.fechar_todas()} stream(s) SSE fechado(s)")
         perdidas = _descarga_final(prazo)
-        try:
-            _flush_iteracao()
-        except Exception as e:  # noqa: BLE001
-            print(f"  [borda] falha na descarga final do buffer (segue): {type(e).__name__}: {str(e)[:200]}")
         if perdidas:
             print(f"  [borda] AVISO: {perdidas} leitura(s) nao gravada(s) no encerramento (banco fora do ar ou prazo)")
         repositorios.desinstalar()
@@ -572,9 +565,10 @@ def encerrar(prazo_s: float | None = None) -> None:
 if os.environ.get("FLOW_SEM_THREADS") != "1":
     auth.exigir_segredo()   # sem FLOW_JWT_SECRET o servidor nao sobe
     if os.environ.get("FLOW_DB_FAKE") == "1":
-        repositorios.usar_fake()       # so desenvolvimento e testes: banco em memoria; a borda sozinha (ninguem decide)
+        repositorios.usar_fake()       # so desenvolvimento: banco em memoria, sem Docker
     else:
-        repositorios.iniciar_borda()   # so o papel flow_borda; sem banco (ou com esquema defasado) a borda nao sobe
+        repositorios.iniciar()         # sem banco (ou com esquema defasado) a borda nao sobe
+    configurar_analise(cliente_analise.transporte_http())   # sem FLOW_ANALISE_TOKEN a borda nao sobe
     iniciar_threads()
 
 
@@ -582,10 +576,8 @@ if __name__ == "__main__":
     print(f"Borda iniciando na porta {const_borda.PORT} (modo de desenvolvimento; use 'python -m borda' para o desligamento ordenado)...")
     print(f"Configuracao (.env): {const_comum.DOTENV_ARQUIVO} " + ("carregado" if const_comum.DOTENV_CARREGADO
           else "nao encontrado; usando so as variaveis de ambiente"))
-    print(f"Banco: {'banco falso em memoria (FLOW_DB_FAKE=1)' if os.environ.get('FLOW_DB_FAKE') == '1' else 'PostgreSQL (papel flow_borda)'}"
-          f" | arquivos: {'sim' if const_comum.GRAVAR_ARQUIVOS else 'nao'}")
-    print(f"Salvando dados recebidos em: {os.path.abspath(const_comum.DATA_DIR)} (1 arquivo .jsonl por usuario)")
-    print(f"Janela de agregacao app+wokwi: {const_borda.JANELA_AGREGACAO_S}s")
+    print(f"Banco: {'banco falso em memoria (FLOW_DB_FAKE=1)' if os.environ.get('FLOW_DB_FAKE') == '1' else 'PostgreSQL'}"
+          f" | analise: {const_comum.url_analise()}")
     print("Transporte: AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")
 
     # host="0.0.0.0" para aceitar conexoes de outros dispositivos na mesma rede

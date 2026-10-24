@@ -1,29 +1,17 @@
 """
 A ANALISE como processo proprio: `python -m analise` (a partir de SensorServer/).
 
-Sem porta de rede, sem chave AES, sem segredo JWT, sem contas. Le SO o `.env.analise` e o papel de banco flow_analise.
-Roda o laco por cursor (analise/laco.py) com `agir=True`: le `leituras`, `respostas_dispositivo` e `entregas_push`, decide
-e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e `estado_dispositivo` na mesma transacao do cursor;
-o vigia de episodios e um passo do laco. A borda (outro processo) entrega o push a partir de `comandos_push`.
+Servidor 2: uma API HTTP escutando SO em 127.0.0.1 (analise/api.py), sem banco, sem chave AES, sem segredo JWT e sem
+contas. Do .env le apenas as variaveis FLOW_ANALISE_* (FLOW_ANALISE_TOKEN, obrigatoria, e FLOW_ANALISE_PORT). Guarda o estado
+das regras em memoria; ao reiniciar, a borda percebe o `boot_id` novo e manda o estado de volta (/restaurar).
 
-Na subida o laco RECUPERA o estado das regras antes do primeiro ciclo: rele as leituras dos ultimos segundos ate o
-cursor (sem agir), restaura os episodios abertos e recentes a partir do banco e so entao segue do cursor, agindo apenas
-sobre leitura recente (analise/laco.py, `recuperar_estado`). FLOW_RECUPERAR_ESTADO=0 desliga.
-
-Desligamento ordenado (Ctrl+C, SIGTERM, Ctrl+Break no Windows): o ciclo em curso termina e grava o cursor; depois o pool
-do banco e fechado. Reiniciar a analise nao toca nos clientes SSE (eles estao na borda).
-
-Este modulo nao importa nada de rede (conferido por tests/unit/test_dois_processos.py).
+Desligamento ordenado (Ctrl+C, SIGTERM, Ctrl+Break no Windows): para de aceitar conexoes e sai.
 """
 import signal
 import sys
 import threading
 
 from comum import const as const_comum
-from comum import isolamento
-from analise import const as const_analise
-from analise import laco
-from flow_db import repositorios
 
 CODIGO_ERRO = 1
 
@@ -43,28 +31,37 @@ def main() -> int:
         print("erro: inicie a analise por 'python -m analise' (a partir de SensorServer/).", file=sys.stderr)
         return CODIGO_ERRO
     try:
-        isolamento.exigir_ambiente("analise")
-        repositorios.iniciar_analise()      # so o papel flow_analise; sem banco (ou esquema defasado) nao sobe
-    except (isolamento.AmbienteInvalido, RuntimeError) as e:
+        token = const_comum.token_analise()
+    except RuntimeError as e:
         print(f"erro: {e}", file=sys.stderr)
         return CODIGO_ERRO
 
-    parando = threading.Event()
-    _instalar_sinais(lambda _sinal, _quadro: parando.set())
-
-    analise = laco.LacoAnalise(agir=True)
-    print("Analise iniciando (sem porta de rede; decide pelo banco e a borda entrega).")
-    print(f"Configuracao: {const_comum.DOTENV_ARQUIVO} "
-          + ("carregado" if const_comum.DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente")
-          + f" | versao do codigo: {const_analise.VERSAO_CODIGO_ACOES}"
-          + f" | recuperacao na subida: {'sim' if const_analise.RECUPERAR_AO_INICIAR else 'nao'}")
-    analise.iniciar()
+    from werkzeug.serving import make_server
+    from analise import api
+    app = api.criar_app(api.Analise(), token)
     try:
-        while not parando.wait(0.5):        # com timeout: no Windows um wait() sem prazo nao deixa o sinal chegar
-            pass
-        print("  [analise] sinal de encerramento: terminando o ciclo em curso...")
+        srv = make_server(const_comum.ANALISE_HOST, const_comum.ANALISE_PORT, app, threaded=True)
+    except OSError as e:
+        print(f"erro: nao foi possivel abrir {const_comum.ANALISE_HOST}:{const_comum.ANALISE_PORT}: {e}", file=sys.stderr)
+        return CODIGO_ERRO
+
+    parando = threading.Event()
+
+    def pedir_parada(_sinal, _quadro):
+        if parando.is_set():
+            return
+        parando.set()
+        print("  [analise] sinal de encerramento: parando...")
+        threading.Thread(target=srv.shutdown, name="flow-parada", daemon=True).start()
+
+    _instalar_sinais(pedir_parada)
+    print(f"Analise escutando em http://{const_comum.ANALISE_HOST}:{const_comum.ANALISE_PORT} (so a borda a chama).")
+    print(f"Configuracao: {const_comum.DOTENV_ARQUIVO} "
+          + ("carregado (so FLOW_ANALISE_*)" if const_comum.DOTENV_CARREGADO
+             else "nao encontrado; usando so as variaveis de ambiente"))
+    try:
+        srv.serve_forever()
     finally:
-        analise.parar(const_analise.PRAZO_ENCERRAMENTO_ANALISE_S)
-        repositorios.desinstalar()
+        srv.server_close()
         print("  [analise] encerrada")
     return 0

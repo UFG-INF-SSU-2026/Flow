@@ -1,15 +1,11 @@
 """
-Constantes da ANALISE: limiares e prazos das regras (queda, imobilidade, luz) e o ritmo do laco por cursor.
+Constantes da ANALISE: limiares e prazos das regras (queda, imobilidade, luz).
 
-Este modulo so importa `comum.const`, e apenas para que o .env ja esteja carregado. Quem usa importa o modulo
+Este modulo nao importa nada. Quem usa importa o modulo
 (`from analise import const as const_analise`) e le `const_analise.X` na hora do uso. As constantes comuns (versoes
-dos contratos, prazos da mensagem de push, pasta de dados) estao em comum/const.py; as da borda, em borda/const.py.
+dos contratos, prazos da mensagem de push) estao em comum/const.py; as da borda, em borda/const.py.
 Ver comum/const.py para as regras de uso.
 """
-import os
-
-from comum import const as _comum  # noqa: F401  (efeito colateral: o .env e carregado antes de qualquer leitura de ambiente)
-
 # ===========================================================================
 # 1. MEMORIA DAS REGRAS
 # ===========================================================================
@@ -108,74 +104,10 @@ HORA_FIM_NOITE = 6
 LEITURAS_CONSECUTIVAS_PARA_ALERTA = 3
 
 # ===========================================================================
-# 5. LACO DA ANALISE POR CURSOR
+# 5. ACAO SOBRE DADO RECENTE
 # ===========================================================================
-
-# Espera (s) entre dois ciclos de leitura. E uma das tres esperas do orcamento de latencia (ORCAMENTO_LATENCIA_S): o pior
-# caso soma esta espera. Se ainda houver dado para ler (lote cheio), o laco nao espera. O vigia de episodios e um passo
-# de cada ciclo, entao o atraso maximo entre o prazo do servidor e o encerramento EXPIRADO e esta espera (mais ATRASO_VIGIA_S).
-INTERVALO_LEITURA_S = 0.25
-
-# Janela (s) do limite de instante das consultas por cursor (leituras, respostas e entregas). O limite e ANCORADO no
-# `ultimo_leitura_instante` do cursor (nao no relogio): instante_minimo = esse instante - JANELA_CONSULTA_CURSOR_S. Assim a
-# consulta `id > cursor` descarta as particoes antigas e nenhuma linha legitima e perdida, mesmo depois de uma parada
-# longa (o cursor fica parado e o limite junto). Com o cursor ainda sem instante, nao ha limite. So uma linha com id acima
-# do cursor e instante de ingestao mais de JANELA antes do instante do cursor fica de fora (vira buraco contado em
-# `lacunas_ignoradas`): so ocorre com buffer da borda descarregado depois de horas de banco fora, linha que seria
-# "antiga" (so reconstruiria estado) de qualquer jeito.
-JANELA_CONSULTA_CURSOR_S = 3600
 
 # Idade (s), contada do instante da ingestao, acima da qual uma leitura ou resposta so RECONSTROI o estado das regras
-# e nao pode disparar acao (agir apenas sobre o recente). Evita alertar com dado velho ao reprocessar
-# apos uma parada. A decisao sobre linha antiga sai marcada como "reconstrucao" e e contada nas metricas.
-# Valor inicial, a calibrar.
+# e nao pode disparar acao (agir apenas sobre o recente). Evita alertar com dado velho ao reenviar a fila depois de uma
+# parada. A decisao sobre item antigo e descartada. Valor inicial, a calibrar.
 IDADE_MAX_ACAO_S = 30
-
-# O vigia do laco usa o relogio real MENOS este atraso (s). Cobre o dado ainda em transito (descarga da borda +
-# leitura da analise) para nao expirar um episodio cuja resposta ja chegou, mas ainda nao foi lida. Igual a soma
-# das duas esperas que antecedem a analise (ver ORCAMENTO_LATENCIA_S).
-ATRASO_VIGIA_S = 0.5
-
-# Falha repetida do laco (banco fora do ar, por exemplo): no maximo uma linha de log neste intervalo (s).
-INTERVALO_LOG_FALHA_S = 10
-
-# Identifica o codigo da analise no batimento (`cursor_analise.versao_codigo`) quando o laco so ENSAIA: decide e registra
-# em log, sem gravar nada (`LacoAnalise(agir=False)`, usado em testes e ferramentas; o servico nunca o usa).
-VERSAO_CODIGO = "ensaio"
-
-# Idem, quando a analise AGE (`python -m analise`): grava comandos, alertas, confirmacoes, episodios e estado.
-VERSAO_CODIGO_ACOES = "split-1"
-
-# Orcamento de latencia (3 esperas de 250 ms): quanto a cadeia borda -> banco -> analise -> banco ->
-# borda pode acrescentar a deteccao e ao envio do push. E a regua de `medir_latencia.py` e dos testes de cenario.
-ORCAMENTO_LATENCIA_S = 0.75
-
-# ===========================================================================
-# 6. DESLIGAMENTO ORDENADO
-# ===========================================================================
-
-# Desligamento ordenado da analise (`python -m analise`): tempo maximo (s) para o ciclo em curso chegar ao commit do cursor.
-PRAZO_ENCERRAMENTO_ANALISE_S = 10
-
-# ===========================================================================
-# 7. OBSERVABILIDADE E RESILIENCIA
-# ===========================================================================
-
-# Recuperacao na subida: a analise reconstroi o estado das janelas das regras relendo as leituras dos ULTIMOS
-# JANELA_REPROCESSAMENTO_S segundos que ja estao ANTES do cursor (ja processadas pela instancia anterior). Tem de cobrir
-# com folga a maior janela das regras (fusao, pos-impacto, imobilidade, debounce da luz e a referencia da deduplicacao).
-# Os episodios abertos (e os recentes, para o cooldown e a classificacao de resposta tardia) NAO sao reconstruidos por
-# leitura: vem de `episodios` e `comandos_push`. Nada do que for relido gera acao.
-JANELA_REPROCESSAMENTO_S = 30
-
-# Teto de leituras relidas na recuperacao (as mais recentes ate o cursor). Protege a memoria se a janela tiver muito dado.
-LIMITE_REPROCESSAMENTO = 5_000
-
-# FLOW_RECUPERAR_ESTADO=0 desliga a recuperacao na subida (estado das regras comeca vazio).
-RECUPERAR_AO_INICIAR = os.environ.get("FLOW_RECUPERAR_ESTADO", "1") != "0"
-
-# Alarme de atraso: se a leitura mais antiga de um ciclo ja tem mais que isto (s) ao ser lida, a analise esta atrasada
-# (o log registra). Menor que IDADE_MAX_ACAO_S: avisa ANTES de as acoes comecarem a ser descartadas por idade. No maximo
-# uma linha por INTERVALO_LOG_FALHA_S, que tambem limita o alarme de leituras descartadas por idade (o contador acumula
-# entre uma linha e outra, nada se perde).
-LIMIAR_ATRASO_ANALISE_S = 15

@@ -2,6 +2,7 @@
 e o que o servidor produz (push, alertas, confirmacoes) obedece ao contrato. Mais o validador de schemas em si."""
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -156,13 +157,14 @@ class TestSaidasDoServidor:
                                            "value": 0.3, "unit": "m/s2"})
         assert alerta is not None and contratos.validar("alerta-imobilidade", alerta) == []
 
-    def test_registros_de_confirmacao(self, monkeypatch):
-        linhas = []
-        monkeypatch.setattr(regra_queda, "gravar_arquivo_confirmacao", lambda uid, linha: linhas.append(linha))
-        pedido = regra_queda.abrir_por_imobilidade(1)
-        regra_queda.registrar(1, "push.entrega", {"episodeId": pedido.episode_id, "messageId": "m1", "canal": "app",
-                                                   "resultado": "ENTREGUE_AO_CANAL"})
-        regra_queda.vigiar(agora=regra_queda._agora() + 1000)
+    def test_registros_de_confirmacao(self):
+        with regra_queda.coletar_registros() as registros:
+            pedido = regra_queda.abrir_por_imobilidade(1)
+            regra_queda.registrar(1, "push.entrega", {"episodeId": pedido.episode_id, "messageId": "m1", "canal": "app",
+                                                       "resultado": "ENTREGUE_AO_CANAL"})
+            regra_queda.vigiar(agora=regra_queda._agora() + 1000)
+        linhas = [{"timestamp": datetime.fromtimestamp(r.instante, tz=timezone.utc).isoformat(), "tipo": r.tipo, **r.dados}
+                  for r in registros]
         assert len(linhas) >= 3
         for linha in linhas:
             assert contratos.validar("confirmacao-registro", linha) == [], linha

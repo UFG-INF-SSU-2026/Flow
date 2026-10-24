@@ -1,19 +1,11 @@
 """
-Autorizacao (Marco 3): papel -> permissoes, escopo por pessoa monitorada, auditoria.
+Autorizacao (Marco 3): papel -> permissoes, escopo por pessoa monitorada.
 Negar por padrao: o que nao esta em POLITICA e proibido.
 """
 import functools
-import json
-import os
-import threading
-from datetime import datetime, timezone
-
 from flask import g, jsonify, request
 
 from borda import auth
-from borda import const as const_borda
-from comum import const as const_comum
-from flow_db import repositorios
 
 POLITICA: dict[str, set[str]] = {
     "idoso":       {"dados:enviar", "eventos:enviar", "push:receber"},
@@ -28,32 +20,9 @@ class ForaDeEscopo(Exception):
     pass
 
 
-_auditoria_lock = threading.Lock()   # Flask roda com uma thread por requisicao: rotacao e escrita sao atomicas
-
-
 def auditar(rota: str, status: int, codigo: str, conta: str | None = None) -> None:
-    """Registra negacoes (401/403). Nunca grava o conteudo da requisicao.
-    Vai ao banco (borda) e, enquanto const_comum.GRAVAR_ARQUIVOS, tambem ao auditoria.jsonl."""
-    linha = {"timestamp": datetime.now(timezone.utc).isoformat(), "rota": rota,
-             "status": status, "motivo": codigo, "conta": conta, "ip": request.remote_addr}
-    repositorios.tentar_borda("auditoria", lambda b: b.gravar_auditoria({
-        "instante": datetime.fromisoformat(linha["timestamp"]), "rota": rota, "status": status,
-        "motivo": codigo, "conta": conta, "ip": linha["ip"]}))
-    if not const_comum.GRAVAR_ARQUIVOS:
-        return
-    os.makedirs(const_comum.DATA_DIR, exist_ok=True)
-    caminho = os.path.join(const_comum.DATA_DIR, "auditoria.jsonl")
-    with _auditoria_lock:
-        # Rotacao por tamanho: o estagio 1 roda antes de decifrar, entao quem esta na rede pode gerar negacoes
-        # sem conhecer a chave. Ao passar de const_borda.AUDITORIA_MAX_BYTES o arquivo vira auditoria.1.jsonl
-        # (sobrescrevendo o anterior) e um novo comeca. Guarda no maximo ~2x o limite.
-        try:
-            if os.path.getsize(caminho) >= const_borda.AUDITORIA_MAX_BYTES:
-                os.replace(caminho, os.path.join(const_comum.DATA_DIR, "auditoria.1.jsonl"))
-        except FileNotFoundError:
-            pass
-        with open(caminho, "a", encoding="utf-8") as f:
-            f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+    """Registra a negacao (401/403/413...) no log. Nunca o conteudo da requisicao. (Auditoria em banco: fora do escopo.)"""
+    print(f"  [authz] negado {status} {codigo} rota={rota} conta={conta or '-'} ip={request.remote_addr}")
 
 
 def negar(status: int, codigo: str, conta: str | None = None):
