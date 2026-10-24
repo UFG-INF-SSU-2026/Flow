@@ -73,7 +73,7 @@ Ainda faltam dimensões importantes de contexto (localização dentro da casa, s
 
 - **Smartphone Android:** concentra os sensores internos, realiza a coleta contínua e, desde o Marco 3, também **recebe do servidor** o pedido de confirmação quando uma queda é suspeitada.
 - **ESP32 simulado (Wokwi) + WokwiBridge:** segundo produtor de dados (acelerômetro MPU6050), com um **buzzer** e um botão "Estou bem". O ESP32 só fala serial; a ponte (bridge) faz a comunicação de rede por ele, nos dois sentidos.
-- **Servidor local:** dois processos ligados por um banco (PostgreSQL + TimescaleDB): a **borda** recebe os dados, autentica e autoriza quem os envia e entrega as mensagens de volta aos dispositivos; a **análise** (sem porta de rede) analisa o acelerômetro e decide. Tudo na mesma rede Wi-Fi.
+- **Servidor local:** dois processos: a **borda** (Servidor 1) recebe os dados, autentica e autoriza quem os envia, grava no banco (PostgreSQL) e entrega as mensagens de volta aos dispositivos; a **análise** (Servidor 2, sem banco e escutando só em `127.0.0.1`) analisa o acelerômetro e decide, chamada apenas pela borda. Tudo na mesma rede Wi-Fi.
 - **Comunicação de ida (dispositivo → servidor):** HTTP, a cada 1 segundo (intervalo editável), dentro da mesma sub-rede, sem exposição à internet nesta fase.
 - **Comunicação de volta (servidor → dispositivo):** push por **SSE**. O dispositivo abre a conexão com o servidor e o servidor empurra as mensagens por ela, então nenhum dispositivo precisa abrir porta para receber. No celular o canal só existe enquanto o app está aberto em primeiro plano (limitação assumida, ver `docs/arquitetura.md`, seção 13.2).
 - **Persistência, escalabilidade e acesso remoto por cuidadores** continuam fora do alcance desta fase.
@@ -106,7 +106,7 @@ O projeto combina três mecanismos de segurança:
 - **Criptografia** (AES-256-GCM) de cada mensagem trocada com o servidor, nos dois sentidos, inclusive o push.
 - **Autenticação (Marco 3):** todo dispositivo entra com uma conta (login com senha, token de curta duração e renovação), em vez de apenas conhecer a chave de criptografia.
 - **Autorização (Marco 3):** cada conta tem um papel (hoje `idoso` e `dispositivo`; `cuidador` já reservado) e só envia ou recebe dados da **pessoa monitorada a que está vinculada**. O servidor confere a identidade pelo token, não pelo que o dispositivo declara. Rotas de depuração que expunham dados de todos exigem conta administrativa.
-- **Proteções do servidor (Marco 3):** negações (`401`/`403`) e corpos acima de 64 KiB (`413`) são registrados numa auditoria rotacionada por tamanho, sem o conteúdo da requisição; tentativas repetidas de login levam a bloqueio temporário.
+- **Proteções do servidor (Marco 3):** negações (`401`/`403`) e corpos acima de 64 KiB (`413`) são registrados no log, sem o conteúdo da requisição; tentativas repetidas de login levam a bloqueio temporário.
 
 Limitações assumidas: a chave de criptografia continua **compartilhada e fixa**, e o transporte continua HTTP sem TLS. Isso significa que quem captura o tráfego da rede local ainda consegue ler o token. Chave por dispositivo e TLS ficam como evolução (`docs/arquitetura.md`, seção 13.2).
 

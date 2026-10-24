@@ -6,12 +6,12 @@ Este projeto une um app Android, uma simulação Wokwi (ESP32 + acelerômetro + 
 
 ```dir
 Flow/
-├── SensorServer/       # servidor central (Flask): autenticação, autorização, análise e push
+├── SensorServer/       # servidor central (Flask): borda (autenticação, banco, push) e análise (decide)
 │   ├── .env.example    # modelo da configuração do servidor (copie para .env)
-│   ├── borda/          # gateway (rotas, auth, SSE) e o adaptador que chama a análise
-│   ├── analise/        # núcleo e regras (queda, imobilidade, luz)
-│   ├── comum/          # constantes comuns, schemas e contrato da mensagem de push
-│   ├── flow_db/        # banco (migrações, papéis, repositórios)
+│   ├── borda/          # Servidor 1: rotas, auth, SSE, banco; chama a análise por HTTP local
+│   ├── analise/        # Servidor 2: núcleo e regras (queda, imobilidade, luz); sem banco
+│   ├── comum/          # constantes, schemas, mensagem de push e contrato borda↔análise
+│   ├── flow_db/        # banco (uma migração, interface única de acesso)
 │   ├── tests/          # suíte pytest do servidor (unit/ e integration/)
 │   └── simular_queda.py  # simula uma queda sem Wokwi nem celular
 ├── SensorApp/          # app Android (Kotlin): telemetria + recebe o pedido de confirmação
@@ -31,6 +31,7 @@ Flow/
 
 - **Dispositivo → servidor:** `POST` (telemetria em `/dados`, ack e resposta do idoso em `/eventos`), sempre com token.
 - **Servidor → dispositivo:** o **dispositivo abre** uma conexão SSE com o servidor e o servidor empurra mensagens por ela. Nenhum dispositivo escuta porta; por isso o único requisito de rede é que o celular e o bridge **alcancem o servidor**.
+- **Servidor 1 ↔ Servidor 2:** a borda (porta 5000) é a única que fala com os dispositivos e com o banco; a análise só escuta em `127.0.0.1:5100` e só a borda a chama.
 - **Wokwi:** o ESP32 simulado só fala serial. O bridge lê e escreve nessa serial (RFC2217, `localhost:4000`) e faz a ponte com o servidor.
 
 ## Pré-requisitos
@@ -66,17 +67,20 @@ Regras:
 - Valores com espaço ou `#` (uma senha, por exemplo) vão entre aspas: `FLOW_BRIDGE_SECRET="minha#senha"`. O `$` é literal.
 - Arquivo ausente não é erro: nesse caso valem só as variáveis de ambiente. Ao subir, o servidor e o bridge informam se leram o `.env`.
 
-**Servidor.** O servidor **não sobe** sem o segredo de assinatura dos tokens. Gere um e coloque em `SensorServer/.env`:
+**Servidor.** Um só `SensorServer/.env`, com três valores obrigatórios (a borda não sobe sem os dois primeiros; o banco, sem o terceiro). Gere cada um e coloque no `.env`:
 
 ```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
+python -c "import secrets; print(secrets.token_urlsafe(48))"   # FLOW_JWT_SECRET (assinatura dos tokens)
+python -c "import secrets; print(secrets.token_urlsafe(24))"   # FLOW_ANALISE_TOKEN (borda <-> análise) e FLOW_DB_PASSWORD
 ```
 
 ```ini
 FLOW_JWT_SECRET=<valor gerado>
+FLOW_ANALISE_TOKEN=<valor gerado>
+FLOW_DB_PASSWORD=<valor gerado>
 ```
 
-(Sem `.env`, é possível exportar `FLOW_JWT_SECRET` no terminal, como antes.)
+A análise lê desse arquivo **só** as variáveis `FLOW_ANALISE_*`: o segredo dos tokens e a senha do banco nunca entram no ambiente dela. (Sem `.env`, é possível exportar as variáveis no terminal.)
 
 Crie as duas contas do protótipo (a senha é pedida no terminal). Ambas apontam para a **mesma pessoa** (`--user-id 1`), e é isso que faz o servidor juntar app e wokwi:
 
@@ -95,14 +99,17 @@ Os arquivos `contas.json` e `sessoes.json` são criados em `SensorServer/` e nã
 
 ## 1. Servidor (`SensorServer/`)
 
-Com `FLOW_JWT_SECRET` no `SensorServer/.env` (ou definido no mesmo terminal):
+Com o `SensorServer/.env` preenchido, suba o banco, a borda e a análise (a ordem entre borda e análise é indiferente; detalhes na seção "Dois processos", abaixo):
 
 ```bash
 cd SensorServer
-python -m borda.server
+scripts/preparar.sh      # banco (Docker) + migração; no Windows: scripts\preparar.ps1
+scripts/tudo.sh          # borda + análise (Windows: scripts\tudo.ps1)
 ```
 
-Escuta em `0.0.0.0:5000`. Descubra o IP do computador (`ipconfig` no Windows, `ifconfig`/`ip a` no Mac/Linux): o celular vai precisar dele.
+Sem Docker, só para ver as rotas: `FLOW_DB_FAKE=1 python -m borda.server` (banco em memória; sem a análise rodando ninguém decide queda).
+
+A borda escuta em `0.0.0.0:5000`. Descubra o IP do computador (`ipconfig` no Windows, `ifconfig`/`ip a` no Mac/Linux): o celular vai precisar dele.
 
 **Firewall:** libere a **entrada** na porta TCP 5000 no computador. O celular e o bridge conectam *no servidor*; nada conecta no celular.
 
@@ -180,7 +187,7 @@ pip install -r requirements.txt   # inclui o pytest
 python -m pytest
 ```
 
-A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados) e `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo e ciclo de queda ponta a ponta). Ela é independente do seu ambiente: **não lê o seu `.env`** (`FLOW_SEM_DOTENV=1`), define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`) e grava contas, sessões e `dataUsers/` numa pasta temporária, então **não usa nem altera** o seu `contas.json` real.
+A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados), `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo, banco e análise fora do ar e ciclo de queda ponta a ponta) e `tests/banco/` (o mesmo contrato do repositório no PostgreSQL real; fora da execução padrão: `python -m pytest -m banco`, com o container no ar). Nos testes a análise roda em memória no lugar do processo. Ela é independente do seu ambiente: **não lê o seu `.env`** (`FLOW_SEM_DOTENV=1`), define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`), usa um banco falso em memória e grava contas e sessões numa pasta temporária, então **não usa nem altera** o seu `contas.json` real.
 
 ### Bridge (pytest)
 
@@ -216,17 +223,17 @@ Sem token, o servidor recusa:
 curl -i -X POST http://localhost:5000/dados -H "Content-Type: application/json" -d "{}"
 ```
 
-Esperado: `401`. Tentativas negadas (`401`, `403` e `413`) ficam em `SensorServer/dataUsers/auditoria.jsonl`, sem o conteúdo da requisição.
+Esperado: `401`. Tentativas negadas (`401`, `403` e `413`) aparecem no log da borda (`[authz] negado ...`), sem o conteúdo da requisição.
 
-### Agregação por usuário
+### Leituras no banco
 
 Com servidor, app e bridge rodando, confira:
 
 ```bash
-cat SensorServer/dataUsers/usuario_1.jsonl
+docker compose exec -T db psql -U flow -d flow -c "SELECT instante_ingestao, user_id, fonte FROM leituras ORDER BY id DESC LIMIT 5"
 ```
 
-Cada linha traz os dados mais recentes de `app` e de `wokwi` do usuário 1 (`null` na fonte que não enviou nada naquele segundo).
+Cada leitura aceita é uma linha, de `app` ou de `wokwi`, ligada ao usuário da conta. E `curl http://localhost:5000/health` mostra se a análise está respondendo (`analise.estado`: `ok` ou `degradado`).
 
 ### Queda e confirmação — Wokwi
 
@@ -235,7 +242,7 @@ Cada linha traz os dados mais recentes de `app` e de `wokwi` do usuário 1 (`nul
 3. O servidor deve concluir "queda provável" (impacto seguido de imobilidade) e o **buzzer toca**. Pressione **Estou bem** em até 5 s: o buzzer cala.
 4. Se não pressionar, o buzzer cala ao fim do prazo.
 
-Sem impacto algum, deixar tudo zerado por tempo suficiente também dispara o pedido, por **imobilidade prolongada**, mas com mais atraso (o gatilho de impacto tem preferência). O campo `motivo` em `confirmacoes_usuario_1.jsonl` mostra qual gatilho abriu o episódio.
+Sem impacto algum, deixar tudo zerado por tempo suficiente também dispara o pedido, por **imobilidade prolongada**, mas com mais atraso (o gatilho de impacto tem preferência). O campo `motivo` do registro `episodio.aberto` (tabela `confirmacoes`) mostra qual gatilho abriu o episódio.
 
 ### Queda e confirmação — App
 
@@ -244,10 +251,10 @@ Com o app em primeiro plano e **Iniciar** ativo, simule um impacto (movimento br
 ### O que o servidor guarda
 
 ```bash
-cat SensorServer/dataUsers/confirmacoes_usuario_1.jsonl
+docker compose exec -T db psql -U flow -d flow -c "SELECT instante, tipo, dados->>'resultado' AS resultado FROM confirmacoes WHERE user_id = 1 ORDER BY id"
 ```
 
-Cada episódio deixa linhas de abertura, entrega do push por canal, ack dos dispositivos, resposta do idoso (`ESTOU_BEM` ou `SEM_RESPOSTA`) e encerramento. **O servidor apenas armazena a resposta**; o que fazer com ela ainda não foi definido.
+Cada episódio deixa linhas de abertura, ack dos dispositivos, resposta do idoso (`ESTOU_BEM` ou `SEM_RESPOSTA`) e encerramento; as mensagens enviadas ficam em `comandos_push` e os alertas em `alertas`. **O servidor apenas armazena a resposta**; o que fazer com ela ainda não foi definido.
 
 Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesmo tempo, e o primeiro "Estou bem" silencia o outro.
 
@@ -275,71 +282,43 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 | App diz "tipo de conta ainda não suportado" | a conta usada não é do papel `idoso` |
 | Celular não alcança o servidor | IP/porta errados, redes diferentes ou firewall bloqueando a porta 5000 |
 | Bridge fica "tentando reconectar" | simulação não iniciada, ou aba do Wokwi oculta |
-| Telemetria chega, mas o buzzer nunca toca | simulação pausada (aba oculta); sketch não recompilado depois da mudança; comando expirou antes de chegar (o servidor registra a ausência do ack em `confirmacoes_usuario_1.jsonl`) |
+| Telemetria chega, mas o buzzer nunca toca | simulação pausada (aba oculta); sketch não recompilado depois da mudança; comando expirou antes de chegar (o servidor registra a ausência do ack na tabela `confirmacoes`) |
 | Erro de compilação em `tone()`/`noTone()` | core `esp32:esp32` abaixo da versão 3.x; atualize com `arduino-cli core upgrade esp32:esp32` |
-| App não toca o alerta | app em segundo plano ou tela bloqueada; a entrega fica registrada em `entregas_push` como `sem_conexao` |
+| App não toca o alerta | app em segundo plano ou tela bloqueada; o log da borda mostra `[push] ... SEM_CANAL_ATIVO` |
 
 ## Como as decisões chegam ao app e ao dispositivo
 
-A borda só aceita e grava (`leituras`, `respostas_dispositivo`); quem decide é a **análise**, que grava `comandos_push`,
-`alertas`, `confirmacoes`, `episodios` e `estado_dispositivo` na mesma transação do cursor. O vigia da análise grava os
-encerramentos `EXPIRADO`. Decisão sobre linha velha (mais que `IDADE_MAX_ACAO_S`) só reconstrói estado e não age. A borda
-(`borda/entrega_push.py`) lê `comandos_push` por cursor (`cursor_borda`), entrega por SSE ao app e ao wokwi e grava
-`entregas_push` com `comando_id` (resultado `enviado`, `sem_conexao`, `expirado`...). `/estado/<device_id>` lê o resumo
-gravado em `estado_dispositivo`, então reflete a última decisão da análise (não a leitura que acabou de chegar).
+A borda grava a leitura e a manda à **análise** (`POST /analisar`); a análise responde com decisões e a borda as grava numa transação (`comandos_push`, `alertas`, `confirmacoes`, `episodios`, `estado_dispositivo`) e só então entrega o push por SSE ao app e ao wokwi. Uma thread da borda chama a análise a cada 0,25 s (`POST /vigiar`) para encerrar como `EXPIRADO` os episódios que ninguém respondeu. Decisão sobre item velho (mais que `IDADE_MAX_ACAO_S`) só reconstrói estado e não age. `/estado/<device_id>` lê o resumo gravado em `estado_dispositivo`, então reflete a última decisão (não a leitura que acabou de chegar).
 
-Sem a análise rodando, a borda continua aceitando dados, mas nada é decidido: `/health` passa a `degradado` (batimento).
+Sem a análise rodando, a borda continua aceitando e gravando dados, mas nada é decidido: `/health` mostra `analise.estado = degradado`. Quando ela volta (ou reinicia), a borda detecta o `boot_id` novo, manda o estado de volta a partir do banco e reenvia a fila.
 
 ## Dois processos: borda e análise
 
-Em vez de um processo só, o servidor roda em **dois**, ligados apenas pelo banco:
+| Processo | Comando (em `SensorServer/`) | Lê do `.env` | Porta |
+| --- | --- | --- | --- |
+| Borda (Servidor 1) | `python -m borda` | tudo | 5000 (a única exposta) |
+| Análise (Servidor 2) | `python -m analise` | só `FLOW_ANALISE_*` | 5100, só em `127.0.0.1` |
 
-| Processo | Comando (em `SensorServer/`) | Lê | Papel no banco | Porta |
-| --- | --- | --- | --- | --- |
-| Borda | `python -m borda` | `.env.borda` | `flow_borda` | 5000 (a única) |
-| Análise | `python -m analise` | `.env.analise` | `flow_analise` | nenhuma |
+O banco é só da borda. `python -m borda.server` continua importável (Flask/WSGI, testes e desenvolvimento), mas é só a borda: o ponto de entrada oficial é `python -m borda`.
 
-O `.env` de sempre passa a ser **só administrativo** (compose, `python -m flow_db provisionar|migrar`): nenhum dos dois serviços o lê.
-`python -m borda.server` continua importável (Flask/WSGI, testes e desenvolvimento), mas é **só a borda, sem análise**: o
-ponto de entrada oficial é `python -m borda`. Não existe mais processo único que decida.
-
-**1. Arquivos de ambiente (uma vez).** O banco é criado do zero (não há migração dos `.json` antigos). No `.env`
-administrativo ficam `FLOW_DB_PASSWORD`, `FLOW_DB_BORDA_PASSWORD` e `FLOW_DB_ANALISE_PASSWORD`. Depois:
-
-```bash
-cp SensorServer/.env.borda.example   SensorServer/.env.borda     # FLOW_JWT_SECRET + FLOW_DB_BORDA_PASSWORD
-cp SensorServer/.env.analise.example SensorServer/.env.analise   # so FLOW_DB_ANALISE_PASSWORD
-```
-
-(PowerShell: `Copy-Item`.) As senhas dos papéis devem ser **as mesmas** do `.env` administrativo.
-
-**Isolamento de segredos.** Cada serviço se recusa a subir se o ambiente trouxer segredo de outro dono (a mensagem lista só o
-nome da variável): a análise não pode ver `FLOW_JWT_SECRET`, `FLOW_DB_BORDA_PASSWORD`, `FLOW_DB_PASSWORD`, `FLOW_CONTAS_PATH`
-nem `FLOW_SESSOES_PATH`; a borda não pode ver `FLOW_DB_ANALISE_PASSWORD` nem `FLOW_DB_PASSWORD`. Se der esse erro, tire a
-variável do terminal (ou do `.env.<serviço>`). O banco falso (`FLOW_DB_FAKE`) não vale com processos separados.
+**1. `.env` (uma vez).** `cp SensorServer/.env.example SensorServer/.env` (PowerShell: `Copy-Item`) e preencha `FLOW_JWT_SECRET`, `FLOW_ANALISE_TOKEN` e `FLOW_DB_PASSWORD` (seção 0). **Banco antigo:** o esquema agora é uma só migração; se você já tinha um volume criado antes, rode `docker compose down -v` (apaga os dados de teste) e suba de novo.
 
 **2. Subir.** Os scripts de `SensorServer/scripts/` fazem tudo na ordem certa (a ordem entre borda e análise é indiferente):
 
 | Ação | Linux/macOS | Windows (PowerShell) |
 | --- | --- | --- |
-| Banco + papéis + migrações | `scripts/preparar.sh` | `scripts\preparar.ps1` |
+| Banco + migração | `scripts/preparar.sh` | `scripts\preparar.ps1` |
 | Só a borda | `scripts/borda.sh` | `scripts\borda.ps1` |
 | Só a análise | `scripts/analise.sh` | `scripts\analise.ps1` |
 | Tudo | `scripts/tudo.sh` | `scripts\tudo.ps1` (uma janela por serviço) |
 
-Contas continuam sendo da borda: `python -m borda.auth criar-conta` (o `contas.json` fica em `SensorServer/`; se mudar
-`FLOW_CONTAS_PATH` no `.env.borda`, defina o mesmo no terminal ao criar a conta).
+Contas são da borda: `python -m borda.auth criar-conta` (o `contas.json` fica em `SensorServer/`; se mudar `FLOW_CONTAS_PATH` no `.env`, defina o mesmo no terminal ao criar a conta).
 
-**3. Desligar.** Ctrl+C (ou SIGTERM; Ctrl+Break no Windows) em cada processo. A análise termina o ciclo em curso e grava o
-cursor; a borda para de aceitar, para a entrega, fecha os streams SSE (os clientes reconectam), descarrega a fila de
-leituras e o buffer e fecha o pool. Reiniciar a análise não desconecta ninguém; reiniciar a borda não perde o estado da análise.
+**3. Desligar.** Ctrl+C (ou SIGTERM; Ctrl+Break no Windows) em cada processo. A borda para de aceitar, para as threads de fundo, fecha os streams SSE (os clientes reconectam), descarrega a fila de leituras e fecha o pool. Reiniciar a análise não desconecta ninguém: a borda restaura o estado dela do banco.
 
-**4. O que ficou para depois.** Ficam fora desta entrega e estão registrados em `docs/arquitetura.md` (seção 15.1): o serviço de notificação aos cuidadores, o HTTPS e a chave AES por dispositivo. A
-persistência (retenção, backup, remoção da tabela `telemetria` e dos arquivos de transição) é a parte 2 do banco (B2.x).
+**4. O que ficou para depois.** Registrado em `docs/arquitetura.md` (seção 15.1): o serviço de notificação aos cuidadores, o HTTPS e a chave AES por dispositivo.
 
 **Observações de operação.**
 
-- Banco criado do zero: não há migração dos `.json` antigos.
-- `FLOW_DB_FAKE` e o banco falso são só para testes e desenvolvimento (nunca com `python -m borda`/`python -m analise`).
-- Se a análise ficar fora, as leituras se acumulam no banco e são processadas na volta (dentro de `IDADE_MAX_ACAO_S`,
-  o que for mais velho só reconstrói estado).
+- `FLOW_DB_FAKE=1` (banco em memória) é só para desenvolvimento: os dados somem ao parar a borda.
+- Se a análise ficar fora, as leituras continuam sendo gravadas; ao voltar, ela recebe a fila (dentro de `IDADE_MAX_ACAO_S`; o que for mais velho só reconstrói estado).

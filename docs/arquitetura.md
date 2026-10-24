@@ -15,7 +15,7 @@ Este documento é o registro **único e versionável** das decisões de arquitet
 
 O sistema é **IoT** (dispositivos conectados enviando dados continuamente a um servidor) e **ubíquo** (sensoriamento contínuo, sem interação explícita do idoso no uso normal).
 
-- **Concreto:** o laço **percepção → decisão → atuação** está fechado. O servidor analisa o movimento, decide que uma queda é provável, aciona um alerta sonoro no próprio idoso (celular e buzzer), que responde por um botão, e registra um aviso ao cuidador em arquivo.
+- **Concreto:** o laço **percepção → decisão → atuação** está fechado. O servidor analisa o movimento, decide que uma queda é provável, aciona um alerta sonoro no próprio idoso (celular e buzzer), que responde por um botão, e registra um aviso ao cuidador (alerta no banco).
 - **Abstrato:** o aviso ao cuidador chegando a ele por um canal real, novos sensores (localização, sinais vitais) e outras ações de atuação.
 
 Pelo laço concreto o sistema se aproxima de um **sistema ciber-físico**; o efeito completo sobre o cuidador depende da parte abstrata.
@@ -31,7 +31,7 @@ Pelo laço concreto o sistema se aproxima de um **sistema ciber-físico**; o efe
 | **Sensores** | Percebem o ambiente e o comportamento do idoso | Luz/CCT, acelerômetro, orientação, magnetômetro (celular); acelerômetro MPU6050 (ESP32 simulado) | Localização, sinais vitais (pulseira, dados mockados), microfone para sons de queda |
 | **Produtor / gateway** | Concentra um ou mais sensores, monta o evento, cifra e envia ao servidor. Também é **consumidor**: recebe do servidor os pedidos de confirmação | App Android; dispositivo Wokwi (firmware ESP32 + ponte `WokwiBridge`, um único dispositivo lógico) | Dispositivo dedicado por sensor não coberto pelo celular (ex.: localização) |
 | **Servidor central** | Autentica, autoriza, valida, agrega, decide e envia mensagens de volta | `SensorServer`: um único ponto lógico de consumo, com visão consolidada por pessoa | Atender mais de uma residência (servidor assíncrono, estado externo), **mantendo a topologia em estrela** |
-| **Atuadores** | Produzem efeito observável a partir de uma decisão | Alerta sonoro e botão "Estou bem" (app); buzzer e botão (Wokwi); aviso ao cuidador registrado em arquivo de alerta | Notificação real ao cuidador; histórico consultável; outras ações |
+| **Atuadores** | Produzem efeito observável a partir de uma decisão | Alerta sonoro e botão "Estou bem" (app); buzzer e botão (Wokwi); aviso ao cuidador registrado em `alertas` | Notificação real ao cuidador; histórico consultável; outras ações |
 
 Cada pessoa monitorada pode ter **mais de um produtor simultâneo** (por exemplo, o celular para luz/movimento e um dispositivo dedicado para localização), todos ligados à mesma pessoa pelo `user_id` da conta com a qual autenticaram.
 
@@ -46,38 +46,39 @@ Há **dois dispositivos** concretos, cada um com a sua conta e falando diretamen
 | `WokwiBridge/` | Dispositivo Wokwi: ponte (`bridge.py`) | Parte do dispositivo que o liga à rede: autentica-se, repassa a telemetria da serial ao servidor e traduz as mensagens de push em comandos de texto para o firmware. |
 | `SensorServer/` | Servidor (Flask) | Módulos abaixo. |
 
-Módulos do servidor (pacotes em `SensorServer/`; o servidor roda em dois processos: **borda** (`python -m borda`) e **análise** (`python -m analise`), cada um com o seu `.env`, o seu papel de banco e a sua camada de acesso, ligados só pelo banco; `python -m borda.server` é apenas a borda, sem análise, para desenvolvimento e testes):
+O sistema tem **três partes**: os **dispositivos** (app e Wokwi), o **Servidor 1 — a borda** (`python -m borda`) e o **Servidor 2 — a análise** (`python -m analise`). Só a borda fala com o mundo: autentica, valida, grava no banco, entrega o push e responde às consultas. A análise **só decide** (queda, imobilidade, luz): não tem banco, não tem credencial de dispositivo, não entrega nada e escuta só em `127.0.0.1`. **A borda é o único cliente da análise** (HTTP local com token compartilhado). Um só `.env`; a análise copia dele apenas as variáveis `FLOW_ANALISE_*`. `python -m borda.server` sobe a mesma borda, sem desligamento ordenado, para desenvolvimento (com `FLOW_DB_FAKE=1`, sem Docker).
+
+Módulos do servidor (pacotes em `SensorServer/`):
 
 | Arquivo | Responsabilidade |
 | --- | --- |
-| **`borda/`** | Gateway: único com porta de rede e com acesso aos dispositivos, aos segredos de transporte e às contas. |
-| `borda/server.py` | Rotas, ingestão (aceita e grava `leituras` e `respostas_dispositivo`), buffer de agregação, descarga de leituras, threads de flush, entrega e saúde. Executa com `python -m borda`. |
-| `borda/via_banco.py` | Pipeline da borda: lê o resumo de `estado_dispositivo` (`/estado`) e sobe/para a entrega de push. Não importa a análise. |
-| `borda/entrega_push.py` | Lê `comandos_push` por cursor (`cursor_borda`), entrega por SSE ao app e ao wokwi e grava `entregas_push`. |
-| `borda/saude.py` | `/health`: batimento da análise, atraso de leituras e descartes; alarmes em log. |
-| `borda/servico.py` | Ponto de entrada da borda (`python -m borda`): trava de isolamento, subida, desligamento ordenado. |
-| `borda/const.py` | Constantes da borda (porta, validade de tokens, bloqueio de login, limite de corpo, SSE, descarga de leituras). Ver 14. |
-| `borda/auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens. Não conhece Flask. CLI: `python -m borda.auth criar-conta`. |
-| `borda/authz.py` | **Autorização:** papel → permissões, escopo por pessoa, auditoria. |
+| **`borda/`** | Servidor 1: único com porta de rede, banco, segredos de transporte e contas. |
+| `borda/server.py` | Rotas; ingestão (aceita e põe a leitura numa fila limitada); thread de descarga (grava `leituras` em lote, manda o lote à análise e aplica as decisões); thread do vigia; `/estado`, `/dados` (debug) e `/health`. Executa com `python -m borda`. |
+| `borda/cliente_analise.py` | Cliente da API da análise (`/analisar`, `/vigiar`, `/restaurar`): prazo curto, detecta análise fora do ar e `boot_id` novo (análise reiniciada) e manda o estado de volta antes de seguir. |
+| `borda/efeitos.py` | Aplicar as decisões: grava confirmações, alertas, estado e, por fim, episódio + comando numa transação; só depois do commit entrega o push (SSE, app e wokwi). Se o banco falha, guarda as decisões e tenta de novo. |
+| `borda/servico.py` | Ponto de entrada da borda (`python -m borda`): subida e desligamento ordenado. |
+| `borda/const.py` | Constantes da borda (porta, tokens, bloqueio de login, limite de corpo, SSE, filas, chamada à análise). Ver 14. |
+| `borda/auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens (contas e sessões em JSON, `FLOW_CONTAS_PATH`/`FLOW_SESSOES_PATH`). Não conhece Flask. CLI: `python -m borda.auth criar-conta`. |
+| `borda/authz.py` | **Autorização:** papel → permissões e escopo por pessoa; a negação vai para o log (rota, motivo, conta, IP; nunca o conteúdo). |
 | `borda/validacao.py` | Validação **estrutural** dos corpos, pelos contratos de `schemas/`. |
 | `borda/sse_hub.py` | Mecanismo comum de push por SSE: conexões, fila limitada por conexão, keepalive, replay. |
 | `borda/canal_app.py` | **Servidor → app.** Rota `GET /push/app` e envio ao alvo `app`. |
 | `borda/canal_wokwi.py` | **Servidor → Wokwi.** Rota `GET /push/wokwi` e envio ao alvo `wokwi`. |
-| `borda/tempo.py` | Único ponto de leitura do relógio na borda (`tempo.agora_utc()`): o instante da ingestão por requisição e o relógio do vigia. Os testes o congelam (fixture `relogio`). |
+| `borda/tempo.py` | Único ponto de leitura do relógio na borda (`tempo.agora_utc()`): o instante da ingestão e o relógio do vigia. Os testes o congelam (fixture `relogio`). |
 | `borda/crypto_utils.py` | Envelope AES-256-GCM. |
-| **`analise/`** | Decide (queda, imobilidade, luz). Não tem porta de rede nem segredo de transporte; não importa a borda nem Flask. |
-| `analise/nucleo.py` | **Núcleo das regras:** `Leitura`/`Resposta` com o instante da ingestão entram, `Decisoes` (comandos de push com a mudança de episódio, alertas, registros de confirmação, resumos de estado, descartes) saem. Sem relógio global, sem I/O, sem thread; o estado é um `EstadoRegras` explícito (`PADRAO` = tabelas dos módulos de regra; `novo_estado()` = mundo limpo). O vigia é um passo à parte (`nucleo.vigiar`). |
-| `analise/laco.py` | **Laço da análise** (`python -m analise`): lê `leituras` e `respostas_dispositivo` por cursor, chama o núcleo, grava as decisões e avança o cursor na mesma transação; passo do vigia (expiração); recuperação do estado ao subir. |
-| `analise/efeitos.py` | Persistência das decisões do núcleo (alertas, confirmações, episódio + comando na mesma transação, estado do dispositivo) e os efeitos pós-commit (arquivos e log). |
-| `analise/regra_queda.py` | Análise do acelerômetro (fusão das fontes por usuário), episódios de confirmação, timeout, mapa `messageId` → episódio, armazenamento da resposta. |
+| **`analise/`** | Servidor 2: decide. Sem banco, sem segredo de transporte; não importa a borda nem `flow_db`. |
+| `analise/api.py` | A API HTTP e o estado em memória: `POST /analisar`, `POST /vigiar`, `POST /restaurar`, `GET /saude`, todas com o cabeçalho `X-Flow-Analise-Token`. Cada resposta traz o `boot_id` da subida. Item mais velho que `IDADE_MAX_ACAO_S` só reconstrói estado, sem push. |
+| `analise/servico.py` | Ponto de entrada da análise (`python -m analise`), escutando em `127.0.0.1:FLOW_ANALISE_PORT` (5100). |
+| `analise/nucleo.py` | **Núcleo das regras:** `Leitura`/`Resposta` entram, `Decisoes` saem. Sem relógio global, sem I/O, sem thread; o estado é um `EstadoRegras` explícito (`PADRAO` = tabelas dos módulos de regra; `novo_estado()` = mundo limpo). O vigia é um passo à parte (`nucleo.vigiar`). |
+| `analise/regra_queda.py` | Fusão das fontes por usuário, episódios de confirmação, timeout, mapa `messageId` → episódio, registro da resposta. |
 | `analise/regra_luz.py`, `analise/regra_imobilidade.py` | Regras de negócio (luz inadequada à noite; imobilidade prolongada). |
-| `analise/const.py` | Constantes da análise (limiares, janelas, cooldown, retenções, período do vigia). Ver 14. |
-| **`comum/`** | Só o que os dois lados partilham: constantes comuns e carregador do `.env` (`const.py`), carregador e validador dos contratos (`schemas.py`, `contratos.py`) e o contrato da mensagem de push (`mensagens.py`: criação, validade, recálculo no replay). |
-| **`flow_db/`** | Banco: conexão, migrações, papéis, interfaces e implementações de acesso (borda e análise) e `repositorios.py` (disjuntor e pools dos dois lados). CLI: `python -m flow_db`. |
-| `simular_queda.py`, `simular_cenarios.py`, `medir_latencia.py` | Utilitários (fora do servidor; exigem borda e análise rodando): simulam um wokwi que sofre impacto e fica imóvel / rodam os cenários de ponta a ponta / medem a latência do push. |
-| `tests/` | Suíte pytest (`unit/` e `integration/`); ver 14.1. |
+| `analise/const.py` | Constantes da análise (limiares, janelas, cooldown, retenções, idade máxima para agir). Ver 14. |
+| **`comum/`** | O que os dois lados partilham: constantes comuns e carregador do `.env` (`const.py`), contratos (`schemas.py`, `contratos.py`), mensagem de push (`mensagens.py`) e **o contrato da análise** (`contrato_analise.py`: `Leitura`, `Resposta`, `Decisoes` e o seu JSON, com ida e volta). |
+| **`flow_db/`** | Só a borda a usa: `Repo` (interface única), `Pg` (PostgreSQL), `BancoFalso` (memória, para testes e `FLOW_DB_FAKE=1`), uma migração (`0001_base.sql`), CLI `python -m flow_db migrar|status`. |
+| `simular_queda.py` | Utilitário (exige borda e análise rodando): simula um wokwi que sofre impacto e fica imóvel. |
+| `tests/` | Suíte pytest (`unit/`, `integration/` e `banco/`); ver 14.1. |
 
-Dependências: a **borda** não importa a análise e a **análise** não importa a borda (só conversam pelo banco); `comum/` e `flow_db/` não importam nenhum dos dois (conferido por `tests/unit/test_fronteiras.py`). `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; o `nucleo.py` monta a mensagem e a `borda/entrega_push.py` entrega). `nucleo.py` importa as regras, `comum.mensagens` e `comum.contratos` (a mesma validação estrutural da borda); nenhuma regra importa o núcleo; `auth` não conhece Flask. Os três `const` (`comum`, `borda`, `analise`) são módulos folha (só o comum lê o `.env`; os outros dois importam o comum apenas para que ele já esteja carregado), e os demais fazem `from <pacote> import const as const_<pacote>` e leem `const_<pacote>.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
+Dependências: a **borda** não importa a análise (fala com ela por HTTP) e a **análise** não importa a borda nem `flow_db`; `comum/` e `flow_db/` não importam nenhum dos dois (conferido por `tests/unit/test_fronteiras.py`). `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; o `nucleo.py` monta a mensagem e a `borda/efeitos.py` entrega). `nucleo.py` importa as regras, `comum.mensagens` e `comum.contratos`; nenhuma regra importa o núcleo; `auth` não conhece Flask. Os três `const` (`comum`, `borda`, `analise`) são módulos folha (só o comum lê o `.env`), e os demais fazem `from <pacote> import const as const_<pacote>` e leem `const_<pacote>.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
 
 ### 2.3 Elementos abstratos (visão do sistema)
 
@@ -86,7 +87,7 @@ Ainda sem implementação. Cada um é descrito pelo papel e pelo ponto em que se
 | Elemento *(abstrato)* | Papel previsto | Ponto de encaixe |
 | --- | --- | --- |
 | App ou painel do cuidador | Receber alertas e consultar o histórico das pessoas vinculadas | Conta de papel `cuidador` (`user_ids` como lista, leitura escopada pelas claims); recebe push por um canal próprio. |
-| Canal de notificação ao cuidador | Entregar o aviso ao cuidador (hoje só registrado em arquivo) | Novo módulo `canal_*.py` com a mesma interface `enviar(user_id, mensagem)`. |
+| Canal de notificação ao cuidador | Entregar o aviso ao cuidador (hoje só registrado em `alertas`) | Novo módulo `canal_*.py` com a mesma interface `enviar(user_id, mensagem)`. |
 | Dispositivo de localização | Produtor dedicado, para sensor que o celular não cobre | Novo `source`; segue o contrato mínimo de qualquer produtor (6.1). |
 | Pulseira de sinais vitais | Frequência cardíaca e oximetria (dados mockados) | Idem. |
 | Push em segundo plano | Alertar o idoso com a tela bloqueada | Foreground Service e/ou FCM no `canal_app.py`, sem mudar o contrato da mensagem. |
@@ -106,11 +107,12 @@ flowchart LR
         end
     end
 
-    subgraph SRV["SensorServer"]
+    subgraph SRV["Servidor 1 (borda)"]
         AUTH["borda/auth.py"]
         AUTHZ["borda/authz.py"]
         SRVP["borda/server.py (orquestra)"]
-        RQ["analise/nucleo.py + regras"]
+        EF["borda/efeitos.py"]
+        DB[("PostgreSQL")]
         MSG["comum/mensagens.py"]
         CA["borda/canal_app.py"]
         CW["borda/canal_wokwi.py"]
@@ -122,8 +124,11 @@ flowchart LR
     APP -->|"POST /auth/login, /dados, /eventos"| AUTH
     BR  -->|"POST /auth/login, /dados, /eventos"| AUTH
     AUTH --> AUTHZ --> SRVP
-    SRVP --> RQ
-    SRVP --> MSG
+    SRVP -->|"HTTP local (127.0.0.1)"| RQ["Servidor 2 (análise): nucleo + regras"]
+    RQ -->|"decisões"| EF
+    SRVP --> DB
+    EF --> DB
+    EF --> MSG
     MSG --> CA
     MSG --> CW
     CA -.->|"SSE GET /push/app"| APP
@@ -132,7 +137,8 @@ flowchart LR
 
 - **Ida (dispositivo → servidor):** `POST` HTTP. Telemetria em `/dados`; eventos discretos (ack e resposta do idoso) em `/eventos`.
 - **Volta (servidor → dispositivo):** push por **SSE** (por que não WebSocket: seção 10.5). O **dispositivo abre** a conexão (`GET`) e o servidor empurra mensagens por ela. Nenhum dispositivo expõe porta; o servidor nunca precisa conhecer o endereço de um dispositivo.
-- **Estrela:** cada dispositivo fala diretamente com o servidor; não há nível intermediário entre dispositivos e servidor. O dispositivo Wokwi é um só: firmware e ponte compartilham uma conta e uma conexão com o servidor, e a ponte existe porque o ESP32 simulado só fala serial.
+- **Borda e análise:** o Servidor 1 chama o Servidor 2 por HTTP local (`/analisar`, `/vigiar`, `/restaurar`); o Servidor 2 nunca chama ninguém e nunca vê o banco. O banco é só do Servidor 1.
+- **Estrela:** cada dispositivo fala diretamente com o servidor (a borda); não há nível intermediário entre dispositivos e servidor. O dispositivo Wokwi é um só: firmware e ponte compartilham uma conta e uma conexão com o servidor, e a ponte existe porque o ESP32 simulado só fala serial.
 
 ### 3.1 Sistema completo (concreto e abstrato)
 
@@ -200,7 +206,7 @@ Dois estágios de verificação:
 
 Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do token; o cliente não escolhe de quem recebe.
 
-**Auditoria:** toda negação (`401`/`403`, e também `413` por corpo grande, com o motivo `corpo_grande`) vai para `dataUsers/auditoria.jsonl` (instante, rota, motivo, conta, IP), nunca o conteúdo da requisição. O arquivo é rotacionado por tamanho: ao passar de `AUDITORIA_MAX_BYTES` (5 MB) vira `auditoria.1.jsonl`, sobrescrevendo o anterior, e um novo começa; o espaço máximo fica em torno do dobro do limite. A rotação existe porque o estágio 1 roda antes de decifrar, e quem está na rede poderia encher o disco com negações sem conhecer a chave.
+**Registro das negações:** toda negação (`401`/`403`, e também `413` por corpo grande, com o motivo `corpo_grande`) vai para o log (rota, motivo, conta, IP), nunca o conteúdo da requisição. Não há auditoria em arquivo nem em banco por ora.
 
 ---
 
@@ -258,60 +264,61 @@ Detalhe campo a campo em `docs/schemas.md`.
 | --- | --- | --- | --- |
 | `/auth/login`, `/auth/refresh` | POST | pública | Autenticação (corpo cifrado). |
 | `/dados` | POST | `dados:enviar` | Ingestão de telemetria. |
-| `/eventos` | POST | `eventos:enviar` | Eventos de retorno; não passam pelo buffer de agregação. |
+| `/eventos` | POST | `eventos:enviar` | Eventos de retorno; vão à análise pela mesma fila das leituras. |
 | `/push/app` | GET (SSE) | `push:receber`, fonte `app` | Canal servidor → app. |
 | `/push/wokwi` | GET (SSE) | `push:receber`, fonte `wokwi` | Canal servidor → bridge. |
-| `/dados` | GET | `dados:ler` (admin) | Depuração: últimos registros agregados. |
-| `/estado/<device_id>` | GET | `estado:ler` (admin) | Resumo do estado da imobilidade por dispositivo, **lido de `estado_dispositivo`** (gravado pela análise); reflete a última decisão, não a leitura que acabou de chegar. |
-| `/`, `/health` | GET | pública | Disponibilidade. |
+| `/dados` | GET | `dados:ler` (admin) | Depuração: últimas leituras aceitas (só em memória). |
+| `/estado/<device_id>` | GET | `estado:ler` (admin) | Resumo do estado da imobilidade por dispositivo, **lido de `estado_dispositivo`** (gravado pela borda a partir das decisões da análise); reflete a última decisão, não a leitura que acabou de chegar. |
+| `/`, `/health` | GET | pública | Disponibilidade da borda e saúde da análise: `analise.estado` é `ok` ou `degradado` (a última chamada a ela falhou), com o tamanho da fila de espera. Sempre `200`. |
 
-O servidor escuta em `0.0.0.0:5000` e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`. **Corpo acima de `MAX_CONTENT_LENGTH` (64 KiB) é `413`** em qualquer rota com corpo (`/dados`, `/eventos`, `/auth/*`): o servidor não processa o conteúdo e a negação vai para a auditoria sem ele. O maior corpo legítimo é um envelope de telemetria, de poucos KB. Sem token, a resposta continua `401`, antes de o corpo ser lido. conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
+O servidor escuta em `0.0.0.0:5000` e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`. **Corpo acima de `MAX_CONTENT_LENGTH` (64 KiB) é `413`** em qualquer rota com corpo (`/dados`, `/eventos`, `/auth/*`): o servidor não processa o conteúdo e a negação vai para o log sem ele. O maior corpo legítimo é um envelope de telemetria, de poucos KB. Sem token, a resposta continua `401`, antes de o corpo ser lido. conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
 
-Entrada malformada **antes** de haver conteúdo interpretável é `400`: corpo decifrado que não é um objeto JSON, `source` ausente ou inválido, `user_id` inválido, `device_id` inválido no login (não string ou acima de 64 caracteres). `Last-Event-ID` inválido nunca é erro: vale `0`. `schemaVersion` não suportado em `/dados` e `/eventos` responde `200` com `descartado: true` e `motivo: "schemaVersion_nao_suportado"`, e o conteúdo não chega ao buffer nem às regras; em `/auth/login` e `/auth/refresh`, a versão maior que a atual ou inválida é `400` (a ausência é aceita).
+Entrada malformada **antes** de haver conteúdo interpretável é `400`: corpo decifrado que não é um objeto JSON, `source` ausente ou inválido, `user_id` inválido, `device_id` inválido no login (não string ou acima de 64 caracteres). `Last-Event-ID` inválido nunca é erro: vale `0`. `schemaVersion` não suportado em `/dados` e `/eventos` responde `200` com `descartado: true` e `motivo: "schemaVersion_nao_suportado"`, e o conteúdo não é gravado nem chega às regras; em `/auth/login` e `/auth/refresh`, a versão maior que a atual ou inválida é `400` (a ausência é aceita).
 
 ---
 
 ## 8. Ingestão e processamento
 
 ```markdown
-BORDA                                              BANCO                         ANÁLISE
-Evento bruto (envelope cifrado)
-    ↓ authn/authz (estágio 1) → decifrar → authz (estágio 2: escopo)
-    ↓ validação estrutural (schema) + identidade do token
-    ↓ grava ───────────────────────────────→ leituras / respostas_dispositivo
-                                                  ↓ lê por cursor ─────────→ núcleo (deduplicação, estado, regras)
-                                                                              ↓ mesma transação do cursor:
-                          comandos_push, alertas, confirmacoes, episodios, estado_dispositivo ←─ grava
-    ↓ lê comandos_push por cursor
-    ↓ entrega por SSE (app e wokwi) → grava entregas_push
+DISPOSITIVO        SERVIDOR 1 (borda)                                   SERVIDOR 2 (análise)
+envelope cifrado → authn/authz → decifra → authz (escopo) → valida (schema)
+                   ↓ fila em memória → grava em lote ──→ PostgreSQL: leituras
+                   ↓ manda o lote ── POST /analisar ──────────────────→ núcleo (deduplicação, estado, regras)
+                   ↓ ←──────────────── decisões ───────────────────────┘
+                   ↓ uma transação: confirmacoes, alertas, estado_dispositivo, episodios + comandos_push
+                   ↓ depois do commit: push por SSE (app e wokwi)
+vigia (a cada 0,25 s): POST /vigiar ──→ decisões de expiração ──→ mesma aplicação
 ```
 
+**Responsabilidades:** o dispositivo captura, gera o tempo do evento e descarta leituras claramente inválidas; a **borda** autentica, valida a estrutura, grava, pergunta à análise, grava as decisões e entrega; a **análise** deduplica, mantém o estado das regras em memória e decide. A resposta do dispositivo é correlacionada pelo `messageId`; a identidade vem do token (nunca do corpo).
 
-**Responsabilidades:** o dispositivo captura, gera o tempo do evento e descarta leituras claramente inválidas; a **borda** autentica, valida a estrutura, grava e entrega; a **análise** deduplica, mantém estado, decide e grava as decisões; o banco guarda o histórico e é o único elo entre as duas. A resposta do dispositivo é correlacionada pelo `messageId`; a identidade vem do token (nunca do corpo).
+**Contrato borda ↔ análise** (`comum/contrato_analise.py`):
 
-### 8.1 Buffer de agregação por usuário
+1. A borda só manda à análise o que **já gravou** no banco (a leitura) ou aceitou (a resposta do dispositivo). A análise só devolve **decisões**; quem as grava e entrega é a borda, e só depois de gravar.
+2. A análise gera os `message_id` e `episodio_id`. `comandos_push.message_id` é único: regravar um comando não o duplica.
+3. Cada resposta traz o `boot_id` da subida da análise. Se for diferente do último conhecido, o estado em memória foi perdido: a borda chama `/restaurar` (leituras dos últimos `JANELA_RESTAURACAO_S` s, episódios abertos e recentes e as mensagens deles, tudo do banco) e repete a chamada.
+4. Leitura ou resposta com mais de `IDADE_MAX_ACAO_S` (30 s) só reconstrói estado: não gera push. A exceção é a resposta que encerra um episódio real.
+5. Análise fora do ar (rede, prazo de 1 s, erro 5xx): a borda continua aceitando e gravando leituras; o que espera a análise fica numa fila limitada (`MAX_FILA_ANALISE`), e o `/health` mostra `degradado`.
 
-Produtores assíncronos da mesma pessoa não enviam sincronizados. O servidor mantém, por `user_id`, a leitura mais recente de cada fonte e, a cada `JANELA_AGREGACAO_S` (1 s), grava **uma linha** em `dataUsers/usuario_<user_id>.jsonl`:
+**Se a borda cai e volta:** reinicia limpa; na primeira chamada manda a restauração (do banco) à análise. **Se o banco cai:** as leituras ficam na fila limitada (`MAX_FILA_LEITURAS`) e nenhuma decisão é aplicada nem push enviado até o banco confirmar; as decisões já tomadas ficam guardadas e são regravadas ao voltar.
 
-```json
-{ "timestamp": "<flush, ISO 8601>", "user_id": 1, "app": {...} | null, "wokwi": {...} | null }
-```
+### 8.1 Leituras em lote
 
-Fonte sem dado na janela fica `null` (não repete o último valor). Se uma fonte atrasar além da janela, aparece sozinha na linha seguinte: é telemetria, vale a leitura mais recente. As regras de negócio rodam na análise, pelo cursor sobre `leituras`, sem esperar o flush.
+A requisição não espera o banco nem a análise: a leitura entra numa fila limitada e a thread de descarga (a cada `INTERVALO_DESCARGA_S`) grava lotes de até `TAMANHO_LOTE_LEITURAS` em `leituras` (uma só escritora). Com a fila cheia, as mais antigas saem (descarte contado e logado). Cada leitura leva o `instante_ingestao` (relógio do servidor ao aceitar) e a identidade do token (`conta_id`).
 
 ### 8.2 Regra "luz inadequada à noite" (`analise/regra_luz.py`, dados do app)
 
-Validação (`luminosidade >= 0`, `1000 <= cct <= 12000`, `event_time` ISO 8601), deduplicação por `device_id`+`seq_num`, condição noturna (18h–6h) com `cct > 4500K`, debounce de 3 leituras consecutivas, sem repetição no mesmo episódio. Atuação: linha em `alertas` (e, enquanto `FLOW_GRAVAR_ARQUIVOS=1`, `alerta_<device_id>_<timestamp>.json` em `dataUsers/`).
+Validação (`luminosidade >= 0`, `1000 <= cct <= 12000`, `event_time` ISO 8601), deduplicação por `device_id`+`seq_num`, condição noturna (18h–6h) com `cct > 4500K`, debounce de 3 leituras consecutivas, sem repetição no mesmo episódio. Atuação: linha em `alertas`.
 
 ### 8.3 Regra "imobilidade prolongada" (`analise/regra_imobilidade.py` + `sketch.ino`)
 
-Decisão compartilhada. No firmware: máquina `NORMAL → AGUARDANDO_CONFIRMACAO → ALERTA_CONFIRMADO` com histerese (`LIMIAR_BAIXO`/`LIMIAR_ALTO`), persistência (`T_PERSISTENCIA_MS`), janela de confirmação humana (`T_CONFIRMACAO_MS`, botão "Estou bem") e rearme manual. No servidor: validação em cascata (`eventType` → `state` → faixa de `value`), deduplicação por `sequence`, resumo de estado por `device_id` (em `estado_dispositivo`, exposto em `GET /estado/<device_id>`) e atuação só quando chega `ALERTA_IMOBILIDADE` sem alerta ativo no episódio, gravando o alerta em `alertas` (e o arquivo `alerta_imobilidade_<device_id>_<timestamp>.json` enquanto `FLOW_GRAVAR_ARQUIVOS=1`). O servidor não confia cegamente no firmware: só rearma ao receber um estado que encerra o episódio.
+Decisão compartilhada. No firmware: máquina `NORMAL → AGUARDANDO_CONFIRMACAO → ALERTA_CONFIRMADO` com histerese (`LIMIAR_BAIXO`/`LIMIAR_ALTO`), persistência (`T_PERSISTENCIA_MS`), janela de confirmação humana (`T_CONFIRMACAO_MS`, botão "Estou bem") e rearme manual. No servidor: validação em cascata (`eventType` → `state` → faixa de `value`), deduplicação por `sequence`, resumo de estado por `device_id` (gravado em `estado_dispositivo` só quando muda, exposto em `GET /estado/<device_id>`) e atuação só quando chega `ALERTA_IMOBILIDADE` sem alerta ativo no episódio, gravando o alerta em `alertas`. O servidor não confia cegamente no firmware: só rearma ao receber um estado que encerra o episódio.
 
 ---
 
 ## 9. Análise de queda e ciclo de confirmação
 
-`analise/regra_queda.py` recebe as leituras de aceleração das duas fontes, decide se há **queda provável** e devolve um `PedidoConfirmacao`; o núcleo (`analise/nucleo.py`) o transforma em mensagem (`comum/mensagens.py`) e em comando de push, e a `borda/entrega_push.py` o entrega.
+`analise/regra_queda.py` recebe as leituras de aceleração das duas fontes, decide se há **queda provável** e devolve um `PedidoConfirmacao`; o núcleo (`analise/nucleo.py`) o transforma em mensagem (`comum/mensagens.py`) e em comando de push, devolvido à borda nas `Decisoes`; a `borda/efeitos.py` o grava e entrega.
 
 ### 9.1 Entrada normalizada
 
@@ -369,7 +376,7 @@ Dados degradados:
 
 | Situação | Tratamento |
 | --- | --- |
-| App v1 ou v2 (sem bloco `acelerometro`) | Não gera leitura; continua alimentando o buffer e a regra de luz. |
+| App v1 ou v2 (sem bloco `acelerometro`) | Não gera leitura de queda; continua alimentando a regra de luz. |
 | Wokwi v1 ou v2 (sem `valueMax`) | Gera leitura com pico igual ao valor da amostra e marca `degradada`. Se só houver dispositivos antigos, eles são a referência. |
 | Versão maior que a atual | Descartada antes de chegar à regra (6.3). |
 
@@ -392,27 +399,27 @@ stateDiagram-v2
 - O pedido vai a **todos os dispositivos** do usuário com canal ativo, na mesma mensagem (mesmo `messageId`).
 - A primeira resposta `ESTOU_BEM` encerra o episódio (`CONFIRMADO`) e o servidor envia `queda.confirmacao_encerrada` aos canais, para que o outro dispositivo cale o alarme. Resposta tardia é armazenada como tardia e não reabre nada.
 - **O episódio de um retorno é o da sua `messageId`**, resolvido por um mapa `messageId` → (usuário, episódio, validade) preenchido a cada pedido emitido. Retorno (`push.ack`, `SEM_RESPOSTA` ou `ESTOU_BEM`) de episódio já encerrado, inclusive de um anterior ao mais recente, é gravado com `tardia: true`. Retorno de `messageId` desconhecida ou de outro usuário é gravado com `episodeId: null` e `mensagem_desconhecida: true` e não encerra nada. Só `ESTOU_BEM` de mensagem conhecida com episódio aberto encerra como `CONFIRMADO`. O mapa é podado pelo vigia, `RETENCAO_MENSAGENS_S` (1 h) depois de a mensagem expirar.
-- Um vigia (a cada 1 s) encerra como `EXPIRADO` o episódio cujo prazo venceu. O vigia é um passo do laço da análise (`passo_vigia`); falha ao gravar o encerramento não impede os demais nem derruba a thread (o encerramento fica guardado e é regravado no passo seguinte). A entrega do aviso é da borda, que lê o comando `queda.confirmacao_encerrada` em `comandos_push`. A thread de flush do buffer, na borda, tem a mesma proteção, por usuário.
+- Um vigia (a cada `INTERVALO_VIGIA_S`, 0,25 s) encerra como `EXPIRADO` o episódio cujo prazo venceu: uma thread da borda chama `POST /vigiar` com o relógio real menos `ATRASO_VIGIA_S` (cobre o dado ainda em trânsito) e aplica as decisões de expiração como as demais. Falha ao gravar o encerramento não impede os demais nem derruba a thread (a decisão fica guardada e é regravada no passo seguinte). A entrega do aviso (`queda.confirmacao_encerrada`) é da borda, depois do commit.
 
 ```mermaid
 sequenceDiagram
     participant D as Dispositivo (app ou ESP32+bridge)
-    participant B as Borda
+    participant B as Servidor 1 (borda)
     participant DB as Banco
-    participant A as Análise
+    participant A as Servidor 2 (análise)
     participant O as Demais dispositivos do user_id
     D->>B: POST /dados (Bearer + envelope), 1x/s
-    B->>DB: leituras
-    A->>DB: lê leituras por cursor
-    A->>DB: episódio + comando_push + confirmação (mesma transação do cursor)
-    B->>DB: lê comandos_push por cursor
+    B->>DB: leituras (em lote)
+    B->>A: POST /analisar (lote)
+    A-->>B: decisões (comando de push, episódio, confirmação)
+    B->>DB: episódio + comando_push + confirmação (uma transação)
     B-->>D: SSE queda.confirmacao_solicitada (timeoutMs)
     B-->>O: SSE queda.confirmacao_solicitada
-    B->>DB: entregas_push
     D->>D: alerta sonoro + botão "Estou bem"
     D->>B: POST /eventos push.ack e confirmacao.resposta
-    B->>DB: respostas_dispositivo
-    A->>DB: lê a resposta, encerra o episódio e grava o comando de encerramento
+    B->>A: POST /analisar (resposta)
+    A-->>B: encerra o episódio (CONFIRMADO) + comando de encerramento
+    B->>DB: grava a decisão
     B-->>O: SSE queda.confirmacao_encerrada
 ```
 
@@ -436,7 +443,7 @@ sequenceDiagram
 
 ### 9.5 Armazenamento
 
-Tabelas `confirmacoes` (uma linha por ocorrência) e `episodios`; a entrega por canal fica em `entregas_push` (resultado `enviado`, `sem_conexao`, `erro`, `expirado`). Enquanto `FLOW_GRAVAR_ARQUIVOS=1` (transição), as confirmações também vão para `dataUsers/confirmacoes_usuario_<user_id>.jsonl` (gravado pela análise depois do commit), uma linha por ocorrência com `timestamp`: `episodio.aberto`, `push.ack`, `confirmacao.resposta`, `episodio.encerrado` (não há mais linha `push.entrega`: ela é `entregas_push`). Todo retorno leva o `episodeId` da sua `messageId` (ou `null`, com `mensagem_desconhecida: true`) e, quando o episódio já estava encerrado, `tardia: true`. A linha `episodio.aberto` do gatilho A registra também a fusão: `fonte_do_disparo`, `versao_referencia`, `fontes_usadas` e `fontes_desatualizadas` (campos em `docs/schemas.md`). **É tudo que o servidor faz com a resposta do idoso**; o uso posterior dessa informação não está definido.
+Tabelas `confirmacoes` (uma linha por ocorrência), `episodios` e `comandos_push` (histórico das mensagens, de onde a restauração tira os `messageId` de cada episódio). Cada linha de `confirmacoes` tem `dados` com `timestamp` e `tipo`: `episodio.aberto`, `push.ack`, `confirmacao.resposta`, `episodio.encerrado`. Todo retorno leva o `episodeId` da sua `messageId` (ou `null`, com `mensagem_desconhecida: true`) e, quando o episódio já estava encerrado, `tardia: true`. A linha `episodio.aberto` do gatilho A registra também a fusão: `fonte_do_disparo`, `versao_referencia`, `fontes_usadas` e `fontes_desatualizadas` (campos em `docs/schemas.md`). O resultado da entrega do push por canal vai só para o log (`[push] ... canal=... -> ...`). **É tudo que o servidor faz com a resposta do idoso**; o uso posterior dessa informação não está definido.
 
 ---
 
@@ -550,24 +557,24 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | --- | --- |
 | Falha de rede no envio (app ou bridge) | Evento descartado; o ciclo seguinte envia dados frescos. Sem fila. |
 | Fonte de dados indisponível (serial) | O bridge reconecta sozinho (`RECONECTAR_A_CADA_S`). |
-| Nenhum canal ativo no pedido | `entregas_push.resultado = sem_conexao`; o episódio segue até o prazo e fecha `EXPIRADO`. Não há retransmissão pela borda: o anel guarda a mensagem só até expirar, e um dispositivo que conecte antes do `expiresAt` a recebe com `timeoutMs` reduzido (a linha de `entregas_push` não muda). Depois de expirar, o pedido não vale. |
+| Nenhum canal ativo no pedido | O resultado (`SEM_CANAL_ATIVO`) vai para o log; o episódio segue até o prazo e fecha `EXPIRADO`. Não há retransmissão pela borda: o anel guarda a mensagem só até expirar, e um dispositivo que conecte antes do `expiresAt` a recebe com `timeoutMs` reduzido. Depois de expirar, o pedido não vale. |
 | Bridge conectado, firmware mudo (simulação pausada) | Entrega ao canal, mas nenhum `push.ack`; o bridge descarta comandos expirados; o firmware tem o teto do buzzer. |
 | Conexão SSE cai | Reconexão com recuo exponencial e `Last-Event-ID`; reenvio só do não expirado, `timeoutMs` recalculado. |
 | Cliente SSE conectado que não consome | Fila de 16 enche, o servidor fecha a conexão; o cliente reconecta e recebe o não expirado. |
-| Falha ao gravar um encerramento, o flush de um usuário ou entregar a um canal | Registrada no log; não derruba as threads (laço e vigia da análise, flush e entrega da borda) nem impede os demais episódios, usuários ou canais. Canal que levanta exceção vira `entregas_push.resultado = erro` e os outros canais recebem a mensagem. A resposta de `/dados` e `/eventos` não depende da análise nem da entrega e segue `200`. |
-| Análise parada | A borda segue aceitando e gravando; nada é decidido nem entregue. `/health` passa a `degradado` (batimento velho / atraso de leituras). Na volta, a análise processa o que está no banco; linha mais velha que `IDADE_MAX_ACAO_S` só reconstrói estado e não age. |
-| Borda parada | A análise segue decidindo e gravando `comandos_push`; a borda entrega ao voltar o que ainda não expirou (cursor `cursor_borda`). |
+| Falha ao entregar a um canal, ao gravar decisões ou nas threads de fundo | Registrada no log; não derruba as threads (descarga e vigia) nem impede os demais canais. Canal que levanta exceção é logado (`ERRO_NO_CANAL`) e os outros recebem a mensagem. Decisões que o banco não aceitou ficam guardadas e são regravadas, e o push só sai depois do commit. Banco fora do ar: leituras na fila limitada, nenhuma decisão aplicada. A resposta de `/dados` e `/eventos` não depende da análise nem da entrega e segue `200`. |
+| Análise parada | A borda segue aceitando e gravando leituras; o que espera a análise fica numa fila limitada e `/health` mostra `analise.estado = degradado`. Na volta (ou reinício, com `boot_id` novo e restauração), a análise recebe a fila; item mais velho que `IDADE_MAX_ACAO_S` só reconstrói estado e não age. |
+| Borda parada | A análise fica ociosa (só a borda a chama); nada é aceito nem entregue. Ao voltar, a borda reinicia limpa e restaura a análise a partir do banco; o que não expirou volta a valer. |
 | Token expira com o stream aberto | `event: reautenticar`, fechamento, renovação e reconexão. |
 | Refresh recusado | Bridge refaz login com o segredo do ambiente; app pede nova autenticação. |
-| Reinício | Borda: sessões persistem e os streams reconectam. Análise: o estado das regras e os episódios abertos são reconstruídos do banco na subida (`recuperar_estado`); streams reconectam sozinhos, e os novos `id` de push são maiores que os da execução anterior. |
+| Reinício | Borda: sessões persistem, os streams reconectam e a análise recebe o estado de volta do banco. Análise: ao voltar, o `boot_id` novo faz a borda mandar `/restaurar` (leituras recentes, episódios abertos e `messageId`s, do banco) antes da próxima chamada; os novos `id` de push são maiores que os da execução anterior. |
 | `messageId` repetido | Ignorado pelo dispositivo. |
 | Resposta duplicada ou tardia | Armazenada com `tardia: true` e o `episodeId` da sua mensagem; não reabre nem altera episódio encerrado. `messageId` desconhecida: `mensagem_desconhecida: true`. |
 | Duas fontes ou dois gatilhos disparam | Um episódio só. |
 | Dispositivos de versões diferentes do mesmo usuário | Vale a maior versão presente; as menores ficam fora do sinal e são logadas (9.2.1). |
-| Credencial errada repetida | Bloqueio temporário; negação em `auditoria.jsonl`. |
-| Corpo de requisição acima de 64 KiB | `413` sem processar o conteúdo; negação em `auditoria.jsonl` (sem o corpo). |
+| Credencial errada repetida | Bloqueio temporário; negação no log. |
+| Corpo de requisição acima de 64 KiB | `413` sem processar o conteúdo; negação no log (sem o corpo). |
 | Tabelas em memória com chave vinda do cliente | Limitadas (`MAX_IDENTIFICADORES_LOGIN`, `MAX_ESTADOS_LEGADOS`, `MAX_REFERENCIAS_DEDUP`): ao estourar, saem as mais antigas, para o consumo de memória não crescer sem limite. |
-| Dispositivo silencioso *(abstrato)* | Política registrada (alerta de "sem comunicação"), ainda sem rotina que a dispare; os dados para calculá-la existem (`null` no `.jsonl`, `ultima_atualizacao` na tabela de estado). |
+| Dispositivo silencioso *(abstrato)* | Política registrada (alerta de "sem comunicação"), ainda sem rotina que a dispare; os dados para calculá-la existem (`ultima_atualizacao` na tabela de estado). |
 | Entrada inválida ou repetida | Descartada e logada; resposta `200`. |
 | MPU6050 não encontrado *(firmware)* | O firmware emite `sistema.erro` (`MPU_NAO_ENCONTRADO`); o servidor o descarta e loga, sem alerta ao cuidador. |
 
@@ -602,28 +609,29 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | --- | --- | --- |
 | `FLOW_JWT_SECRET` | `SensorServer/.env` ou ambiente | Obrigatório; ≥ 32 bytes. |
 | `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | `SensorServer/.env` ou ambiente | Opcionais; padrão `contas.json`, `sessoes.json`. |
-| `.env.borda`, `.env.analise` | `SensorServer/` | Um arquivo por serviço (modelos `.example`); o `.env` fica só administrativo. Cada serviço recusa segredo de outro dono no ambiente (`comum/isolamento.py`). |
-| `FLOW_DB_FAKE` | ambiente (testes/dev) | `1` usa o banco falso em memória; só com `python -m borda.server` e a suíte. `python -m borda` e `python -m analise` o recusam. |
-| `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de fundo da borda (flush, entrega e saúde) e a exigência do segredo na subida; usado pela suíte de testes. |
+| `FLOW_ANALISE_TOKEN`, `FLOW_ANALISE_PORT`, `FLOW_ANALISE_URL` | `SensorServer/.env` ou ambiente | Token compartilhado entre borda e análise (obrigatório, ≥ 16 caracteres); porta da análise (padrão 5100, só em `127.0.0.1`); endereço que a borda usa (padrão `http://127.0.0.1:5100`). Um só `.env`: a análise lê dele apenas o que começa com `FLOW_ANALISE_`. |
+| `FLOW_DB_PASSWORD`, `FLOW_DB_USER`, `FLOW_DB_NAME`, `FLOW_DB_HOST`, `FLOW_DB_PORT` | `SensorServer/.env` ou ambiente | Um único usuário de banco, o mesmo do `docker-compose.yml`; só a senha é obrigatória. |
+| `FLOW_DB_FAKE` | ambiente (dev/testes) | `1` usa o banco falso em memória, sem Docker (os dados somem ao parar a borda). |
+| `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de fundo da borda (descarga e vigia) e a exigência do segredo e da análise na subida; usado pela suíte de testes. |
 | `FLOW_SENHA` | ambiente da CLI `borda/auth.py` | Opcional; senha sem prompt ao criar contas. |
 | `FLOW_SEM_DOTENV` | ambiente (testes) | `1` impede a leitura dos `.env` reais; a suíte do servidor e a do bridge o definem. Variável de ambiente já definida sempre vence o `.env`. |
 | `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_BRIDGE_DEVICE` | `WokwiBridge/.env` ou ambiente | Os dois primeiros são obrigatórios. `FLOW_BRIDGE_DEVICE` (padrão: o `DEVICE_ID` de `sketch.ino`) é registrado no login e deve ser igual ao `deviceId` dos eventos do firmware (`403` se diferir, 4.3). |
 | Usuário e senha, IP e porta | tela "Configurações" do app | |
 | Timeout do botão | `SensorServer/comum/const.py` | Sem recompilar app nem firmware. |
 | Limiares, cooldown, fusão de fontes, retenções | `SensorServer/analise/const.py` | Idem. |
-| Porta, limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, rotação da auditoria, fila do SSE | `SensorServer/borda/const.py` | Idem. |
-| Versão atual de cada contrato, pasta de dados | `SensorServer/comum/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
+| Porta, limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, fila do SSE, filas e prazos da chamada à análise | `SensorServer/borda/const.py` | Idem. |
+| Versão atual de cada contrato | `SensorServer/comum/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
 | Versão do core ESP32 | `arduino-cli core list` | 3.x (usa `tone`/`noTone`). |
 
 Ordem de subida: banco (`scripts/preparar.*`) → contas criadas → borda e análise (a ordem entre as duas é indiferente) → simulação Wokwi (aba visível, `rfc2217ServerPort = 4000`) → bridge → app. O firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
 
-Arquivos de transição em `dataUsers/` (enquanto `FLOW_GRAVAR_ARQUIVOS=1`; a retirada é da parte 2 do banco): `usuario_<id>.jsonl` (agregado), `confirmacoes_usuario_<id>.jsonl`, `auditoria.jsonl` (e `auditoria.1.jsonl` depois da rotação), `alerta_*.json`, `alerta_imobilidade_*.json`. O `device_id` que entra no nome dos arquivos de alerta é sanitizado (só `A-Z a-z 0-9 _ . -`, até 64 caracteres).
+
 
 ### 14.1 Testes
 
 | Alvo | Como | Observação |
 | --- | --- | --- |
-| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, laço da análise, entrega de push, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização e queda ponta a ponta). Nos testes de integração a análise e a entrega rodam em memória, de forma síncrona (`tests/_pipeline.py`, depois de cada POST), sobre o banco falso. Usa segredo próprio, sem threads de fundo, e grava contas, sessões e `dataUsers/` em pasta temporária: não toca nos dados reais. |
+| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, contrato e API da análise, contrato do repositório no banco falso, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização, banco e análise fora do ar, e queda ponta a ponta). Nos testes de integração a análise roda em memória, no lugar do processo, chamada pelo mesmo cliente da produção (`tests/_pipeline.py`; a descarga, a análise e a entrega rodam de forma síncrona depois de cada POST), sobre o banco falso. `pytest -m banco` roda o mesmo contrato do repositório no PostgreSQL real (banco descartável `flow_teste`). Usa segredo próprio, sem threads de fundo, e grava contas e sessões em pasta temporária: não toca nos dados reais. |
 | Ponte | `cd WokwiBridge && python -m pytest` (`pytest.ini`) | `tests/test_bridge.py`: tradução e validação das mensagens de push, roteamento das linhas da serial, parser SSE e renovação de sessão. Sem rede e sem serial. |
 | Ponte, ponta a ponta | `WokwiBridge/tests/fake_firmware.py` | Substitui a serial por um firmware falso (impacto, `push.ack`, `ESTOU_BEM`). Exige servidor no ar e `FLOW_BRIDGE_DEVICE=esp32-falso`. Não é pytest. |
 | Firmware | `sketch/host_test/` | Lógica do firmware no PC, com um Arduino falso; opcional. |
@@ -646,8 +654,10 @@ Itens abstratos que **não** são elementos novos do sistema (esses estão em 2.
 
 ### 15.1 Pendências registradas
 
-- **Serviço de notificação aos cuidadores:** consumiria `alertas` e `confirmacoes` do banco como terceiro serviço (papel de banco próprio); a separação entre borda e análise deixou o contrato pronto, sem o serviço.
+- **Serviço de notificação aos cuidadores:** consumiria `alertas` e `confirmacoes` do banco como terceiro serviço; a separação entre borda e análise deixou o contrato pronto, sem o serviço.
 - **HTTPS:** a borda continua em HTTP; TLS fica para a fase de produção (13.2).
 - **Chave AES por dispositivo:** hoje fixa e compartilhada (13.2).
-- **Modo "ensaio" da análise** (`LacoAnalise(agir=False)`): mantido de propósito, útil para reprocessar sem agir; não é usado em produção.
-- **Parte 2 do banco (B2.x):** retenção, backup, remoção da tabela `telemetria` (`FLOW_GRAVAR_TELEMETRIA_LEGADO`), dos arquivos de transição (`FLOW_GRAVAR_ARQUIVOS`) e da auditoria em arquivo; migração das contas/sessões de `contas.json`/`sessoes.json` para as tabelas. Esta entrega não muda nada disso.
+- **Contas e sessões em tabelas:** ficam em JSON (`contas.json`, `sessoes.json`) por serem poucas e só da borda; migrar para o banco só se o número de contas ou de réplicas da borda crescer.
+- **Retenção e compressão de dados** (leituras antigas): hoje o PostgreSQL guarda tudo em tabelas comuns; ver `docs/banco.md`.
+- **Auditoria de negações em banco:** hoje a negação vai só para o log; guardar em tabela fica para quando for necessária.
+- **Fila de espera durável:** as filas de leituras e de itens à espera da análise são em memória; se a borda cair com a fila cheia, o que não foi gravado se perde (a análise se refaz do banco).

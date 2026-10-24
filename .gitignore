@@ -5,6 +5,5 @@ SensorApp/app/build/
 **/*.zip
 **/*.apk
 sketch/build/
-SensorServer/dataUsers/
 uu.md
 .env
