@@ -1,4 +1,5 @@
 """Os dois processos: ambiente por servico, pontos de entrada, API da analise (token, rotas) e desligamento ordenado da borda."""
+import json
 import os
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from analise import api
 from borda import server
 from borda.sse_hub import HUB
 from comum import const as const_comum
+from comum.contrato_analise import (Alerta, Comando, Confirmacao, Decisoes, Descarte, Leitura, MudancaEpisodio, Resposta,
+                                    ResumoEstado, de_json_item)
 from flow_db import repositorios
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # SensorServer/
@@ -105,16 +108,24 @@ class TestApiDaAnalise:
         assert r.status_code == 200 and not any(r.get_json()["decisoes"].values())
 
 
-def test_o_contrato_de_decisoes_vai_e_volta_pelo_json():
-    from comum.contrato_analise import Decisoes
-    from datetime import datetime, timezone
-    from comum.contrato_analise import Alerta, Comando, Confirmacao, Descarte, MudancaEpisodio, ResumoEstado
-    t = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
-    episodio = MudancaEpisodio("e1", 1, None, "IMOBILIDADE_PROLONGADA", "aguardando_confirmacao", t, t, None, None, {"k": 1})
-    d = Decisoes([Comando(1, "cel1", {"messageId": "m1", "messageType": "x"}, t, t, episodio)],
-                 [Alerta(1, "cel1", "imobilidade", {"mensagem": "a"}, 3, t)], [Confirmacao(1, "episodio.aberto", {"a": 1}, t)],
-                 [ResumoEstado(1, "cel1", t, 1, {"estado_atual": "NORMAL"})], [Descarte(1, None, "motivo", "d")])
-    assert Decisoes.de_json(d.para_json()) == d
+_T = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
+_EPISODIO = MudancaEpisodio("e1", 1, None, "IMOBILIDADE_PROLONGADA", "aguardando_confirmacao", _T, _T, None, None, {"k": 1})
+_IDA_E_VOLTA = {     # nome -> (objeto, funcao que le o JSON de volta)
+    "leitura": (Leitura(_T, 1, "bridge-dev", "wokwi", {"eventType": "imobilidade.leitura", "value": 0.3}, 3), de_json_item),
+    "resposta": (Resposta(_T, 1, "cel1", "app", {"eventType": "push.ack", "state": "ESTOU_BEM", "messageId": "m1"}, 3),
+                 de_json_item),
+    "decisoes": (Decisoes([Comando(1, "cel1", {"messageId": "m1", "messageType": "x"}, _T, _T, _EPISODIO)],
+                          [Alerta(1, "cel1", "imobilidade", {"mensagem": "a"}, 3, _T)],
+                          [Confirmacao(1, "episodio.aberto", {"a": 1}, _T)],
+                          [ResumoEstado(1, "cel1", _T, 1, {"estado_atual": "NORMAL"})],
+                          [Descarte(1, None, "motivo", "d")]), Decisoes.de_json),
+}
+
+
+@pytest.mark.parametrize("nome", _IDA_E_VOLTA)
+def test_o_contrato_vai_e_volta_pelo_json(nome):
+    objeto, de_json = _IDA_E_VOLTA[nome]
+    assert de_json(json.loads(json.dumps(objeto.para_json()))) == objeto
 
 
 # ------------------------------- desligamento ordenado -------------------------

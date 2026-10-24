@@ -7,3 +7,5 @@ SensorApp/app/build/
 sketch/build/
 uu.md
 .env
+*.patch
+*.diff
