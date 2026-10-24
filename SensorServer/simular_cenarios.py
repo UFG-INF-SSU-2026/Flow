@@ -1,8 +1,8 @@
 """
-S3b do split: roda TODOS os cenarios do roadmap contra o servidor real, para a comparacao em modo sombra.
+Roda TODOS os cenarios do roadmap do split contra o sistema real (borda + analise), ponta a ponta.
 
 Cenarios (cada um e uma lista de passos com tempo relativo; a mesma lista roda no teste sem rede, ver
-tests/_cenarios_sombra.py):
+tests/_transporte.py e tests/integration/test_acoes_banco_cenarios.py):
   descartes_wokwi           leitura repetida (duplicada) e fora de faixa: nenhuma acao, so descartes
   luz_inadequada            luz fria a noite: alerta apos leituras consecutivas, repetida e fora de faixa   [precisa do app]
   queda_estou_bem           queda -> pedido -> push.ack e "Estou bem" -> CONFIRMADO
@@ -11,15 +11,16 @@ tests/_cenarios_sombra.py):
   imobilidade_gatilho_b     decisao ALERTA_IMOBILIDADE -> alerta + pedido -> "Estou bem"
   app_e_wokwi_juntos        o mesmo idoso com celular e Wokwi: fusao de fontes; o app confirma             [precisa do app]
 
-Pre-requisitos: servidor no ar COM a sombra ligada (FLOW_SOMBRA=1 no .env ou no terminal; o laco da analise ligado)
-e as contas do bridge e, para os dois ultimos cenarios, do app (do MESMO usuario). Na pasta SensorServer:
+Pre-requisitos: a borda E a analise no ar (`python -m borda` e `python -m analise`, ou scripts/tudo) e as contas do bridge
+e, para os dois ultimos cenarios, do app (do MESMO usuario). Na pasta SensorServer:
 
     FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> [FLOW_APP_ID=idoso1 FLOW_APP_SECRET=<senha>] \\
         python simular_cenarios.py [URL_BASE] [--cenarios nome1,nome2] [--lista]
 
 Entre dois cenarios que abrem episodio o script espera o cooldown do usuario (const_analise.COOLDOWN_S): o conjunto
-inteiro leva alguns minutos. Ao final grava dataUsers/sombra_cenarios.json (janelas de tempo) e manda rodar
-`python relatorio_sombra.py`. Nada aqui faz rede nem le argv/ambiente ao importar (o teste importa este modulo).
+inteiro leva alguns minutos. Ao final o script lista o que o banco deve ter recebido; confira as decisoes nas tabelas
+`comandos_push`, `alertas`, `episodios` e `confirmacoes` (ver docs/banco.md). Nada aqui faz rede nem le argv/ambiente ao
+importar (o teste importa este modulo).
 """
 import json
 import os
@@ -50,7 +51,7 @@ class Cenario:
     nome: str
     descricao: str
     passos: tuple
-    duracao_s: float                # o cenario so termina aqui: da tempo da sombra alcancar e do vigia expirar
+    duracao_s: float                # o cenario so termina aqui: da tempo da analise alcancar e do vigia expirar
     precisa_app: bool = False
     abre_episodio: bool = False     # depois dele o script espera o cooldown
 
@@ -350,10 +351,10 @@ def main(argv: list[str] | None = None) -> int:
         todos = [c for c in todos if c.nome in escolhidos]
 
     bridge = (os.environ.get("FLOW_BRIDGE_ID", "bridge1"), os.environ["FLOW_BRIDGE_SECRET"],
-              os.environ.get("FLOW_BRIDGE_DEVICE", "simulador-sombra"))
+              os.environ.get("FLOW_BRIDGE_DEVICE", "simulador-cenarios"))
     app = None
     if os.environ.get("FLOW_APP_ID") and os.environ.get("FLOW_APP_SECRET"):
-        app = (os.environ["FLOW_APP_ID"], os.environ["FLOW_APP_SECRET"], os.environ.get("FLOW_APP_DEVICE", "simulador-sombra-app"))
+        app = (os.environ["FLOW_APP_ID"], os.environ["FLOW_APP_SECRET"], os.environ.get("FLOW_APP_DEVICE", "simulador-cenarios-app"))
     transporte = TransporteHttp(base, bridge, app)
     if app is not None and not transporte.tem_app:
         print(f"AVISO: a conta do app e do user_id {transporte.user_app} e a do bridge, do {transporte.user_id}: "
@@ -361,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     sessao = Sessao(transporte, transporte.user_id, bridge[2], app[2] if app else None,
                     seq_inicial=int(time.time()), ts_app_inicial_ms=int(time.time() * 1000))
 
-    manifesto: list[dict] = []
+    concluidos: list[str] = []
     print(f"Rodando {len(todos)} cenario(s) em {base} (user_id={transporte.user_id})")
     for i, c in enumerate(todos):
         if c.precisa_app and not transporte.tem_app:
@@ -369,21 +370,15 @@ def main(argv: list[str] | None = None) -> int:
             continue
         print(f"\n[{c.nome}] {c.descricao}")
         transporte.iniciar_cenario()
-        inicio = time.time()
         executar(c, sessao)
-        manifesto.append({"nome": c.nome, "descricao": c.descricao, "inicio": inicio, "fim": time.time(),
-                          "user_id": transporte.user_id, "envios": len(sessao.status)})
+        concluidos.append(c.nome)
         if c.abre_episodio and i + 1 < len(todos):
             espera = const_analise.COOLDOWN_S + 2
             print(f"  aguardando {espera} s (cooldown do usuario)...")
             time.sleep(espera)
-    caminho = os.path.join(const_comum.DATA_DIR, const_analise.SOMBRA_MANIFESTO)
-    os.makedirs(const_comum.DATA_DIR, exist_ok=True)
-    with open(caminho, "w", encoding="utf-8") as f:
-        json.dump({"base": base, "gerado_em": time.time(), "cenarios": manifesto}, f, ensure_ascii=False, indent=2)
     erros = [s for s in sessao.status if s[2] != 200]
-    print(f"\nFim. {len(sessao.status)} envio(s), {len(erros)} com HTTP diferente de 200. Janelas em {caminho}.")
-    print("Confira a comparacao com:  python relatorio_sombra.py")
+    print(f"\nFim. {len(concluidos)} cenario(s), {len(sessao.status)} envio(s), {len(erros)} com HTTP diferente de 200.")
+    print("Confira as decisoes no banco: comandos_push, alertas, episodios e confirmacoes (usuario %s)." % transporte.user_id)
     return 1 if erros else 0
 
 

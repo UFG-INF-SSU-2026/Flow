@@ -1,5 +1,5 @@
 """
-S4 do split: a analise que AGE pelo banco, a entrega de push da borda por cursor e o adaptador com o sinalizador.
+S4 do split: a analise que AGE pelo banco, a entrega de push da borda por cursor e o pipeline da borda (via_banco).
 Banco falso (sem Docker), relogio explicito e ciclos SINCRONOS. A prova ponta a ponta (os cenarios do roadmap pelo
 banco, com as rotas reais) esta em tests/integration/test_acoes_banco_cenarios.py.
 """
@@ -12,7 +12,7 @@ import pytest
 
 from analise import const as const_analise
 from analise import laco, nucleo, regra_queda
-from borda import caminho_direto, entrega_push
+from borda import entrega_push, via_banco
 from borda import const as const_borda
 from comum import const as const_comum
 from comum import mensagens
@@ -348,65 +348,9 @@ class TestEntregaPush:
         assert len(app.enviados) == 1 and not t.is_alive()
 
 
-# ============================================================================ o adaptador e o sinalizador
-@pytest.fixture
-def modo_banco(monkeypatch):
-    monkeypatch.setattr(const_comum, "ACOES_PELO_BANCO", True)
-    monkeypatch.setattr(const_analise, "LACO_ATIVO", True)
-
-
-class TestAdaptadorComSinalizador:
-    @pytest.mark.parametrize("sinalizador, laco_ativo, esperado", [(False, True, False), (True, True, True),
-                                                                   (True, False, False), (False, False, False)])
-    def test_acoes_pelo_banco_exige_o_sinalizador_e_o_laco(self, monkeypatch, sinalizador, laco_ativo, esperado):
-        monkeypatch.setattr(const_comum, "ACOES_PELO_BANCO", sinalizador)
-        monkeypatch.setattr(const_analise, "LACO_ATIVO", laco_ativo)
-        assert caminho_direto.acoes_pelo_banco() is esperado
-
-    def test_padrao_e_o_caminho_direto(self):
-        assert const_comum.ACOES_PELO_BANCO is False and caminho_direto.acoes_pelo_banco() is False
-
-    def test_no_caminho_direto_nao_sobe_entrega(self, monkeypatch):
-        monkeypatch.setattr(const_comum, "ACOES_PELO_BANCO", False)
-        assert caminho_direto.iniciar_entrega() is None
-
-    def test_com_o_sinalizador_a_borda_nao_decide(self, modo_banco, banco):
-        for t, v, vmax in ((0, 1.0, 1.5), (1, 3.0, 25.0), (2, 0.3, 0.4), (3, 0.3, 0.4), (4, 0.3, 0.4), (5, 0.3, 0.4)):
-            linha = leitura_wokwi(t, 10 + t, v, vmax)
-            caminho_direto.analisar_leitura(1, "bridge-dev", "wokwi", linha["payload"], 3, linha["instante_ingestao"])
-        caminho_direto.analisar_resposta(1, "cel1", "app", resposta(6, "m")["payload"], 3, T0)
-        assert not nucleo.PADRAO.queda.estados and not nucleo.PADRAO.queda.episodios
-        assert all(not banco.tabelas[t] for t in ("comandos_push", "alertas", "confirmacoes", "episodios"))
-
-    def test_com_o_sinalizador_o_vigia_do_caminho_direto_nao_sobe(self, modo_banco):
-        assert caminho_direto.iniciar_vigia() is None
-
-    def test_com_o_sinalizador_o_laco_nasce_agindo(self, modo_banco, monkeypatch):
-        recebido = {}
-
-        class Falso:
-            def __init__(self, **kw):
-                recebido.update(kw)
-
-            def iniciar(self):
-                return threading.current_thread()
-
-        monkeypatch.setattr(caminho_direto, "_laco", None)
-        monkeypatch.setattr(caminho_direto.laco, "LacoAnalise", Falso)
-        assert caminho_direto.iniciar_laco() is threading.current_thread()
-        assert recebido == {"agir": True}
-
-    def test_com_o_sinalizador_a_sombra_e_ignorada(self, modo_banco, monkeypatch):
-        monkeypatch.setattr(const_analise, "SOMBRA_ATIVA", True)
-        assert caminho_direto._ativar_sombra() is None
-
-    def test_sinalizador_sem_laco_e_ignorado_com_aviso(self, monkeypatch, capsys):
-        monkeypatch.setattr(const_comum, "ACOES_PELO_BANCO", True)
-        monkeypatch.setattr(const_analise, "LACO_ATIVO", False)
-        assert caminho_direto.iniciar_laco() is None
-        assert "AVISO" in capsys.readouterr().out and caminho_direto.iniciar_entrega() is None
-
-    def test_com_o_sinalizador_sobe_a_entrega(self, modo_banco, monkeypatch):
+# ============================================================================ o pipeline da borda
+class TestViaBanco:
+    def test_sobe_a_entrega(self, monkeypatch):
         class Falsa:
             def iniciar(self):
                 return threading.current_thread()
@@ -414,15 +358,15 @@ class TestAdaptadorComSinalizador:
             def parar(self, timeout):
                 pass
 
-        monkeypatch.setattr(caminho_direto, "_entrega", None)
-        monkeypatch.setattr(caminho_direto.entrega_push, "EntregaPush", Falsa)
-        assert caminho_direto.iniciar_entrega() is threading.current_thread()
-        caminho_direto.parar_entrega(1.0)
+        monkeypatch.setattr(via_banco, "_entrega", None)
+        monkeypatch.setattr(via_banco.entrega_push, "EntregaPush", Falsa)
+        assert via_banco.iniciar_entrega() is threading.current_thread()
+        via_banco.parar(1.0)
 
-    def test_estado_do_dispositivo_vem_do_banco(self, modo_banco, banco):
-        assert caminho_direto.estado_do_dispositivo("bridge-dev") is None
+    def test_estado_do_dispositivo_vem_do_banco(self, banco):
+        assert via_banco.estado_do_dispositivo("bridge-dev") is None
         resumo = {"device_id": "bridge-dev", "user_id": 1, "estado_atual": "NORMAL", "ultima_decisao": None,
                   "alerta_ativo": False}
         banco.analise().gravar_estado_dispositivo({"user_id": 1, "device_id": "bridge-dev", "atualizado_em": T0,
                                                    "versao_regra": 3, "estado": resumo})
-        assert caminho_direto.estado_do_dispositivo("bridge-dev") == resumo
+        assert via_banco.estado_do_dispositivo("bridge-dev") == resumo

@@ -2,8 +2,8 @@
 Fronteiras entre os pacotes (roadmap do split, S2): conferidas pelo codigo-fonte, sem importar nada.
 
   comum/    nao importa borda nem analise (nem Flask)
-  analise/  nao importa borda nem Flask; so conversa com a borda pelo banco (ate a S4, pelo adaptador)
-  borda/    so `borda/caminho_direto.py` importa a analise: nenhuma outra peca da borda importa regras
+  analise/  nao importa borda nem Flask; so conversa com a borda pelo banco
+  borda/    nao importa a analise: so conversa com ela pelo banco
   flow_db/  nao importa borda nem analise
 
 A segunda metade confere o que o teste de const nao cobre: o nucleo nao tem I/O.
@@ -15,7 +15,6 @@ import os
 import pytest
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # SensorServer/
-ADAPTADOR = os.path.join("borda", "caminho_direto.py")
 
 
 def _arquivos(pacote: str) -> list[str]:
@@ -40,7 +39,7 @@ def _proibidos(pacote: str, proibidos: set[str], excecoes: tuple[str, ...] = ())
             if arq not in excecoes and _raizes_importadas(arq) & proibidos]
 
 
-FERRAMENTAS_NA_RAIZ = {"medir_latencia.py", "simular_queda.py", "simular_cenarios.py", "relatorio_sombra.py"}
+FERRAMENTAS_NA_RAIZ = {"medir_latencia.py", "simular_queda.py", "simular_cenarios.py"}
 
 
 def test_nenhum_modulo_antigo_ficou_na_raiz():
@@ -67,12 +66,8 @@ def test_flow_db_nao_importa_borda_nem_analise():
     assert not _proibidos("flow_db", {"borda", "analise"})
 
 
-def test_so_o_adaptador_da_borda_importa_a_analise():
-    assert not _proibidos("borda", {"analise"}, excecoes=(ADAPTADOR,))
-
-
-def test_o_adaptador_e_a_unica_ponte_e_ela_existe():
-    assert "analise" in _raizes_importadas(ADAPTADOR)
+def test_a_borda_nao_importa_a_analise():
+    assert not _proibidos("borda", {"analise"})
 
 
 def test_o_nucleo_nao_faz_io_nem_usa_threads():

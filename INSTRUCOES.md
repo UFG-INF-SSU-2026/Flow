@@ -277,45 +277,20 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 | Bridge fica "tentando reconectar" | simulação não iniciada, ou aba do Wokwi oculta |
 | Telemetria chega, mas o buzzer nunca toca | simulação pausada (aba oculta); sketch não recompilado depois da mudança; comando expirou antes de chegar (o servidor registra a ausência do ack em `confirmacoes_usuario_1.jsonl`) |
 | Erro de compilação em `tone()`/`noTone()` | core `esp32:esp32` abaixo da versão 3.x; atualize com `arduino-cli core upgrade esp32:esp32` |
-| App não toca o alerta | app em segundo plano ou tela bloqueada; o servidor registra `SEM_CANAL_ATIVO` |
+| App não toca o alerta | app em segundo plano ou tela bloqueada; a entrega fica registrada em `entregas_push` como `sem_conexao` |
 
-## Comparação em modo sombra (S3b do split)
+## Como as decisões chegam ao app e ao dispositivo
 
-Provisório: vale só até o cutover da S4. Compara o que o caminho direto decide (e executa) com o que o laço da análise
-decide pelo banco (só registra).
+A borda só aceita e grava (`leituras`, `respostas_dispositivo`); quem decide é a **análise**, que grava `comandos_push`,
+`alertas`, `confirmacoes`, `episodios` e `estado_dispositivo` na mesma transação do cursor. O vigia da análise grava os
+encerramentos `EXPIRADO`. Decisão sobre linha velha (mais que `IDADE_MAX_ACAO_S`) só reconstrói estado e não age. A borda
+(`borda/entrega_push.py`) lê `comandos_push` por cursor (`cursor_borda`), entrega por SSE ao app e ao wokwi e grava
+`entregas_push` com `comando_id` (resultado `enviado`, `sem_conexao`, `expirado`...). `/estado/<device_id>` lê o resumo
+gravado em `estado_dispositivo`, então reflete a última decisão da análise (não a leitura que acabou de chegar).
 
-1. Banco de pé e migrado; no `SensorServer/.env`, `FLOW_SOMBRA=1` (o laço precisa estar ligado, `FLOW_LACO_ANALISE=1`).
-2. Suba o servidor normalmente. Ele grava `dataUsers/sombra_decisoes.jsonl` (uma linha por decisão, dos dois lados).
-3. Em outro terminal, na pasta `SensorServer`, rode os cenários (leva alguns minutos por causa do cooldown):
+Sem a análise rodando, a borda continua aceitando dados, mas nada é decidido: `/health` passa a `degradado` (batimento).
 
-   ```bash
-   FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> FLOW_APP_ID=idoso1 FLOW_APP_SECRET=<senha> python simular_cenarios.py
-   ```
-
-   `FLOW_APP_*` é opcional (sem ele, `luz_inadequada` e `app_e_wokwi_juntos` são pulados); a conta do app deve ser do mesmo
-   usuário do bridge. `--lista` mostra os cenários e `--cenarios a,b` roda só alguns.
-4. Gere o relatório: `python relatorio_sombra.py` (grava `docs/split-sombra-relatorio.md`; sai com 0 se tudo estiver OK).
-   Arquive-o junto da linha de base da S0. Divergência vira correção ou decisão registrada antes da S4.
-5. Uso real: deixe o servidor rodando com `FLOW_SOMBRA=1` e rode `relatorio_sombra.py` sem manifesto
-   (apague `dataUsers/sombra_cenarios.json` ou use `--manifesto` com outro caminho; `--desde <epoca>` limita o período).
-
-## Ações pelo banco (S4 do split)
-
-Sinalizador `FLOW_ACOES_PELO_BANCO` (padrão `0`). Com `1` (e `FLOW_LACO_ANALISE=1`):
-
-- as rotas só aceitam e gravam (`leituras`, `respostas_dispositivo`); o caminho direto não decide, não cria o vigia e
-  `/estado/<device_id>` lê `estado_dispositivo`;
-- a **análise** decide e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e `estado_dispositivo` na mesma
-  transação do cursor; o vigia grava os encerramentos `EXPIRADO`; decisão sobre linha velha (> `IDADE_MAX_ACAO_S`) só
-  reconstrói estado e não age;
-- a **borda** (`borda/entrega_push.py`) lê `comandos_push` por cursor (`cursor_borda`), entrega por SSE a app e wokwi e grava
-  `entregas_push` com `comando_id` (resultado `enviado`, `sem_conexao`, `expirado`...).
-
-Voltar ao caminho direto: `FLOW_ACOES_PELO_BANCO=0` e reiniciar (o banco continua válido). Com o sinalizador ligado a sombra
-(`FLOW_SOMBRA`) é ignorada: não há caminho direto para comparar. Fora do escopo da S4 (vai para a S6): reconstruir episódios
-abertos ao reiniciar a análise; enquanto isso, reiniciar com episódio aguardando deixa-o sem o encerramento `EXPIRADO`.
-
-## Dois processos: borda e análise (S5 do split)
+## Dois processos: borda e análise
 
 Em vez de um processo só, o servidor roda em **dois**, ligados apenas pelo banco:
 
@@ -325,8 +300,8 @@ Em vez de um processo só, o servidor roda em **dois**, ligados apenas pelo banc
 | Análise | `python -m analise` | `.env.analise` | `flow_analise` | nenhuma |
 
 O `.env` de sempre passa a ser **só administrativo** (compose, `python -m flow_db provisionar|migrar`): nenhum dos dois serviços o lê.
-`python -m borda.server` continua sendo o processo único (S2 a S4, com o caminho direto ou `FLOW_ACOES_PELO_BANCO`), útil
-para voltar atrás durante a janela de estabilidade.
+`python -m borda.server` continua importável (Flask/WSGI, testes e desenvolvimento), mas é **só a borda, sem análise**: o
+ponto de entrada oficial é `python -m borda`. Não existe mais processo único que decida.
 
 **1. Arquivos de ambiente (uma vez).** O banco é criado do zero (não há migração dos `.json` antigos). No `.env`
 administrativo ficam `FLOW_DB_PASSWORD`, `FLOW_DB_BORDA_PASSWORD` e `FLOW_DB_ANALISE_PASSWORD`. Depois:
@@ -359,8 +334,12 @@ Contas continuam sendo da borda: `python -m borda.auth criar-conta` (o `contas.j
 cursor; a borda para de aceitar, para a entrega, fecha os streams SSE (os clientes reconectam), descarrega a fila de
 leituras e o buffer e fecha o pool. Reiniciar a análise não desconecta ninguém; reiniciar a borda não perde o estado da análise.
 
-**4. Janela de estabilidade e remoção do caminho direto.** O caminho direto **ainda existe** (decisão: removê-lo só depois de
-alguns dias de uso real sem incidentes com os dois processos). Quando o grupo der a janela por encerrada: apagar
-`borda/caminho_direto.py`, `analise/sombra.py`, `relatorio_sombra.py`, `simular_cenarios.py` (modo sombra), as constantes
-`ACOES_PELO_BANCO`, `LACO_ATIVO`, `SOMBRA_*` e `ISOLADA`, e fazer `borda/server.py` usar `borda/via_banco.py` direto; os testes que
-importam `caminho_direto` migram para o laço (`analise/laco.py`). Fica para a S7.
+**4. O que ficou para depois.** Não fazem parte do split e estão registrados em `docs/arquitetura.md` (seção 15.1): o serviço de notificação aos cuidadores, o HTTPS (seção 17 do roadmap) e a chave AES por dispositivo. A
+persistência (retenção, backup, remoção da tabela `telemetria` e dos arquivos de transição) é a parte 2 do banco (B2.x).
+
+**Observações de operação.**
+
+- Banco criado do zero: não há migração dos `.json` antigos.
+- `FLOW_DB_FAKE` e o banco falso são só para testes e desenvolvimento (nunca com `python -m borda`/`python -m analise`).
+- Se a análise ficar fora, as leituras se acumulam no banco e são processadas na volta (dentro de `IDADE_MAX_ACAO_S`,
+  o que for mais velho só reconstrói estado).

@@ -2,11 +2,12 @@
 Analise de queda e ciclo de confirmacao (Marco 3).
 
 Recebe leituras de aceleracao das duas fontes e decide se ha QUEDA PROVAVEL. Nao envia nada:
-devolve um PedidoConfirmacao (server.py despacha pelos canais). Nao importa regra_imobilidade nem canais.
+devolve um PedidoConfirmacao (o nucleo o transforma em comando de push; a borda o entrega pelos canais). Nao importa
+regra_imobilidade nem canais.
 
 Gatilhos:
   A (preferencial) IMPACTO_SEGUIDO_DE_IMOBILIDADE  -> avaliar()              (app e wokwi, fusao por usuario)
-  B                IMOBILIDADE_PROLONGADA          -> abrir_por_imobilidade() (wokwi; chamado por server.py)
+  B                IMOBILIDADE_PROLONGADA          -> abrir_por_imobilidade() (wokwi; chamado pelo nucleo)
 
 Um unico episodio aberto por user_id, com cooldown depois de encerrado.
 
@@ -16,10 +17,10 @@ quem chama sem `agora` (testes e chamadas avulsas); o nucleo (nucleo.py) nunca o
 
 ESTADO EXPLICITO. Todo o estado mora num `EstadoQueda`. As funcoes recebem `estado=` e, sem ele, usam o `PADRAO`
 do modulo (os nomes `_estados`, `_episodios`... abaixo sao apelidos DAS MESMAS tabelas do PADRAO: limpar uma limpa
-a outra). O nucleo pode, assim, trabalhar com um estado proprio (sombra, simulacao, teste) sem tocar no do servidor.
+a outra). O nucleo pode, assim, trabalhar com um estado proprio (o do laco da analise, simulacao, teste) sem tocar no PADRAO.
 
-REGISTROS. `registrar` grava a linha em arquivo e avisa o ouvinte (banco). Dentro de `coletar_registros()` ela so
-ANOTA o registro (sem I/O): e assim que o nucleo transforma o registro em decisao, e a borda o grava depois.
+REGISTROS. `registrar` grava a linha em arquivo. Dentro de `coletar_registros()` ela so ANOTA o registro (sem I/O): e
+assim que o nucleo transforma o registro em decisao, e o laco da analise o grava no banco (e no arquivo) depois.
 """
 import json
 import math
@@ -91,7 +92,7 @@ class _Mensagem:
 
 @dataclass
 class EstadoQueda:
-    """Todo o estado em memoria da regra de queda (uma instancia por 'mundo': servidor, sombra, simulacao, teste)."""
+    """Todo o estado em memoria da regra de queda (uma instancia por 'mundo': laco da analise, simulacao, teste)."""
     estados: dict[int, _EstadoUsuario] = field(default_factory=dict)            # maquina do gatilho A, por usuario
     ultimo_log_desatualizada: dict[tuple, float] = field(default_factory=dict)  # (user_id, fonte, versao) -> instante do ultimo log
     episodios: dict[int, Episodio] = field(default_factory=dict)                # episodio mais recente por usuario (aberto ou encerrado)
@@ -102,7 +103,7 @@ class EstadoQueda:
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
-PADRAO = EstadoQueda()   # o estado do servidor (caminho direto); o nucleo usa um proprio quando recebe um
+PADRAO = EstadoQueda()   # o estado padrao (chamadas avulsas e testes); o nucleo usa um proprio quando recebe um
 _estados = PADRAO.estados
 _ultimo_log_desatualizada = PADRAO.ultimo_log_desatualizada
 _episodios = PADRAO.episodios
@@ -399,11 +400,6 @@ def _podar_mensagens(est: EstadoQueda, agora: float) -> None:
 
 
 # ------------------------------- armazenamento -----------------------------
-# Ouvinte opcional de cada registro (server.py instala o que leva o registro ao banco). regra_queda continua sem
-# conhecer banco: so avisa "registrei isto". Uma falha do ouvinte nunca impede nem desfaz o registro em arquivo.
-OUVINTE_REGISTRO = None
-
-
 @dataclass(frozen=True)
 class Registro:
     """Um registro anotado dentro de `coletar_registros()`: o que `registrar` gravaria, sem I/O."""
@@ -418,7 +414,7 @@ _coletor: ContextVar[list | None] = ContextVar("regra_queda_coletor", default=No
 
 @contextmanager
 def coletar_registros():
-    """Dentro do bloco, `registrar` so ANOTA (sem arquivo e sem ouvinte) e a lista de `Registro` fica com quem pediu.
+    """Dentro do bloco, `registrar` so ANOTA (sem arquivo) e a lista de `Registro` fica com quem pediu.
     O coletor e por contexto de execucao (thread), entao requisicoes concorrentes nao se misturam."""
     anotados: list[Registro] = []
     token = _coletor.set(anotados)
@@ -430,7 +426,7 @@ def coletar_registros():
 
 def gravar_arquivo_confirmacao(user_id: int, linha: dict) -> None:
     """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (so enquanto const_comum.GRAVAR_ARQUIVOS). Separada de
-    `registrar` para a analise que age pelo banco (S4) gravar o arquivo DEPOIS do commit da transacao."""
+    `registrar` para a analise gravar o arquivo DEPOIS do commit da transacao (efeitos.aplicar_na_transacao)."""
     if not const_comum.GRAVAR_ARQUIVOS:
         return
     os.makedirs(const_comum.DATA_DIR, exist_ok=True)
@@ -439,9 +435,9 @@ def gravar_arquivo_confirmacao(user_id: int, linha: dict) -> None:
 
 
 def registrar(user_id: int, tipo: str, dados: dict, agora: float | None = None) -> None:
-    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (enquanto const_comum.GRAVAR_ARQUIVOS) e o aviso ao ouvinte
-    (banco). E tudo que o servidor faz com a resposta. O `timestamp` da linha e o instante `agora` da decisao.
-    Dentro de coletar_registros() so anota (ver acima)."""
+    """Uma linha em dataUsers/confirmacoes_usuario_<id>.jsonl (enquanto const_comum.GRAVAR_ARQUIVOS). O `timestamp` da
+    linha e o instante `agora` da decisao. Dentro de coletar_registros() so anota (ver acima); o banco e escrito pelo
+    laco da analise, nunca por aqui."""
     agora = _agora() if agora is None else agora
     coletor = _coletor.get()
     if coletor is not None:
@@ -449,9 +445,3 @@ def registrar(user_id: int, tipo: str, dados: dict, agora: float | None = None) 
         return
     linha = {"timestamp": datetime.fromtimestamp(agora, tz=timezone.utc).isoformat(), "tipo": tipo, **dados}
     gravar_arquivo_confirmacao(user_id, linha)
-    ouvinte = OUVINTE_REGISTRO     # chamado fora de qualquer lock: o ouvinte pode demorar (banco)
-    if ouvinte is not None:
-        try:
-            ouvinte(user_id, tipo, linha)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [registrar] falha no ouvinte (ignorada) tipo={tipo} user={user_id}: {type(e).__name__}: {str(e)[:200]}")

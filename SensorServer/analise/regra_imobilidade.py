@@ -68,7 +68,7 @@ class EstadoDispositivo:
 # (a ordem do dict e a do ultimo uso).
 @dataclass
 class EstadoImobilidade:
-    """A tabela de estados da regra (uma instancia por 'mundo': servidor, sombra, simulacao, teste)."""
+    """A tabela de estados da regra (uma instancia por 'mundo': laco da analise, simulacao, teste)."""
     estados: dict[tuple[int, str], EstadoDispositivo] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     contador: "itertools.count" = field(default_factory=lambda: itertools.count(1), repr=False)
@@ -220,9 +220,9 @@ def processar_evento(user_id: int, evento: dict, agora: float | None = None,
 
 
 def obter_estado(device_id: str, estado: EstadoImobilidade | None = None) -> dict | None:
-    """Procura o device_id em todos os usuarios. Exposto via GET /estado/<device_id> em server.py - e a evidencia
-    observavel de 'mudanca de estado',
-    em complemento ao log em dataUsers/usuario_<id>.jsonl."""
+    """Procura o device_id em todos os usuarios. O laco grava o resumo em `estado_dispositivo` e a borda o expoe em
+    GET /estado/<device_id> - e a evidencia observavel de 'mudanca de estado', em complemento ao log em
+    dataUsers/usuario_<id>.jsonl."""
     tab = _tabela(estado)
     with tab.lock:
         candidatos = [(uid, e) for (uid, dev), e in tab.estados.items() if dev == device_id]

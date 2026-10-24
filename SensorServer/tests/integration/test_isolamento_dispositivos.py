@@ -4,6 +4,8 @@ import pytest
 from borda import auth
 from analise import regra_imobilidade
 from comum import const as const_comum
+
+pytestmark = pytest.mark.usefixtures("pipeline")     # a analise roda em memoria apos cada POST
 @pytest.fixture
 def bridge2(contas):
     auth.criar_conta("bridge2", "dispositivo", [2], ["wokwi"], "senha-bridge2")
@@ -88,12 +90,18 @@ def test_mesmo_device_id_em_dois_usuarios_nao_compartilha_estado(cli, tokens, br
 
 
 def test_estado_do_device_devolve_o_usuario_atualizado_por_ultimo(cli, tokens, bridge2):
+    """DS3: /estado le o resumo gravado pela analise em `estado_dispositivo`, e o resumo so e regravado quando o ESTADO
+    muda (nao a cada leitura). Entre dois usuarios no mesmo device vale a linha atualizada por ultimo."""
     tok2 = cli.login("bridge2", "senha-bridge2", "wokwi", "bridge-dev")["access_token"]
     cli.post("/dados", _wokwi("bridge-dev", 7), tokens["dispositivo"])
     cli.post("/dados", _wokwi("bridge-dev", 3, user_id=2), tok2)
     estado = cli.get("/estado/bridge-dev", tokens["admin"]).get_json()
     assert (estado["user_id"], estado["ultimo_sequence"]) == (2, 3)
 
-    cli.post("/dados", _wokwi("bridge-dev", 8), tokens["dispositivo"])
+    # leitura nova do usuario 1, sem mudanca de estado: o resumo dele nao e regravado e a linha do usuario 2 segue a mais nova
+    r = cli.post("/dados", _wokwi("bridge-dev", 8, user_id=1), tokens["dispositivo"])
+    assert r.status_code == 200
     estado = cli.get("/estado/bridge-dev", tokens["admin"]).get_json()
-    assert (estado["user_id"], estado["ultimo_sequence"]) == (1, 8)
+    assert (estado["user_id"], estado["ultimo_sequence"]) == (2, 3)
+    # o estado das regras (em memoria na analise) ja viu a leitura 8 do usuario 1
+    assert regra_imobilidade._estados[(1, "bridge-dev")].ultimo_sequence == 8

@@ -5,10 +5,12 @@ Unico processo com porta de rede, com a chave AES, o segredo JWT e as contas. Le
 flow_borda; nao importa a analise (conferido por tests/unit/test_fronteiras.py e tests/unit/test_dois_processos.py).
 Quem decide queda, imobilidade e luz e o processo `python -m analise`; a borda grava as leituras, entrega o push que a
 analise gravar em `comandos_push` e responde as consultas. A ordem de subida entre os dois processos e indiferente.
+(`python -m borda.server`, o modo de desenvolvimento, sobe a mesma borda com o `.env` de sempre e sem o desligamento ordenado.)
 
 Desligamento ordenado (Ctrl+C, SIGTERM, Ctrl+Break no Windows): para de aceitar conexoes, para a entrega, fecha os
 streams SSE, descarrega a fila de leituras e o buffer e fecha as conexoes do pool (server.encerrar).
 """
+import os
 import signal
 import sys
 import threading
@@ -31,9 +33,12 @@ def _instalar_sinais(ao_receber) -> None:
 
 
 def main() -> int:
-    if const_comum.SERVICO != "borda" or not const_borda.ISOLADA:
-        print("erro: inicie a borda por 'python -m borda' (a partir de SensorServer/). "
-              "Para o processo unico use 'python -m borda.server'.", file=sys.stderr)
+    if const_comum.SERVICO != "borda":
+        print("erro: inicie a borda por 'python -m borda' (a partir de SensorServer/).", file=sys.stderr)
+        return CODIGO_ERRO
+    if os.environ.get("FLOW_DB_FAKE") == "1":
+        print("erro: FLOW_DB_FAKE=1 nao vale para 'python -m borda': o banco falso vive na memoria de um processo e a "
+              "analise e outro processo. Use o PostgreSQL (scripts/preparar).", file=sys.stderr)
         return CODIGO_ERRO
     try:
         isolamento.exigir_ambiente("borda")
@@ -61,7 +66,7 @@ def main() -> int:
         threading.Thread(target=srv.shutdown, name="flow-parada", daemon=True).start()
 
     _instalar_sinais(pedir_parada)
-    print(f"Borda iniciando na porta {const_borda.PORT} (processo isolado; a analise e outro processo).")
+    print(f"Borda iniciando na porta {const_borda.PORT} (a analise e outro processo: 'python -m analise').")
     print(f"Configuracao: {const_comum.DOTENV_ARQUIVO} "
           + ("carregado" if const_comum.DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente"))
     try:

@@ -14,7 +14,6 @@ Estado do pipeline (`pipeline.estado` no corpo do /health):
   ok              batimento dentro do limiar e atraso dentro do limiar
   degradado       batimento velho ("analise_parada") e/ou atraso acima do limiar ("atraso_leituras")
   desconhecido    sem como ler a saude ("banco_indisponivel"): a borda nao sabe, e nao diz que esta tudo bem
-  nao_monitorado  a analise nao decide pelo banco neste processo (processo unico com o caminho direto): nada a medir
 
 CONTRATO. O `/health` continua respondendo 200 com `{"status": "ok"}` (a borda esta de pe), e SO ACRESCENTA as chaves
 `pipeline` e `borda`: quem le apenas `status` nao percebe a mudanca. O corpo e publico (a rota ja era) e so tem contagens e
@@ -37,7 +36,6 @@ from flow_db import repositorios
 OK = "ok"
 DEGRADADO = "degradado"
 DESCONHECIDO = "desconhecido"
-NAO_MONITORADO = "nao_monitorado"
 
 MOTIVO_ANALISE_PARADA = "analise_parada"
 MOTIVO_SEM_BATIMENTO = "sem_batimento"
@@ -77,26 +75,18 @@ def classificar(saude: dict | None) -> dict:
     return base
 
 
-def nao_monitorado() -> dict:
-    return {"estado": NAO_MONITORADO, "motivos": [], "atraso_leituras": None, "idade_batimento_analise_s": None,
-            "idade_ultimo_comando_entregue_s": None, "limiares": limiares()}
-
-
 class MonitorSaude:
     """Consulta a saude do pipeline, guarda o ultimo resultado e escreve os alarmes.
 
     `obter_repo`   devolve o RepoBorda (None = sem banco: "desconhecido")
-    `monitorada`   funcao sem argumento: True se a analise decide pelo banco (a borda isolada, ou o processo unico com as
-                   acoes pelo banco). False = "nao_monitorado", sem consultar nada
     `estatisticas` funcao sem argumento -> dict com os contadores LOCAIS da borda (fila de leituras e descartes), o bloco
                    `borda` do /health. O aumento dos descartes entre duas consultas vira alarme
     `relogio`      segundos monotonicos (injetavel nos testes)
     """
 
-    def __init__(self, obter_repo: Callable = repositorios.borda, monitorada: Callable[[], bool] = lambda: True,
+    def __init__(self, obter_repo: Callable = repositorios.borda,
                  estatisticas: Callable[[], dict] = dict, relogio: Callable[[], float] = time.monotonic):
         self._obter_repo = obter_repo
-        self._monitorada = monitorada
         self._estatisticas = estatisticas
         self._relogio = relogio
         self._lock = threading.Lock()
@@ -111,8 +101,6 @@ class MonitorSaude:
 
     # ---- consulta ----
     def _consultar(self) -> dict:
-        if not self._monitorada():
-            return nao_monitorado()
         repo = self._obter_repo()
         if repo is None:
             return classificar(None)

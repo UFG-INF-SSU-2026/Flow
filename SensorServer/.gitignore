@@ -7,6 +7,11 @@
 !schemas/*.json
 !tests/fixtures/*.json
 
-# ambiente por servico (S5): so os modelos .example vao para o Git
+# ambiente por servico: so os modelos .example vao para o Git
 .env.borda
 .env.analise
+
+# dados gerados em execucao (resquicios do modo de arquivos; nada disso vai para o Git)
+dataUsers/
+__pycache__/
+.pytest_cache/

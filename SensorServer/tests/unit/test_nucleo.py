@@ -2,7 +2,7 @@
 nucleo: "processar este lote com este relogio e este estado" (S2a do roadmap do split).
 
 Sem Flask, sem thread, sem banco e sem sleep: cada leitura traz o seu instante (`em(t)`), e o nucleo e quem
-decide. Os efeitos (arquivo, banco, push) so acontecem quando o teste chama `.aplicar()` de uma decisao.
+decide. Os efeitos (arquivo, banco, push) so acontecem no laco da analise (efeitos.aplicar_na_transacao).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -288,7 +288,7 @@ class TestEstadoELote:
         assert nucleo.PADRAO.imobilidade.estados is regra_imobilidade._estados
 
     def test_mesma_sequencia_em_estados_diferentes_da_as_mesmas_decisoes(self):
-        """A base da comparacao em sombra (S3): o resultado depende so da entrada e dos instantes."""
+        """O resultado depende so da entrada e dos instantes."""
         saidas = [[resumo(d) for d in queda_wokwi(est)] for est in (nucleo.novo_estado(), nucleo.novo_estado(), nucleo.PADRAO)]
         assert saidas[0] == saidas[1] == saidas[2]
 
@@ -308,11 +308,9 @@ class TestEstadoELote:
         with pytest.raises(ValueError):
             nucleo.vigiar(nucleo.novo_estado(), datetime(2026, 10, 14, 12, 0, 0))
 
-    def test_o_nucleo_nao_faz_io_e_aplicar_grava_com_o_instante_da_decisao(self, ler_confirmacoes, banco):
+    def test_o_nucleo_nao_faz_io_e_a_confirmacao_leva_o_instante_da_decisao(self, ler_confirmacoes, banco):
         saidas = queda_wokwi(nucleo.novo_estado())
-        assert ler_confirmacoes(1) == [] and banco.tabelas["confirmacoes"] == []        # nada gravado ainda
+        assert ler_confirmacoes(1) == [] and banco.tabelas["confirmacoes"] == []        # nada gravado
         (aberto,) = saidas[-1].confirmacoes
-        aberto.aplicar()
-        (linha,) = ler_confirmacoes(1)
-        assert linha["tipo"] == "episodio.aberto" and linha["timestamp"] == em(4).isoformat()
-        assert [c["tipo"] for c in banco.tabelas["confirmacoes"]] == ["episodio.aberto"]
+        assert aberto.tipo == "episodio.aberto" and aberto.instante == em(4)
+        assert ler_confirmacoes(1) == [] and banco.tabelas["confirmacoes"] == []

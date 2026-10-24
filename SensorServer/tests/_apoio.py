@@ -11,6 +11,7 @@ import requests
 
 from borda.crypto_utils import decrypt_payload, encrypt_payload
 from comum import const as const_comum
+ROTAS_QUE_ALIMENTAM_A_ANALISE = ("/dados", "/eventos")
 SEGREDO = "t" * 48   # FLOW_JWT_SECRET dos testes (>= 32 bytes)
 
 
@@ -69,9 +70,13 @@ class ClienteFlask(Cliente):
 
     def __init__(self, flask_client):
         self.c = flask_client
+        self.apos_postar = None     # fixture `pipeline`: roda a analise e a entrega depois de cada POST de dados/eventos
 
     def _enviar(self, metodo, rota, corpo, headers):
-        return self.c.open(rota, method=metodo, json=corpo, headers=headers)
+        resp = self.c.open(rota, method=metodo, json=corpo, headers=headers)
+        if metodo == "POST" and rota in ROTAS_QUE_ALIMENTAM_A_ANALISE and self.apos_postar is not None:
+            self.apos_postar()
+        return resp
 
     def _json(self, resp):
         return resp.get_json()
@@ -82,9 +87,13 @@ class ClienteReal(Cliente):
 
     def __init__(self, base: str):
         self.base = base
+        self.apos_postar = None     # idem ClienteFlask: roda depois de a resposta HTTP voltar
 
     def _enviar(self, metodo, rota, corpo, headers):
-        return requests.request(metodo, self.base + rota, json=corpo, headers=headers, timeout=10)
+        resp = requests.request(metodo, self.base + rota, json=corpo, headers=headers, timeout=10)
+        if metodo == "POST" and rota in ROTAS_QUE_ALIMENTAM_A_ANALISE and self.apos_postar is not None:
+            self.apos_postar()
+        return resp
 
     def _json(self, resp):
         return resp.json()

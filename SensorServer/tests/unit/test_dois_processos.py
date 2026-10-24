@@ -1,4 +1,4 @@
-"""S5 (dois processos): ambiente por servico, trava de isolamento, borda isolada sem a analise, desligamento ordenado."""
+"""S5 (dois processos): ambiente por servico, trava de isolamento, borda sem a analise, desligamento ordenado."""
 import ast
 import glob
 import os
@@ -9,7 +9,6 @@ import pytest
 
 from _apoio import SEGREDO
 from borda import server, via_banco
-from borda import const as const_borda
 from borda.sse_hub import HUB
 from comum import isolamento
 from flow_db import repositorios
@@ -114,33 +113,22 @@ def test_a_analise_nao_importa_nada_de_rede(arquivo):
     assert not raizes & REDE, f"{os.path.basename(arquivo)} importa {sorted(raizes & REDE)}"
 
 
-def test_a_borda_isolada_nunca_carrega_a_analise(tmp_path):
-    """Importa o servidor como borda isolada, usa o pipeline e confere que nenhum modulo `analise*` foi carregado."""
+def test_a_borda_nunca_carrega_a_analise(tmp_path):
+    """Importa o servidor da borda e confere que nenhum modulo `analise*` foi carregado."""
     pytest.importorskip("flask")
-    sonda = ("import sys; from borda import server; p = server._pipeline(); "
-             "print(p.__name__, sorted(m for m in sys.modules if m == 'analise' or m.startswith('analise.')))")
-    r = _rodar(["-c", sonda], tmp_path, FLOW_SEM_THREADS="1", FLOW_BORDA_ISOLADA="1", FLOW_JWT_SECRET=SEGREDO)
+    sonda = ("import sys; from borda import server, via_banco; "
+             "print(sorted(m for m in sys.modules if m == 'analise' or m.startswith('analise.')))")
+    r = _rodar(["-c", sonda], tmp_path, FLOW_SEM_THREADS="1", FLOW_DB_FAKE="1", FLOW_JWT_SECRET=SEGREDO)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "borda.via_banco []"
+    assert r.stdout.strip() == "[]"
 
 
-# ------------------------------- pipeline da borda isolada -------------------------
+# ------------------------------- pipeline da borda -------------------------
 class TestViaBanco:
-    def test_nao_decide_nada(self, banco):
-        assert via_banco.analisar_leitura(1, "d", "app", {}, 3, None) is None
-        assert via_banco.analisar_resposta(1, "d", "app", {}, 3, None) is None
-
     def test_estado_vem_do_banco(self, banco):
         assert via_banco.estado_do_dispositivo("bridge-dev") is None
 
-    def test_o_servidor_escolhe_o_pipeline_pela_constante(self, monkeypatch):
-        monkeypatch.setattr(const_borda, "ISOLADA", True)
-        assert server._pipeline() is via_banco
-        monkeypatch.setattr(const_borda, "ISOLADA", False)
-        assert server._pipeline().__name__ == "borda.caminho_direto"
-
-    def test_as_rotas_nao_decidem_na_borda_isolada(self, monkeypatch, cli, tokens, banco):
-        monkeypatch.setattr(const_borda, "ISOLADA", True)
+    def test_as_rotas_nao_decidem_na_borda(self, cli, tokens, banco):
         corpo = {"schemaVersion": 3, "source": "wokwi", "user_id": 1, "eventType": "imobilidade.leitura",
                  "deviceId": "bridge-dev", "entityId": "x", "eventTimeMs": 1000, "sequence": 1, "value": 0.3,
                  "valueMax": 0.4, "unit": "m/s2", "state": "NORMAL"}

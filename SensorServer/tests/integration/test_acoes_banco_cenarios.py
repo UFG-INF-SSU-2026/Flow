@@ -1,19 +1,18 @@
 """
-S4: os cenarios do roadmap (simular_cenarios.py) com as ACOES PELO BANCO, sem Docker e sem rede.
+Os cenarios do roadmap (simular_cenarios.py) pela borda + analise, sem Docker e sem rede.
 
-Servidor do teste (Flask test_client + banco falso) com FLOW_ACOES_PELO_BANCO ligado: as rotas so aceitam e gravam
+Borda do teste (Flask test_client + banco falso): as rotas so aceitam e gravam
 (`leituras`, `respostas_dispositivo`); quem decide e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e
 `estado_dispositivo` e o laco da analise (ciclos sincronos, relogio virtual); quem entrega e a `EntregaPush` da borda, que
-le `comandos_push` por cursor. O caminho direto fica parado (o estado das regras dele nao se mexe).
+le `comandos_push` por cursor.
 """
 import pytest
 
 import simular_cenarios as sc
-from _cenarios_sombra import TransporteInterno
+from _transporte import TransporteInterno
 from analise import const as const_analise
-from analise import laco, nucleo
+from analise import laco
 from borda import entrega_push
-from comum import const as const_comum
 from comum import mensagens
 
 NOMES = [c.nome for c in sc.cenarios()]
@@ -32,8 +31,7 @@ class CanalCapturador:
 
 @pytest.fixture
 def mundo(relogio, banco, cli, tokens, monkeypatch):
-    monkeypatch.setattr(const_comum, "ACOES_PELO_BANCO", True)
-    monkeypatch.setattr(const_analise, "LACO_ATIVO", True)
+    monkeypatch.setattr(const_analise, "ATRASO_VIGIA_S", 0)
     lc = laco.LacoAnalise(obter_repo=lambda: banco.analise(), relogio=relogio.agora_utc, ao_decidir=lambda *_: None,
                           agir=True)
     app, wokwi = CanalCapturador("app", relogio), CanalCapturador("wokwi", relogio)
@@ -110,13 +108,11 @@ CONFERE = {"descartes_wokwi": _descartes, "luz_inadequada": _luz, "queda_estou_b
 
 
 @pytest.mark.parametrize("nome", NOMES)
-def test_o_cenario_funciona_com_as_acoes_pelo_banco(nome, mundo, banco):
+def test_o_cenario_funciona_pelo_banco(nome, mundo, banco):
     rodar, app, wokwi = mundo
     rodar(nome)
 
     CONFERE[nome](banco)
-    # O caminho direto ficou parado: o estado das regras dele nao viu nada.
-    assert not nucleo.PADRAO.queda.estados and not nucleo.PADRAO.queda.episodios
     # Todo comando do banco foi entregue aos DOIS canais e cada entrega tem a sua linha (com comando_id).
     n = len(banco.tabelas["comandos_push"])
     assert len(app.recebidos) == len(wokwi.recebidos) == n

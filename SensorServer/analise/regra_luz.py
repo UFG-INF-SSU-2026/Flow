@@ -47,7 +47,7 @@ class EstadoDispositivo:
 # (a ordem do dict e a do ultimo uso).
 @dataclass
 class EstadoLuz:
-    """A tabela de estados da regra (uma instancia por 'mundo': servidor, sombra, simulacao, teste)."""
+    """A tabela de estados da regra (uma instancia por 'mundo': laco da analise, simulacao, teste)."""
     estados: dict[tuple[int, str], EstadoDispositivo] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 

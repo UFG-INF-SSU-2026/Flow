@@ -325,14 +325,14 @@ Corpo: `{"status": "erro", "codigo": "<texto curto>"}`. Falhas de conteúdo de e
 
 ## 10. Registro de confirmações (saída do servidor)
 
-`dataUsers/confirmacoes_usuario_<user_id>.jsonl` · uma linha JSON por ocorrência. É saída do servidor, não um contrato de produtor, e **não tem `schemaVersion`**.
+`dataUsers/confirmacoes_usuario_<user_id>.jsonl` (arquivo de transição, gravado pela análise; a fonte é a tabela `confirmacoes`) · uma linha JSON por ocorrência. É saída do servidor, não um contrato de produtor, e **não tem `schemaVersion`**.
 
 Campos comuns: `timestamp` (ISO 8601 UTC) e `tipo`: `episodio.aberto`, `push.entrega`, `push.ack`, `confirmacao.resposta` ou `episodio.encerrado`. Toda linha traz `episodeId`.
 
 | `tipo` | Campos próprios |
 | --- | --- |
 | `episodio.aberto` | `motivo` (`IMPACTO_SEGUIDO_DE_IMOBILIDADE` ou `IMOBILIDADE_PROLONGADA`). Só no gatilho A: `fonte_do_disparo` (fonte da leitura que fechou a condição), `versao_referencia`, `fontes_usadas` (lista de `{fonte, device_id, versao, degradada}`) e `fontes_desatualizadas` (lista de `{fonte, device_id, versao}`, vazia se não houve) |
-| `push.entrega` | `messageId`, `messageType`, `canal`, `resultado`: `ENTREGUE_AO_CANAL`, `SEM_CANAL_ATIVO`, `TIPO_NAO_SUPORTADO` ou `ERRO_NO_CANAL` (o canal levantou exceção; os demais canais seguem) |
+| `push.entrega` | **Não é mais gravada** (a entrega por canal é a tabela `entregas_push`, da borda); o tipo continua aceito pelo contrato só para ler arquivos antigos. `messageId`, `messageType`, `canal`, `resultado`: `ENTREGUE_AO_CANAL`, `SEM_CANAL_ATIVO`, `TIPO_NAO_SUPORTADO` ou `ERRO_NO_CANAL` (o canal levantou exceção; os demais canais seguem) |
 | `push.ack`, `confirmacao.resposta` | `eventType`, `state`, `messageId`, `device_id`, `source`. `episodeId` é o da `messageId`; `tardia: true` se o episódio já estava encerrado; `mensagem_desconhecida: true` (com `episodeId: null`) se a `messageId` é desconhecida ou de outro usuário |
 | `episodio.encerrado` | `resultado`: `CONFIRMADO` ou `EXPIRADO` |
 

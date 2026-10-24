@@ -6,17 +6,16 @@ borda grava em `leituras` / `respostas_dispositivo`), e o `EstadoRegras` de quem
 Sai: `Decisoes` (dados puros): comandos de push (cada um com a mudanca de episodio que deve ser gravada junto),
 alertas, registros de confirmacao, resumos de estado e descartes.
 
-O que o nucleo NAO faz (e por que ele serve ao servidor de hoje, a sombra da S3, a analise da S4 e as simulacoes):
+O que o nucleo NAO faz (e por que ele serve ao laco da analise, aos testes e as simulacoes):
   - nao le o relogio: o instante vem no argumento. O vigia (`vigiar`) tambem recebe o relogio de quem o chama,
     porque so ele depende do tempo que passa e nao do tempo dos dados;
-  - nao tem thread, nao toca arquivo nem banco, nao envia nada. Quem grava e `analise/efeitos.py` e quem entrega
-    e o ADAPTADOR (hoje, borda/caminho_direto.py; na S4, o laco da analise e a entrega de push da borda);
+  - nao tem thread, nao toca arquivo nem banco, nao envia nada. Quem grava e `analise/efeitos.py` (chamado pelo laco,
+    `analise/laco.py`) e quem entrega o push e a borda, a partir de `comandos_push`;
   - nao guarda estado global: o estado e o `EstadoRegras` recebido. `PADRAO` aponta para as tabelas dos modulos
-    de regra (o estado do servidor); `novo_estado()` da um estado limpo e independente.
+    de regra (usado por chamadas avulsas e testes); `novo_estado()` da um estado limpo e independente (o do laco).
 
 Ordem das decisoes: para o mesmo instante, quem aplica deve aplicar `confirmacoes`, depois `alertas`/`estados`, depois
-`comandos` (cada um grava episodio + comando juntos e entao entrega). E a mesma ordem em que os efeitos aconteciam
-antes da extracao.
+`comandos` (cada um grava episodio + comando juntos). E a ordem de `efeitos.aplicar_na_transacao`.
 
 Validacao: a estrutura ja foi conferida pela borda para aceitar o dado, mas a analise precisa tratar do mesmo jeito
 o que ja esta no banco (leitura estruturalmente invalida e gravada e depois descartada, como hoje). Por isso o
@@ -153,10 +152,6 @@ class Confirmacao:
     dados: dict
     instante: datetime
 
-    def aplicar(self) -> None:
-        """Grava como `regra_queda.registrar` sempre gravou (arquivo + ouvinte do banco), com o instante da decisao."""
-        regra_queda.registrar(self.user_id, self.tipo, self.dados, self.instante.timestamp())
-
 
 @dataclass(frozen=True)
 class ResumoEstado:
@@ -222,12 +217,12 @@ class EstadoRegras:
 
 
 def novo_estado() -> EstadoRegras:
-    """Estado limpo e independente (sombra, simulacao, teste)."""
+    """Estado limpo e independente (o do laco da analise, simulacoes e testes)."""
     return EstadoRegras()
 
 
-# O estado do servidor de hoje: as tabelas dos proprios modulos de regra (quem chama os modulos direto, como os
-# testes legados, enxerga as mesmas tabelas).
+# O estado PADRAO: as tabelas dos proprios modulos de regra (quem chama os modulos direto, como as chamadas avulsas e os
+# testes, enxerga as mesmas tabelas). O laco da analise usa um estado proprio (`novo_estado()`).
 PADRAO = EstadoRegras(regra_queda.PADRAO, regra_imobilidade.PADRAO, regra_luz.PADRAO)
 
 

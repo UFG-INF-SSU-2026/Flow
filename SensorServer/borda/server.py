@@ -36,10 +36,8 @@ por requisicao. Em vez disso:
        Se uma das fontes nao mandou nada naquela janela de 1s, a chave dela
        fica como null (nao repete o ultimo valor conhecido).
 
-Alem disso, o fluxo priorizado (LeituraAmbiente -> regra de luz
-inadequada -> alerta simulado para o cuidador) continua funcionando
-normalmente para dados vindos do app, de forma independente do buffer acima
-(processado assim que o payload chega, sem esperar o flush de 1s).
+Alem disso, cada leitura aceita vira uma linha de `leituras` (descarga em lote, a cada 250 ms), independente do buffer
+acima: e dela que a analise (outro processo) decide luz inadequada, imobilidade e queda, sem esperar o flush de 1s.
 
 Autenticacao e autorizacao: nenhuma rota de dados e aberta. O cliente faz login em POST /auth/login
 (identificador, segredo, fonte e device_id, cifrados com a mesma chave) e recebe, tambem cifrados, um
@@ -48,30 +46,32 @@ novo. Todas as demais rotas exigem "Authorization: Bearer <access_token>". Em ca
 checa a permissao do papel da conta (estagio 1, antes de decifrar o corpo) e, nas rotas com corpo, que o
 user_id e a source declarados sao os do token (estagio 2). O que nao esta na politica e negado.
 
-Caminho de volta (servidor -> dispositivo), tambem do Marco 3:
+Caminho de volta (servidor -> dispositivo), tambem do Marco 3. A borda NAO decide: quem decide e a analise
+(`python -m analise`, outro processo, sem porta de rede), e o banco e o unico elo entre as duas:
 
-    1. Cada leitura aceita vira uma `nucleo.Leitura`, com o instante da ingestao, e o nucleo das regras (analise/nucleo.py:
-       regra de luz, imobilidade e queda) a transforma em DECISOES, sem relogio, sem I/O e sem threads. Ao concluir
-       QUEDA PROVAVEL (impacto seguido de imobilidade, ou imobilidade prolongada), uma das decisoes e um Comando
-       de push, com a mensagem (comum/mensagens.py) ja montada.
-    2. borda/caminho_direto.py e o ADAPTADOR do caminho direto (o unico ponto em que a borda chama a analise):
-       analise/efeitos.py aplica as decisoes (arquivos, banco) e o adaptador despacha cada mensagem a
-       TODOS os canais: GET /push/app (SSE para o app) e GET /push/wokwi (SSE para o bridge). Cada mensagem vai
-       cifrada com a mesma chave e passa pelo hub de conexoes (sse_hub.py), que guarda as mensagens ainda validas
-       para quem reconectar.
-    3. O dispositivo responde com POST /eventos: "push.ack" (ativou ou rejeitou o push) e
-       "confirmacao.resposta" (ESTOU_BEM ou SEM_RESPOSTA). O servidor valida o evento, associa a
-       messageId ao episodio e, se for ESTOU_BEM de um episodio aberto, encerra o episodio.
-    4. Uma thread vigia encerra por expiracao os episodios que ninguem respondeu. Todo encerramento
-       (resposta ou expiracao) vira uma mensagem "queda.confirmacao_encerrada" enviada pelos canais.
+    1. Cada leitura aceita vai para uma fila em memoria e, em lotes, para a tabela `leituras` (com o instante da
+       ingestao). A analise le `leituras` por cursor e o nucleo das regras (analise/nucleo.py: luz, imobilidade e queda)
+       transforma cada leitura em DECISOES. Ao concluir QUEDA PROVAVEL (impacto seguido de imobilidade, ou imobilidade
+       prolongada), uma das decisoes e um comando de push (comum/mensagens.py), gravado em `comandos_push`.
+    2. A borda le `comandos_push` por cursor (borda/entrega_push.py) e entrega cada mensagem a TODOS os canais:
+       GET /push/app (SSE para o app) e GET /push/wokwi (SSE para o bridge). Cada mensagem vai cifrada com a mesma chave e
+       passa pelo hub de conexoes (sse_hub.py), que guarda as mensagens ainda validas para quem reconectar. O resultado de
+       cada entrega vai para `entregas_push`.
+    3. O dispositivo responde com POST /eventos: "push.ack" (ativou ou rejeitou o push) e "confirmacao.resposta"
+       (ESTOU_BEM ou SEM_RESPOSTA). A borda valida o evento e o grava em `respostas_dispositivo`, com a identidade vinda do
+       TOKEN (nunca do corpo). Quem associa a messageId ao episodio e, se for ESTOU_BEM de um episodio aberto, o encerra e
+       a analise (DS1).
+    4. O vigia da analise encerra por expiracao os episodios que ninguem respondeu. Todo encerramento (resposta ou
+       expiracao) vira um comando "queda.confirmacao_encerrada", entregue pelos canais como os demais.
+    5. GET /estado/<device_id> le o resumo que a analise grava em `estado_dispositivo` (DS3) e GET /health acusa quando a
+       analise para de decidir (batimento velho ou atraso, borda/saude.py).
 
-Como rodar:
-    pip install -r requirements.txt
-    FLOW_JWT_SECRET=<segredo> python -m borda.server      (a partir de SensorServer/)
-    (sem FLOW_JWT_SECRET o servidor nao sobe; contas se criam com "python -m borda.auth criar-conta")
-    DOIS PROCESSOS (S5): "python -m borda" sobe a borda ISOLADA (le .env.borda, sem a analise) e "python -m analise" sobe
-    a analise (ver borda/servico.py e analise/servico.py). "python -m borda.server" continua sendo o processo unico.
-    Tambem vale "flask --app borda.server run" ou WSGI: o segredo e as threads de fundo sao tratados no import
+Como rodar (a partir de SensorServer/; scripts/ faz tudo na ordem certa):
+    python -m borda      sobe a borda (le .env.borda; contas se criam com "python -m borda.auth criar-conta")
+    python -m analise    sobe a analise (le .env.analise)
+    "python -m borda.server" (ou "flask --app borda.server run", ou WSGI) sobe a MESMA borda sem desligamento ordenado, lendo o
+    .env de sempre: serve ao desenvolvimento. Sem a analise rodando ninguem decide queda, imobilidade nem luz.
+    Sem FLOW_JWT_SECRET o servidor nao sobe. O segredo, o banco e as threads de fundo sao tratados no import
     (FLOW_SEM_THREADS=1 desliga as threads, para os testes).
 """
 
@@ -89,23 +89,13 @@ from borda import const as const_borda
 from borda import saude
 from borda import tempo
 from borda import validacao
+from borda import via_banco
 from comum import const as const_comum
 from flow_db import repositorios
 from borda.authz import exige, exigir_dispositivo, exigir_escopo, ForaDeEscopo, negar
 from borda.crypto_utils import decrypt_payload, encrypt_payload, DecryptionError
 from borda.sse_hub import HUB
 
-
-
-def _pipeline():
-    """O pipeline da borda (S5). Borda ISOLADA (`python -m borda`): `borda/via_banco.py`, sem nenhum import de `analise`.
-    Processo unico: `borda/caminho_direto.py`, o UNICO ponto em que a borda chama a analise (importado so aqui, na hora
-    do uso, para a borda isolada nunca carregar a analise). Os dois tem a mesma interface."""
-    if const_borda.ISOLADA:
-        from borda import via_banco
-        return via_banco
-    from borda import caminho_direto
-    return caminho_direto
 
 
 app = Flask(__name__)
@@ -298,8 +288,7 @@ def _monitor_saude() -> "saude.MonitorSaude":
     """O monitor de saude do pipeline (S6), criado na primeira necessidade (a rota /health ou a subida das threads)."""
     global _monitor
     if _monitor is None:
-        _monitor = saude.MonitorSaude(monitorada=lambda: _pipeline().analise_monitoravel(),
-                                      estatisticas=_estatisticas_borda)
+        _monitor = saude.MonitorSaude(estatisticas=_estatisticas_borda)
     return _monitor
 
 
@@ -407,12 +396,11 @@ def receber_evento():
         print(f"  [eventos] descartado (invalido): {e}")
         return jsonify({"status": "ok", "descartado": True}), 200   # conteudo invalido: 200, como em /dados
     # Resposta crua do dispositivo -> banco (borda). Identidade SEMPRE do token, nunca do corpo.
-    agora = tempo.agora_utc()   # instante da ingestao: o mesmo gravado em respostas_dispositivo e usado pelo nucleo
+    agora = tempo.agora_utc()   # instante da ingestao (respostas_dispositivo.instante_ingestao): a analise decide por ele
     repositorios.tentar_borda("resposta", lambda b: b.gravar_resposta({
         "instante_ingestao": agora, "user_id": user_id, "device_id": g.principal.device_id,
         "fonte": g.principal.fonte, "tipo": ev["eventType"], "message_id": ev.get("messageId"),
         "schema_version": versao, "payload": ev}))
-    _pipeline().analisar_resposta(user_id, g.principal.device_id, g.principal.fonte, ev, versao, agora)
     return jsonify({"status": "ok"}), 200
 
 
@@ -447,8 +435,8 @@ def receber_dados():
     # nivel superior do registro gravado: user_id/timestamp)
     dados_fonte = {k: v for k, v in payload.items() if k not in ("source", "user_id")}
 
-    # versao verificada acompanha o payload (uso da fusao por versao). Feito DEPOIS de montar
-    # dados_fonte, para nao alterar o registro gravado no jsonl.
+    # versao verificada acompanha o payload (a validacao do contrato a enxerga). Feito DEPOIS de montar
+    # dados_fonte, para nao alterar o registro gravado no jsonl nem a leitura gravada em `leituras`.
     payload["schemaVersion"] = versao
 
     if source == "app":   # contrato tolerante: so avisa (sem o conteudo); a telemetria segue como sempre
@@ -462,13 +450,12 @@ def receber_dados():
 
     # 3. Guarda no buffer de agregacao (vira 1 linha no jsonl do usuario no
     #    proximo flush de 1s, junto com a outra fonte, se houver)
-    agora = tempo.agora_utc()   # o UNICO relogio lido na requisicao: instante da ingestao (leituras.instante_ingestao)
+    agora = tempo.agora_utc()   # o UNICO relogio lido na requisicao: instante da ingestao (leituras.instante_ingestao), que a analise usa
     _registrar_no_buffer(user_id, source, dados_fonte)
     _enfileirar_leitura(user_id, source, device_id, dados_fonte, versao, g.principal.conta_id, agora)
 
-    # 4. Analise (luz do app, imobilidade do wokwi, queda), pelo pipeline da borda (caminho direto ou, na borda isolada, nada: decide o outro processo). A telemetria ja foi
-    #    aceita e enfileirada: falha ao decidir ou aplicar fica no log (la) e nao vira 500.
-    _pipeline().analisar_leitura(user_id, device_id, source, dados_fonte, versao, agora)
+    # 4. Fim da borda: a leitura segue para a tabela `leituras` (descarga em lote) e quem decide luz, imobilidade e queda e a
+    #    analise, em outro processo. Nada que ela faca (ou deixe de fazer) muda a resposta desta rota.
 
     return jsonify({
         "status": "ok",
@@ -490,7 +477,7 @@ def obter_estado_imobilidade(device_id):
     """Debug/demo: expoe a tabela de estado persistente (nao o buffer de
     1s) de um dispositivo wokwi - evidencia observavel de 'mudanca de
     estado', separada do log em dataUsers/usuario_<id>.jsonl."""
-    estado = _pipeline().estado_do_dispositivo(device_id)   # procura em todos os usuarios
+    estado = via_banco.estado_do_dispositivo(device_id)   # le `estado_dispositivo`, onde a analise grava; procura em todos os usuarios
     if estado is None:
         return jsonify({"status": "erro", "mensagem": f"device_id desconhecido: {device_id}"}), 404
     return jsonify(estado)
@@ -512,16 +499,16 @@ def status():
 
 # ---------------------------------------------------------------------------
 # Inicializacao. Roda no import, para valer tambem em "flask --app borda.server run" e em servidores WSGI
-# (o "flask" CLI usa o "app" do modulo): sem FLOW_JWT_SECRET valido a importacao falha, e as threads
-# de flush e de vigia sobem. FLOW_SEM_THREADS=1 desliga as duas (usado pela suite de testes).
+# (o "flask" CLI usa o "app" do modulo): sem FLOW_JWT_SECRET valido a importacao falha, e as threads de descarga, de
+# entrega e de saude sobem. FLOW_SEM_THREADS=1 desliga todas (usado pela suite de testes).
 # ---------------------------------------------------------------------------
 _threads_lock = threading.Lock()
 _threads_iniciadas = False
 
 
 def iniciar_threads() -> None:
-    """Sobe as threads de fundo uma unica vez: flush do buffer e o pipeline (vigia, laco da analise e entrega no processo
-    unico; so a entrega na borda isolada)."""
+    """Sobe as threads de fundo uma unica vez: descarga das leituras e do buffer, entrega do push (le `comandos_push`) e
+    monitoramento da saude do pipeline."""
     global _threads_iniciadas, _thread_flush
     with _threads_lock:
         if _threads_iniciadas:
@@ -529,9 +516,8 @@ def iniciar_threads() -> None:
         _parar_flush.clear()
         _thread_flush = threading.Thread(target=_flush_loop, name="flow-flush", daemon=True)
         _thread_flush.start()
-        _pipeline().iniciar()
-        if _pipeline().analise_monitoravel():
-            _monitor_saude().iniciar()     # S6: alarmes em log (atraso, batimento velho, descartes); so com a analise pelo banco
+        via_banco.iniciar()
+        _monitor_saude().iniciar()     # S6: alarmes em log (atraso, batimento velho, descartes)
         _threads_iniciadas = True
 
 
@@ -567,7 +553,7 @@ def encerrar(prazo_s: float | None = None) -> None:
         try:
             if _monitor is not None:
                 _monitor.parar(prazo)
-            _pipeline().parar(prazo)
+            via_banco.parar(prazo)
         except Exception as e:  # noqa: BLE001  (o desligamento segue)
             print(f"  [borda] falha ao parar o pipeline (segue): {type(e).__name__}: {str(e)[:200]}")
         print(f"  [borda] encerrando: {HUB.fechar_todas()} stream(s) SSE fechado(s)")
@@ -585,18 +571,18 @@ def encerrar(prazo_s: float | None = None) -> None:
 
 if os.environ.get("FLOW_SEM_THREADS") != "1":
     auth.exigir_segredo()   # sem FLOW_JWT_SECRET o servidor nao sobe
-    if const_borda.ISOLADA:
-        repositorios.iniciar_borda()   # S5: so o papel flow_borda; sem banco (ou esquema defasado) nao sobe
+    if os.environ.get("FLOW_DB_FAKE") == "1":
+        repositorios.usar_fake()       # so desenvolvimento e testes: banco em memoria; a borda sozinha (ninguem decide)
     else:
-        repositorios.iniciar()  # sem banco (ou com esquema defasado) o servidor nao sobe; FLOW_DB_FAKE=1 usa o banco falso
+        repositorios.iniciar_borda()   # so o papel flow_borda; sem banco (ou com esquema defasado) a borda nao sobe
     iniciar_threads()
 
 
 if __name__ == "__main__":
-    print(f"Servidor iniciando na porta {const_borda.PORT}...")
+    print(f"Borda iniciando na porta {const_borda.PORT} (modo de desenvolvimento; use 'python -m borda' para o desligamento ordenado)...")
     print(f"Configuracao (.env): {const_comum.DOTENV_ARQUIVO} " + ("carregado" if const_comum.DOTENV_CARREGADO
           else "nao encontrado; usando so as variaveis de ambiente"))
-    print(f"Banco: {'banco falso em memoria (FLOW_DB_FAKE=1)' if os.environ.get('FLOW_DB_FAKE') == '1' else 'PostgreSQL'}"
+    print(f"Banco: {'banco falso em memoria (FLOW_DB_FAKE=1)' if os.environ.get('FLOW_DB_FAKE') == '1' else 'PostgreSQL (papel flow_borda)'}"
           f" | arquivos: {'sim' if const_comum.GRAVAR_ARQUIVOS else 'nao'}")
     print(f"Salvando dados recebidos em: {os.path.abspath(const_comum.DATA_DIR)} (1 arquivo .jsonl por usuario)")
     print(f"Janela de agregacao app+wokwi: {const_borda.JANELA_AGREGACAO_S}s")

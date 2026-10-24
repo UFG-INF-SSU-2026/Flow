@@ -2,9 +2,10 @@
 Simula um 'wokwi' que sofre um impacto e fica imovel, para testar o push de confirmacao SEM Wokwi nem celular.
 
 Faz login com a conta do bridge, envia telemetria 1x/s (como o ESP32 faria) e, apos o impacto, 5 s de repouso.
-O servidor deve concluir 'queda provavel' e empurrar o pedido para os canais conectados (app e/ou bridge).
+A analise (python -m analise) deve concluir 'queda provavel' e gravar o pedido; a borda (python -m borda) o empurra para os
+canais conectados (app e/ou bridge). Os DOIS processos precisam estar no ar.
 
-Uso (na pasta SensorServer, com o servidor rodando):
+Uso (na pasta SensorServer, com a borda e a analise rodando):
     pip install requests
     FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python simular_queda.py [URL_BASE]
 """
@@ -52,7 +53,7 @@ print(f"Simulando queda para user_id={user_id}...")
 for _ in range(2):
     enviar(1.0, 1.5); time.sleep(1)
 print("IMPACTO"); enviar(3.0, 25.0); time.sleep(1)
-print("Imovel por 5 s (o servidor deve disparar o pedido apos ~3 s)")
+print("Imovel por 5 s (o pedido deve chegar aos canais apos ~3 s)")
 for _ in range(5):
     enviar(0.3, 0.4); time.sleep(1)
-print("Fim. Confira o app/bridge e dataUsers/confirmacoes_usuario_%d.jsonl" % user_id)
+print("Fim. Confira o app/bridge e as tabelas comandos_push, episodios e confirmacoes (user_id=%d)." % user_id)

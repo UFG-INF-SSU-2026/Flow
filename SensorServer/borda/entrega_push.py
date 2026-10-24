@@ -1,13 +1,13 @@
 """
-Entrega do push pelo banco (roadmap do split, S4): a BORDA le `comandos_push` por cursor, entrega por SSE e grava
-`entregas_push` e o cursor da borda (`cursor_borda`). So roda com comum.const.ACOES_PELO_BANCO; no caminho direto quem
-entrega e `borda/caminho_direto.py`, logo apos decidir.
+Entrega do push (roadmap do split, S4/S7): a BORDA le `comandos_push` por cursor, entrega por SSE e grava
+`entregas_push` e o cursor da borda (`cursor_borda`). E o unico caminho do push: a analise decide e grava o comando, e
+quem fala com os dispositivos e a borda.
 
-Cada comando vai a TODOS os canais (app e wokwi), como no caminho direto, e cada canal gera uma linha de `entregas_push`
-(com `comando_id`): `enviado`, `sem_conexao` (ninguem conectado; o hub ainda guarda a mensagem para o replay de quem
-reconectar), `nao_suportado`, `erro` ou `expirado` (o prazo do comando passou antes da entrega: nada e enviado, e a
-analise ve o resultado). Comando criado ha mais que const_borda.JANELA_COMANDOS_S nem e lido (historico de antes de uma
-parada). A borda nao importa a analise: o contrato entre as duas e a tabela.
+Cada comando vai a TODOS os canais (app e wokwi) e cada canal gera uma linha de `entregas_push` (com `comando_id`):
+`enviado`, `sem_conexao` (ninguem conectado; o hub ainda guarda a mensagem para o replay de quem reconectar),
+`nao_suportado`, `erro` ou `expirado` (o prazo do comando passou antes da entrega: nada e enviado, e a analise ve o
+resultado). Comando criado ha mais que const_borda.JANELA_COMANDOS_S nem e lido (historico de antes de uma parada). A
+borda nao importa a analise: o contrato entre as duas e a tabela.
 
 Garantias: entrega ao menos uma vez (se a borda cair entre entregar e gravar o cursor, o comando sai de novo; o
 dispositivo ignora o `messageId` repetido e o prazo limita o reenvio). Falha do banco ou de um canal nunca derruba a

@@ -1,13 +1,9 @@
 """Servidor <-> banco (banco falso em memoria): leituras em lote, dupla escrita, identidade do token e resiliencia."""
 import os
-from datetime import datetime, timezone
 
-from analise import const as const_analise
-from analise import efeitos, regra_queda
-from borda import caminho_direto, server
+from borda import server
 from borda import const as const_borda
 from comum import const as const_comum
-from comum import mensagens
 from flow_db import repositorios
 
 
@@ -99,7 +95,7 @@ class TestLeituras:
         assert server._fila_leituras == []
 
 
-# ----------------------------- dupla escrita (legado) ------------------------
+# ----------------------------- telemetria e auditoria (legado) ------------------------
 class TestDuplaEscrita:
     def test_flush_grava_telemetria_no_banco_e_no_arquivo(self, cli, tokens, banco):
         cli.post("/dados", _app(), tokens["idoso"])
@@ -128,30 +124,11 @@ class TestDuplaEscrita:
         (a,) = banco.tabelas["auditoria"]
         assert (a["rota"], a["status"], a["motivo"]) == ("/dados", 401, "token_ausente")
 
-    def test_alerta_vai_para_a_tabela_alertas(self, banco):
-        efeitos.gravar_alerta_banco(1, "cel1", "imobilidade", {"mensagem": "sem movimento"}, 3, datetime.now(timezone.utc))
-        (a,) = banco.tabelas["alertas"]
-        assert (a["tipo"], a["mensagem"], a["device_id"], a["schema_version"]) == ("imobilidade", "sem movimento", "cel1", 3)
-
-    def test_estado_do_wokwi_e_gravado_uma_vez_enquanto_nao_muda(self, cli, tokens, banco):
+    def test_estado_do_wokwi_e_gravado_uma_vez_enquanto_nao_muda(self, cli, tokens, banco, pipeline):
         cli.post("/dados", _wokwi(seq=1), tokens["dispositivo"])
         cli.post("/dados", _wokwi(seq=2), tokens["dispositivo"])
         (e,) = banco.tabelas["estado_dispositivo"]
         assert (e["user_id"], e["device_id"]) == (1, "bridge-dev") and e["estado"]["device_id"] == "bridge-dev"
-
-    def test_registro_de_regra_queda_vira_confirmacao(self, banco):
-        regra_queda.registrar(1, "episodio.aberto", {"episodeId": "e1", "motivo": "X"})
-        (c,) = banco.tabelas["confirmacoes"]
-        assert (c["tipo"], c["episodio_id"], c["user_id"]) == ("episodio.aberto", "e1", 1)
-        assert c["dados"]["motivo"] == "X"
-
-    def test_falha_do_ouvinte_nao_impede_o_registro_em_arquivo(self, monkeypatch, ler_confirmacoes):
-        def quebra(*_):
-            raise RuntimeError("boom")
-        monkeypatch.setattr(regra_queda, "OUVINTE_REGISTRO", quebra)
-        regra_queda.registrar(1, "episodio.aberto", {"episodeId": "e1"})
-        assert [l["tipo"] for l in ler_confirmacoes(1)] == ["episodio.aberto"]
-
 
 # --------------------------------- /eventos ----------------------------------
 class TestRespostas:
@@ -178,53 +155,6 @@ class TestRespostas:
     def test_fora_de_escopo_nao_e_gravado(self, cli, tokens, banco):
         assert cli.post("/eventos", _retorno(user_id=2), tokens["idoso"]).status_code == 403
         assert banco.tabelas["respostas_dispositivo"] == []
-
-
-# ------------------------- episodios, comandos e entregas --------------------
-class TestPedidoEEncerramento:
-    def test_pedido_grava_episodio_comando_confirmacao_e_entregas(self, banco):
-        pedido = regra_queda.abrir_por_imobilidade(1)
-        caminho_direto._emitir_pedido(1, pedido, "bridge-dev")
-        (ep,) = banco.tabelas["episodios"]
-        assert (ep["episodio_id"], ep["estado"], ep["device_id"], ep["tipo"]) == (
-            pedido.episode_id, "aguardando_confirmacao", "bridge-dev", const_analise.MOTIVO_B)
-        (cmd,) = banco.tabelas["comandos_push"]
-        assert (cmd["episodio_id"], cmd["canal"], cmd["tipo"]) == (pedido.episode_id, "todos", mensagens.TIPO_SOLICITADA)
-        assert cmd["expira_em"] > cmd["criado_em"]
-        assert [c["tipo"] for c in banco.tabelas["confirmacoes"]] == ["episodio.aberto"]
-        entregas = banco.tabelas["entregas_push"]
-        assert {e["canal"] for e in entregas} == {"app", "wokwi"} and {e["message_id"] for e in entregas} == {cmd["message_id"]}
-
-    def test_encerramento_fecha_o_episodio_e_grava_o_comando(self, banco):
-        pedido = regra_queda.abrir_por_imobilidade(1)
-        caminho_direto._emitir_pedido(1, pedido)
-        caminho_direto._encerrar(regra_queda.Encerramento(1, pedido.episode_id, "EXPIRADO"))
-        (ep,) = banco.tabelas["episodios"]
-        assert ep["estado"] == "encerrado" and ep["motivo_encerramento"] == "EXPIRADO" and ep["encerrado_em"]
-        assert ep["tipo"] == const_analise.MOTIVO_B                       # a abertura nao e sobrescrita
-        assert [c["tipo"] for c in banco.tabelas["comandos_push"]] == [mensagens.TIPO_SOLICITADA,
-                                                                      mensagens.TIPO_ENCERRADA]
-
-    def test_encerramento_de_episodio_que_nao_chegou_ao_banco_o_cria(self, banco):
-        caminho_direto._encerrar(regra_queda.Encerramento(1, "ep-sem-abertura", "CONFIRMADO"))
-        (ep,) = banco.tabelas["episodios"]
-        assert (ep["episodio_id"], ep["tipo"], ep["estado"]) == ("ep-sem-abertura", "DESCONHECIDO", "encerrado")
-
-    def test_falha_do_banco_nao_impede_o_despacho(self, banco, monkeypatch):
-        def quebra(*_a, **_k):
-            raise ConnectionError("banco fora")
-        monkeypatch.setattr(repositorios.analise(), "gravar_episodio", quebra)
-        pedido = regra_queda.abrir_por_imobilidade(1)
-        caminho_direto._emitir_pedido(1, pedido)                           # nao levanta
-        assert banco.tabelas["episodios"] == [] and banco.tabelas["comandos_push"] == []
-        assert len(banco.tabelas["entregas_push"]) == 2            # o push saiu mesmo assim
-
-    def test_pedido_e_episodio_sao_atomicos(self, banco, monkeypatch):
-        def quebra(*_a, **_k):
-            raise ConnectionError("cai no meio")
-        monkeypatch.setattr(repositorios.analise(), "gravar_comando", quebra)
-        caminho_direto._emitir_pedido(1, regra_queda.abrir_por_imobilidade(1))
-        assert banco.tabelas["episodios"] == []                    # o episodio gravado antes do comando foi desfeito
 
 
 def test_disjuntor_pausa_as_escritas_apos_uma_falha(banco, monkeypatch):

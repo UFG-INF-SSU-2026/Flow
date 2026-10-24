@@ -1,5 +1,5 @@
 """
-Constantes da ANALISE: limiares e prazos das regras (queda, imobilidade, luz) e o periodo do vigia.
+Constantes da ANALISE: limiares e prazos das regras (queda, imobilidade, luz) e o ritmo do laco por cursor.
 
 Este modulo so importa `comum.const`, e apenas para que o .env ja esteja carregado. Quem usa importa o modulo
 (`from analise import const as const_analise`) e le `const_analise.X` na hora do uso. As constantes comuns (versoes
@@ -11,12 +11,8 @@ import os
 from comum import const as _comum  # noqa: F401  (efeito colateral: o .env e carregado antes de qualquer leitura de ambiente)
 
 # ===========================================================================
-# 1. VIGIA E MEMORIA DAS REGRAS
+# 1. MEMORIA DAS REGRAS
 # ===========================================================================
-
-# Periodo (s) da thread vigia que encerra episodios vencidos. Define o atraso
-# maximo entre o prazo do servidor e o envio do encerramento EXPIRADO.
-INTERVALO_VIGIA_S = 1.0
 
 # Teto de entradas das tabelas em memoria das regras de imobilidade e de luz: estados por (user_id, device_id), um
 # teto para cada tabela. O device_id vem do cliente: ao estourar, os mais antigos saem. Valor bem acima do uso real
@@ -80,7 +76,7 @@ TOLERANCIA_RELOGIO_S = 60
 # Tempo (s) que o mapa messageId -> episodio guarda cada entrada DEPOIS de a
 # mensagem expirar, para classificar respostas tardias. Menor valor = mapa
 # menor, mas respostas muito atrasadas passam a ser gravadas como mensagem
-# desconhecida. A poda roda na iteracao do vigia.
+# desconhecida. A poda roda no passo do vigia.
 RETENCAO_MENSAGENS_S = 3600
 
 # Maximo de dispositivos rastreados na deduplicacao da telemetria do app (device_id vem do payload do cliente).
@@ -112,21 +108,17 @@ HORA_FIM_NOITE = 6
 LEITURAS_CONSECUTIVAS_PARA_ALERTA = 3
 
 # ===========================================================================
-# 5. LACO DA ANALISE POR CURSOR (S3a do split)
+# 5. LACO DA ANALISE POR CURSOR (S3 e S4 do split)
 # ===========================================================================
 
-# Liga o laco que le `leituras`, `respostas_dispositivo` e `entregas_push` por cursor (thread do mesmo processo,
-# papel flow_analise). FLOW_LACO_ANALISE=0 desliga. Na S3a o laco so registra as decisoes em log; quem age e o
-# caminho direto.
-LACO_ATIVO = os.environ.get("FLOW_LACO_ANALISE", "1") != "0"
-
-# Espera (s) entre dois ciclos de leitura. E uma das tres esperas do orcamento de latencia (roadmap, secao 9): o pior
-# caso soma esta espera. Se ainda houver dado para ler (lote cheio), o laco nao espera.
+# Espera (s) entre dois ciclos de leitura. E uma das tres esperas do orcamento de latencia (secao 9 do roadmap): o pior
+# caso soma esta espera. Se ainda houver dado para ler (lote cheio), o laco nao espera. O vigia de episodios e um passo
+# de cada ciclo, entao o atraso maximo entre o prazo do servidor e o encerramento EXPIRADO e esta espera (mais ATRASO_VIGIA_S).
 INTERVALO_LEITURA_S = 0.25
 
 # Idade (s), contada do instante da ingestao, acima da qual uma leitura ou resposta so RECONSTROI o estado das regras
 # e nao pode disparar acao (principio 4: agir apenas sobre o recente). Evita alertar com dado velho ao reprocessar
-# apos uma parada. Na S3a so marca a decisao como "reconstrucao" no log e conta nas metricas; a S4 passa a obedecer.
+# apos uma parada. A decisao sobre linha antiga sai marcada como "reconstrucao" e e contada nas metricas.
 # Valor inicial, a calibrar.
 IDADE_MAX_ACAO_S = 30
 
@@ -138,47 +130,26 @@ ATRASO_VIGIA_S = 0.5
 # Falha repetida do laco (banco fora do ar, por exemplo): no maximo uma linha de log neste intervalo (s).
 INTERVALO_LOG_FALHA_S = 10
 
-# Identifica o codigo da analise no batimento (`cursor_analise.versao_codigo`).
-VERSAO_CODIGO = "s3a-sombra"
+# Identifica o codigo da analise no batimento (`cursor_analise.versao_codigo`) quando o laco so ENSAIA: decide e registra
+# em log, sem gravar nada (`LacoAnalise(agir=False)`, usado em testes e ferramentas; o servico nunca o usa).
+VERSAO_CODIGO = "ensaio"
 
-# Idem, quando a analise AGE (comum.const.ACOES_PELO_BANCO, S4).
-VERSAO_CODIGO_ACOES = "s4-acoes"
+# Idem, quando a analise AGE (`python -m analise`): grava comandos, alertas, confirmacoes, episodios e estado.
+VERSAO_CODIGO_ACOES = "split-1"
 
-# ===========================================================================
-# 6. COMPARACAO EM MODO SOMBRA (S3b do split)
-# ===========================================================================
-
-# Liga a comparacao: o caminho direto e o laco da analise entregam as suas decisoes a analise/sombra.py, que as grava
-# em dataUsers/<SOMBRA_ARQUIVO> (uma linha JSON por decisao) para `python relatorio_sombra.py` comparar. Desligada por
-# padrao (FLOW_SOMBRA=1 liga): so vale a pena enquanto a S3b e a janela de estabilidade da S5 estiverem em curso, e
-# exige o laco ligado (FLOW_LACO_ANALISE=1). A S4/S5 removem esta secao junto com o caminho direto.
-SOMBRA_ATIVA = os.environ.get("FLOW_SOMBRA", "0") == "1"
-
-# Orcamento de latencia do roadmap (secao 9: 3 esperas de 250 ms). E a TOLERANCIA entre o instante de uma decisao
-# do caminho direto e o da mesma decisao na sombra, e o limite do atraso (relogio de parede) com que a sombra decide
-# depois do caminho direto. Para as decisoes do vigia (relogio real, nao o da ingestao) a tolerancia soma os
-# periodos do vigia e do laco (ver analise/sombra.tolerancia_instante).
+# Orcamento de latencia do roadmap (secao 9: 3 esperas de 250 ms): quanto a cadeia borda -> banco -> analise -> banco ->
+# borda pode acrescentar a deteccao e ao envio do push. E a regua de `medir_latencia.py` e dos testes de cenario.
 ORCAMENTO_LATENCIA_S = 0.75
 
-# Teto de decisoes guardadas em memoria pela sombra (as mais antigas saem). O arquivo nao tem teto: e a fonte do relatorio.
-SOMBRA_MAX_REGISTROS = 20_000
-
-# Arquivo (dentro de comum.const.DATA_DIR) com as decisoes dos dois lados.
-SOMBRA_ARQUIVO = "sombra_decisoes.jsonl"
-
-# Arquivo (dentro de comum.const.DATA_DIR) em que `simular_cenarios.py` anota a janela de tempo de cada cenario, para
-# `relatorio_sombra.py` separar as decisoes por cenario.
-SOMBRA_MANIFESTO = "sombra_cenarios.json"
-
 # ===========================================================================
-# 7. DOIS PROCESSOS (S5 do split)
+# 6. DESLIGAMENTO ORDENADO (S5 do split)
 # ===========================================================================
 
 # Desligamento ordenado da analise (`python -m analise`): tempo maximo (s) para o ciclo em curso chegar ao commit do cursor.
 PRAZO_ENCERRAMENTO_ANALISE_S = 10
 
 # ===========================================================================
-# 8. OBSERVABILIDADE E RESILIENCIA (S6 do split)
+# 7. OBSERVABILIDADE E RESILIENCIA (S6 do split)
 # ===========================================================================
 
 # Recuperacao na subida: a analise reconstroi o estado das janelas das regras relendo as leituras dos ULTIMOS

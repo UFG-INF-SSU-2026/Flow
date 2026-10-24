@@ -1,25 +1,21 @@
 """
-Laco da ANALISE por cursor (roadmap do split, S3a).
+Laco da ANALISE por cursor (roadmap do split, S3 a S6).
 
-Uma thread do mesmo processo le `leituras`, `respostas_dispositivo` e `entregas_push` NOVAS do banco por cursor (papel
-flow_analise, regra de lacunas de id), transforma cada linha em entrada do nucleo e chama o nucleo das regras com o
-INSTANTE DA INGESTAO gravado pela borda (principio 3). O batimento em `cursor_analise.atualizado_em` e renovado a cada
-ciclo, mesmo sem dado novo.
+Le `leituras`, `respostas_dispositivo` e `entregas_push` NOVAS do banco por cursor (papel flow_analise, regra de lacunas
+de id), transforma cada linha em entrada do nucleo e chama o nucleo das regras com o INSTANTE DA INGESTAO gravado pela
+borda (principio 3). O batimento em `cursor_analise.atualizado_em` e renovado a cada ciclo, mesmo sem dado novo. E o
+que `python -m analise` roda (analise/servico.py), numa thread propria.
 
-O QUE O LACO FAZ NA S3a (e o que nao faz)
-  - So REGISTRA as decisoes em log (e conta nas metricas do cursor). Nao grava alertas, confirmacoes, comandos,
-    episodios nem estado: quem age continua sendo o caminho direto (borda/caminho_direto.py). Por isso o laco usa um
-    `EstadoRegras` PROPRIO (`nucleo.novo_estado()`), nunca o `nucleo.PADRAO` do caminho direto: os dois mundos nao se
-    enxergam, e a S3b compara o que cada um decidiu.
+O QUE O LACO FAZ
+  - AGE (`agir=True`, o do servico): cada decisao sobre linha recente e gravada por `efeitos.aplicar_na_transacao` na
+    MESMA transacao do cursor (DS5); o vigia grava os encerramentos numa transacao propria. Falha do banco desfaz o ciclo
+    e o proximo reaproveita as decisoes ja tomadas (`_decisoes_por_linha`): o estado das regras nao e desfeito e uma
+    linha nunca e decidida duas vezes. Quem entrega o push e a borda (borda/entrega_push.py), a partir de `comandos_push`.
+  - ENSAIA (`agir=False`, o padrao do construtor; usado em testes e ferramentas): decide e so registra em log (e conta
+    nas metricas do cursor), sem gravar alertas, confirmacoes, comandos, episodios nem estado.
+  - Usa um `EstadoRegras` PROPRIO (`nucleo.novo_estado()`), nunca o `nucleo.PADRAO` dos modulos de regra.
   - As entregas (`entregas_push`) nao alimentam o nucleo (ele nao tem entrada para elas); o laco as le, avanca o cursor
-    e conta por resultado. Na S4 e a partir delas que a analise decide reenvio ou escalonamento (roadmap, secao 10).
-  - Leitura de ESTADO por reprocessamento (janela anterior ao cursor): S6, ver `recuperar_estado` abaixo. Sem ela o
-    estado das regras comeca vazio a cada subida do processo.
-
-S4 (comum.const.ACOES_PELO_BANCO, `agir=True`): o laco passa a AGIR. Cada decisao sobre linha recente e gravada por
-`efeitos.aplicar_na_transacao` na MESMA transacao do cursor (DS5); o vigia grava os encerramentos numa transacao propria.
-Falha do banco desfaz o ciclo e o proximo reaproveita as decisoes ja tomadas (`_decisoes_por_linha`): o estado das regras
-nao e desfeito e uma linha nunca e decidida duas vezes. Quem entrega o push e a borda (borda/entrega_push.py).
+    e conta por resultado: e a partir delas que a analise pode decidir reenvio ou escalonamento (roadmap, secao 10).
 
 GARANTIAS
   - Leitura ou resposta MALFORMADA (nao vira entrada do nucleo) e falha numa regra sao tratadas POR LINHA: registra, conta
@@ -28,19 +24,18 @@ GARANTIAS
     Falha do banco no meio de um ciclo nao avanca nada; o laco registra (no maximo uma linha por
     `const_analise.INTERVALO_LOG_FALHA_S`) e tenta de novo no ciclo seguinte.
   - Linha mais velha que `const_analise.IDADE_MAX_ACAO_S` so reconstroi estado: a decisao sai marcada como
-    "reconstrucao" (a S4 nao agira sobre ela).
+    "reconstrucao" e nao e gravada (principio 4).
   - O vigia (expiracao de episodios) e um PASSO SEPARADO que usa o relogio real, atrasado de ATRASO_VIGIA_S.
-    Sem ele os episodios do laco nunca encerrariam e o estado divergiria do caminho direto.
 
-S6 (observabilidade e resiliencia):
+OBSERVABILIDADE E RESILIENCIA (S6):
   - RECUPERACAO NA SUBIDA (`recuperar_estado`, chamada pela thread antes do primeiro ciclo quando o laco AGE): rele as
     leituras dos ultimos `JANELA_REPROCESSAMENTO_S` s ate o cursor para reconstruir as janelas das regras (maquina de
     impacto, fusao, imobilidade, luz, deduplicacao) SEM gerar acao, e devolve ao estado os episodios que o banco ja
     conhece (abertos, e os recentes, para cooldown e resposta tardia) com as `messageId` dos seus pedidos. Depois disso o
     laco segue do cursor: so age sobre linha recente (principio 4). Se o banco falhar na recuperacao, nenhum ciclo roda
     (o cursor nem avancaria) e a thread tenta de novo.
-  - LINHA ANTIGA (principio 4), duas regras que a S6 fecha: (1) o episodio que uma linha antiga abre e ficcao (nao virou push
-    nem registro) e SAI do estado na hora, para nao bloquear nem por em cooldown a queda real que vier logo depois;
+  - LINHA ANTIGA (principio 4), duas regras: (1) o episodio que uma linha antiga abre e ficcao (nao virou push nem
+    registro) e SAI do estado na hora, para nao bloquear nem por em cooldown a queda real que vier logo depois;
     (2) a resposta antiga que encerra um episodio que o banco ja tem (o idoso respondeu enquanto a analise estava parada)
     NAO e descartada: e escrituracao de um episodio real, e sem ela ele ficaria aberto no banco para sempre.
   - ALARMES em log: atraso (a leitura mais antiga do ciclo passou de `LIMIAR_ATRASO_ANALISE_S`) e leituras/respostas
@@ -130,7 +125,7 @@ def resposta_de_linha(linha: dict) -> nucleo.Resposta:
 
 
 # ============================================================================
-# Registro das decisoes (S3a: so log)
+# Registro das decisoes (log)
 # ============================================================================
 def _iso(instante: datetime) -> str:
     return instante.astimezone(timezone.utc).isoformat()
@@ -185,16 +180,11 @@ class LacoAnalise:
     Parametros (todos opcionais; o padrao e o servidor real):
       obter_repo   funcao que devolve o RepoAnalise (None = sem banco; o ciclo nao faz nada)
       relogio      relogio REAL (so o vigia e a idade das linhas o usam)
-      estado       EstadoRegras do laco (padrao: um novo, independente do estado do caminho direto)
+      estado       EstadoRegras do laco (padrao: um novo, independente do `nucleo.PADRAO`)
       ao_decidir   funcao(decisoes, origem, reconstrucao) chamada para cada decisao nao vazia (padrao: log)
-      ao_observar  S3b: funcao(decisoes, origem, reconstrucao) chamada para TODA `Decisoes` com algum conteudo, inclusive
-                   so resumo de estado ou so descarte (que `ao_decidir` nao recebe). Alimenta a comparacao em modo
-                   sombra (analise/sombra.py). Padrao None: nada muda.
-      agir         S4: True = a analise AGE: grava comandos, alertas, confirmacoes, episodios e estado na MESMA transacao do
+      agir         True = a analise AGE: grava comandos, alertas, confirmacoes, episodios e estado na MESMA transacao do
                    cursor (efeitos.aplicar_na_transacao) e o vigia grava os encerramentos. Decisao sobre linha mais velha
-                   que IDADE_MAX_ACAO_S nao age (principio 4). Padrao False: so registra (S3a/S3b).
-      traduzir_resposta  S3b: funcao(Resposta) -> Resposta aplicada a cada resposta ANTES do nucleo. So a sombra a usa
-                   (troca o messageId do caminho direto pelo do pedido equivalente do laco). Padrao None.
+                   que IDADE_MAX_ACAO_S nao age (principio 4). Padrao False: so registra (ensaio).
       recuperar    S6: a thread (`iniciar`) roda `recuperar_estado()` antes do primeiro ciclo. Padrao None = so quando o laco
                    AGE e const_analise.RECUPERAR_AO_INICIAR. `executar_ciclo()` nunca recupera sozinho (os testes chamam
                    `recuperar_estado()` quando querem).
@@ -203,15 +193,11 @@ class LacoAnalise:
     def __init__(self, obter_repo: Callable[[], RepoAnalise | None] = repositorios.analise,
                  relogio: Callable[[], datetime] = _agora_real, estado: nucleo.EstadoRegras | None = None,
                  ao_decidir: Callable[[nucleo.Decisoes, str, bool], None] = logar_decisoes,
-                 ao_observar: Callable[[nucleo.Decisoes, str, bool], None] | None = None,
-                 traduzir_resposta: Callable[[nucleo.Resposta], nucleo.Resposta] | None = None,
                  agir: bool = False, recuperar: bool | None = None):
         self._obter_repo = obter_repo
         self._relogio = relogio
         self.estado = estado if estado is not None else nucleo.novo_estado()
         self._ao_decidir = ao_decidir
-        self._ao_observar = ao_observar
-        self._traduzir_resposta = traduzir_resposta
         self._agir = agir
         self._recuperar = (agir and const_analise.RECUPERAR_AO_INICIAR) if recuperar is None else recuperar
         self.recuperado = False                           # True depois de recuperar_estado() concluir (S6)
@@ -258,8 +244,8 @@ class LacoAnalise:
                 print(f"  [laco] falha em efeito pos-commit (ignorada): {type(e).__name__}: {str(e)[:150]}")
 
     def _processar_lote(self, _tx: RepoAnalise, lote: ciclo_analise.Lote) -> dict:
-        """Roda dentro da transacao do ciclo. Sem `agir` (S3a/S3b) NAO escreve por `_tx`: so decide e registra. Com `agir`
-        (S4) grava as decisoes recentes por `_tx`."""
+        """Roda dentro da transacao do ciclo. Sem `agir` (ensaio) NAO escreve por `_tx`: so decide e registra. Com `agir`
+        grava as decisoes recentes por `_tx`."""
         metricas: dict = {}
         agora = self._relogio()
         limite = const_analise.IDADE_MAX_ACAO_S
@@ -279,11 +265,6 @@ class LacoAnalise:
         for chave_linha, item in sorted(itens, key=lambda ci: ci[1].instante):
             eh_leitura = isinstance(item, nucleo.Leitura)
             antiga = (agora - item.instante).total_seconds() > limite
-            if not eh_leitura and self._traduzir_resposta is not None:
-                try:
-                    item = self._traduzir_resposta(item)
-                except Exception as e:  # noqa: BLE001  (sem traducao a resposta segue como esta)
-                    print(f"  [laco] falha ao traduzir a resposta (ignorada): {type(e).__name__}")
             try:
                 decisoes = self._decisoes_por_linha.get(chave_linha) if self._agir else None
                 if decisoes is None:        # (com agir, uma linha de um ciclo desfeito NAO e decidida de novo: o estado ja a viu)
@@ -333,11 +314,6 @@ class LacoAnalise:
         print(f"  [laco] {nome} malformada id={linha.get('id')} ignorada (contada, o cursor avanca): {erro}")
 
     def _decidiu(self, decisoes: nucleo.Decisoes, origem: str, reconstrucao: bool) -> None:
-        if self._ao_observar is not None and decisoes:     # `Decisoes.__bool__` inclui estados e descartes
-            try:
-                self._ao_observar(decisoes, origem, reconstrucao)
-            except Exception as e:  # noqa: BLE001  (observar nunca derruba o laco)
-                print(f"  [laco] falha ao observar a decisao (ignorada): {type(e).__name__}")
         if not (decisoes.comandos or decisoes.alertas or decisoes.confirmacoes):
             return
         try:
@@ -460,7 +436,7 @@ class LacoAnalise:
         return decisoes
 
     def _gravar_vigia(self, decisoes: nucleo.Decisoes) -> None:
-        """S4: grava os encerramentos EXPIRADO numa transacao propria. Se falhar, o estado das regras ja os registrou
+        """Grava os encerramentos EXPIRADO numa transacao propria. Se falhar, o estado das regras ja os registrou
         como encerrados: guarda-os e tenta de novo no proximo passo (nao se perdem). Nunca levanta."""
         self._vigia_pendente.somar(decisoes)
         if not self._vigia_pendente:

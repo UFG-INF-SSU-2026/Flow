@@ -51,6 +51,11 @@ def _linhas(ler_confirmacoes, tipo: str) -> list[dict]:
     return [l for l in ler_confirmacoes(1) if l["tipo"] == tipo]
 
 
+def _entregas(banco) -> list[tuple]:
+    """(canal, resultado) das linhas de `entregas_push` (a entrega e da borda e fica no banco)."""
+    return [(e["canal"], e["resultado"]) for e in banco.tabelas["entregas_push"]]
+
+
 def _unica_mensagem() -> str:
     """messageId do unico pedido emitido (sem precisar de um stream aberto para le-lo)."""
     (mid,) = regra_queda._mensagens
@@ -58,26 +63,26 @@ def _unica_mensagem() -> str:
 
 
 # ------------------------------- sem canal ativo ------------------------------
-def test_sem_canal_ativo_registra_a_entrega_e_o_episodio_expira(fluxo, relogio, ler_confirmacoes):
+def test_sem_canal_ativo_registra_a_entrega_e_o_episodio_expira(fluxo, relogio, ler_confirmacoes, banco):
     fluxo.enviar_queda()
 
-    assert [(l["canal"], l["resultado"]) for l in _linhas(ler_confirmacoes, "push.entrega")] == [
-        ("app", "SEM_CANAL_ATIVO"), ("wokwi", "SEM_CANAL_ATIVO")]
+    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 2)
+    assert _entregas(banco) == [("app", "sem_conexao"), ("wokwi", "sem_conexao")]
 
     relogio.avancar(const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S)
-    assert aguardar(lambda: len(ler_confirmacoes(1)) >= 6)
+    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 4)
     assert regra_queda._episodios[1].resultado == "EXPIRADO"
-    assert [l["tipo"] for l in ler_confirmacoes(1)] == [
-        "episodio.aberto", "push.entrega", "push.entrega", "episodio.encerrado", "push.entrega", "push.entrega"]
-    assert {l["resultado"] for l in _linhas(ler_confirmacoes, "push.entrega")} == {"SEM_CANAL_ATIVO"}
+    assert [l["tipo"] for l in ler_confirmacoes(1)] == ["episodio.aberto", "episodio.encerrado"]
+    assert {r for _c, r in _entregas(banco)} == {"sem_conexao"}
     assert _linhas(ler_confirmacoes, "episodio.encerrado")[0]["resultado"] == "EXPIRADO"
 
 
 # ----------------------- conexao tardia, mas dentro da validade ----------------
 def test_cliente_que_conecta_dentro_da_validade_recebe_o_pedido_com_timeout_reduzido(
-        fluxo, relogio, abrir_sse, ler_confirmacoes):
+        fluxo, relogio, abrir_sse, banco):
     fluxo.enviar_queda()                                     # ninguem conectado
-    entregas = _linhas(ler_confirmacoes, "push.entrega")
+    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 2)
+    entregas = _entregas(banco)
     relogio.avancar(2)                                       # 2 s depois, ainda dentro do tempo do idoso
 
     leitor = abrir_sse("/push/app", fluxo.tok_app)
@@ -87,8 +92,8 @@ def test_cliente_que_conecta_dentro_da_validade_recebe_o_pedido_com_timeout_redu
     assert pedido["messageType"] == mensagens.TIPO_SOLICITADA
     assert pedido["messageId"] == _unica_mensagem()
     assert pedido["payload"]["timeoutMs"] == (const_comum.TIMEOUT_CONFIRMACAO_S - 2) * 1000
-    assert _linhas(ler_confirmacoes, "push.entrega") == entregas      # a linha original nao muda
-    assert {l["resultado"] for l in entregas} == {"SEM_CANAL_ATIVO"}
+    assert _entregas(banco) == entregas                      # a linha original nao muda (a borda nao reentrega)
+    assert {r for _c, r in entregas} == {"sem_conexao"}
 
 
 def test_pedido_com_tempo_do_cliente_esgotado_nao_e_reenviado(fluxo, relogio, abrir_sse):

@@ -10,10 +10,8 @@ import pytest
 
 from _apoio import aguardar
 from _mundo import Mundo, queda_wokwi
-from analise import const as const_analise
 from borda import const as const_borda
 from borda import saude, server, tempo
-from comum import const as const_comum
 from flow_db import repositorios
 
 
@@ -82,9 +80,8 @@ class TestMonitor:
                 return self.t
         return R()
 
-    def monitor(self, repo, relogio, monitorada=True, estatisticas=dict):
-        return saude.MonitorSaude(obter_repo=lambda: repo, monitorada=lambda: monitorada, estatisticas=estatisticas,
-                                  relogio=relogio)
+    def monitor(self, repo, relogio, estatisticas=dict):
+        return saude.MonitorSaude(obter_repo=lambda: repo, estatisticas=estatisticas, relogio=relogio)
 
     def test_cache_curto_e_forcar_ignora_o_cache(self, relogio):
         repo = RepoSaude()
@@ -105,11 +102,6 @@ class TestMonitor:
         atual["i"] = 1
         mon.pipeline()
         assert [r.consultas for r in repos] == [1, 1]
-
-    def test_nao_monitorado_nao_consulta_o_banco(self, relogio):
-        repo = RepoSaude()
-        r = self.monitor(repo, relogio, monitorada=False).pipeline()
-        assert r["estado"] == saude.NAO_MONITORADO and repo.consultas == 0
 
     def test_banco_fora_do_ar_vira_desconhecido_sem_levantar(self, relogio):
         repo = RepoSaude()
@@ -193,24 +185,12 @@ class TestRotaHealth:
         assert r.status_code == 200
         return r.get_json()
 
-    def test_processo_unico_no_caminho_direto_nao_monitora(self, cli):
+    def test_batimento_recente_e_ok(self, cli, banco):
         corpo = self.health(cli)
-        assert corpo["status"] == "ok" and corpo["pipeline"]["estado"] == saude.NAO_MONITORADO
+        assert corpo["status"] == "ok" and corpo["pipeline"]["estado"] == saude.OK
         assert corpo["borda"] == {"fila_leituras": 0, "leituras_descartadas": 0}
 
-    @pytest.fixture
-    def monitorada(self, monkeypatch):
-        monkeypatch.setattr(const_comum, "ACOES_PELO_BANCO", True)
-        monkeypatch.setattr(const_analise, "LACO_ATIVO", True)
-
-    def test_acoes_pelo_banco_monitora_o_batimento(self, cli, monitorada, banco):
-        assert self.health(cli)["pipeline"]["estado"] == saude.OK
-
-    def test_borda_isolada_monitora(self, cli, monkeypatch, banco):
-        monkeypatch.setattr(const_borda, "ISOLADA", True)
-        assert self.health(cli)["pipeline"]["estado"] == saude.OK
-
-    def test_acusa_a_analise_parada_logo_acima_do_limiar(self, cli, monitorada, banco):
+    def test_acusa_a_analise_parada_logo_acima_do_limiar(self, cli, banco):
         agora = banco.relogio()
         limiar = const_borda.LIMIAR_BATIMENTO_ANALISE_S
         banco.cursor_analise["atualizado_em"] = agora - timedelta(seconds=limiar - 1)
@@ -220,7 +200,7 @@ class TestRotaHealth:
         assert corpo["status"] == "ok"                                     # a borda esta de pe; o pipeline nao
         assert (corpo["pipeline"]["estado"], corpo["pipeline"]["motivos"]) == (saude.DEGRADADO, [saude.MOTIVO_ANALISE_PARADA])
 
-    def test_acusa_o_atraso_em_leituras(self, cli, monitorada, banco):
+    def test_acusa_o_atraso_em_leituras(self, cli, banco):
         banco.borda().gravar_leituras([
             {"instante_ingestao": tempo.agora_utc(), "user_id": 1, "device_id": "d", "fonte": "app", "tipo_evento": None,
              "schema_version": 3, "instante_origem": None, "conta_id": None, "payload": {}}
@@ -228,7 +208,7 @@ class TestRotaHealth:
         pipeline = self.health(cli)["pipeline"]
         assert pipeline["motivos"] == [saude.MOTIVO_ATRASO] and pipeline["atraso_leituras"] == const_borda.LIMIAR_ATRASO_LEITURAS + 1
 
-    def test_banco_fora_do_ar_continua_200_e_diz_que_nao_sabe(self, cli, monitorada, banco, monkeypatch):
+    def test_banco_fora_do_ar_continua_200_e_diz_que_nao_sabe(self, cli, banco, monkeypatch):
         def quebra():
             raise ConnectionError("banco fora")
         monkeypatch.setattr(repositorios.borda(), "ler_saude", quebra)
@@ -238,7 +218,7 @@ class TestRotaHealth:
         server._enfileirar_leitura(1, "app", "cel1", {"x": 1}, 3, "idoso1", tempo.agora_utc())
         assert self.health(cli)["borda"]["fila_leituras"] == 1
 
-    def test_o_corpo_nao_vaza_dado_de_usuario(self, cli, monitorada, banco):
+    def test_o_corpo_nao_vaza_dado_de_usuario(self, cli, banco):
         banco.borda().gravar_leituras(
             [{"instante_ingestao": tempo.agora_utc(), "user_id": 77, "device_id": "dispositivo-secreto", "fonte": "app",
               "tipo_evento": None, "schema_version": 3, "instante_origem": None, "conta_id": "conta-secreta",
@@ -246,7 +226,7 @@ class TestRotaHealth:
         texto = cli.get("/health").get_data(as_text=True)
         assert not any(x in texto for x in ("dispositivo-secreto", "conta-secreta", "valor-secreto"))
 
-    def test_ponta_a_ponta_com_a_analise(self, cli, monitorada):
+    def test_ponta_a_ponta_com_a_analise(self, cli):
         """No banco falso com relogio explicito: a analise parada acusa, um ciclo dela renova o batimento e volta a ok."""
         m = Mundo()
         repositorios._borda.repo = m.borda      # a borda do servidor passa a enxergar o banco do mundo (o conftest restaura)

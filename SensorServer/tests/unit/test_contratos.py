@@ -158,7 +158,7 @@ class TestSaidasDoServidor:
 
     def test_registros_de_confirmacao(self, monkeypatch):
         linhas = []
-        monkeypatch.setattr(regra_queda, "OUVINTE_REGISTRO", lambda uid, tipo, linha: linhas.append(linha))
+        monkeypatch.setattr(regra_queda, "gravar_arquivo_confirmacao", lambda uid, linha: linhas.append(linha))
         pedido = regra_queda.abrir_por_imobilidade(1)
         regra_queda.registrar(1, "push.entrega", {"episodeId": pedido.episode_id, "messageId": "m1", "canal": "app",
                                                    "resultado": "ENTREGUE_AO_CANAL"})

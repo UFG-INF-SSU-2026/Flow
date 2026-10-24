@@ -1,13 +1,13 @@
 """
-Efeitos das decisoes do nucleo (`analise/nucleo.py`) do lado da ANALISE: arquivos e tabelas que so ela escreve
+Efeitos das decisoes do nucleo (`analise/nucleo.py`) do lado da ANALISE: tabelas e arquivos que so ela escreve
 (`alertas`, `confirmacoes`, `episodios`, `comandos_push`, `estado_dispositivo`).
 
-O nucleo decide sem I/O; aqui esta o I/O. Cada efeito tem a sua protecao: a falha de um nao impede os demais e nunca
-levanta (o dado ja foi aceito pela borda). Na S4 o laco da analise chama `aplicar` sem `entregar`: a entrega do push
-passa a ser da borda, que le `comandos_push` do banco.
+O nucleo decide sem I/O; aqui esta o I/O. O laco da analise (`analise/laco.py`) chama `aplicar_na_transacao` com a
+transacao do ciclo: as decisoes e o avanco do cursor saem na MESMA transacao (DS5), e o que nao e do banco (arquivos de
+transicao e log) volta como funcoes para rodar DEPOIS do commit. A entrega do push e da borda, que le `comandos_push`.
 
-Ordem de `aplicar` (a mesma de sempre): registros de confirmacao, alertas, estado e, por ultimo, cada comando de push
-(episodio + comando na MESMA transacao, DS5/DS6) e, so entao, a entrega.
+Ordem de gravacao (a mesma de sempre): registros de confirmacao, alertas, estado e, por ultimo, cada comando de push
+(episodio + comando juntos, DS5/DS6).
 """
 import json
 import os
@@ -16,10 +16,6 @@ from datetime import datetime
 
 from comum import const as const_comum
 from analise import regra_queda
-from flow_db import repositorios
-
-# (user_id, device_id) -> ultima "assinatura" do estado gravada no banco: so grava quando algo relevante mudou.
-_estado_gravado: dict[tuple, tuple] = {}
 
 
 def nome_seguro(valor: str) -> str:
@@ -34,40 +30,6 @@ def _linha_confirmacao(user_id: int, tipo: str, linha: dict) -> dict:
             "schema_version": const_comum.SCHEMA_VERSION_MENSAGEM}
 
 
-def gravar_confirmacao_banco(user_id: int, tipo: str, linha: dict) -> None:
-    """Registro do ciclo de confirmacao (episodio.*, push.ack, confirmacao.resposta) -> tabela `confirmacoes`."""
-    repositorios.tentar_analise("confirmacao", lambda a: a.gravar_confirmacao(_linha_confirmacao(user_id, tipo, linha)))
-
-
-def gravar_alerta_banco(user_id: int, device_id: str, tipo: str, alerta: dict, schema_version: int,
-                        instante: datetime) -> None:
-    repositorios.tentar_analise("alerta", lambda a: a.gravar_alerta({
-        "instante": instante, "user_id": user_id, "device_id": device_id, "tipo": tipo,
-        "mensagem": alerta.get("mensagem"), "dados": alerta, "schema_version": schema_version}))
-
-
-def gravar_comando_banco(cmd) -> None:
-    """Episodio (aguardando confirmacao ou encerrado) e o comando de push, na MESMA transacao (DS5/DS6).
-    Se o episodio nao chegou ao banco (queda na abertura), a linha de encerramento o cria com tipo DESCONHECIDO."""
-    def grava(a):
-        with a.transacao() as tx:
-            tx.gravar_episodio(cmd.episodio.como_linha())
-            tx.gravar_comando(cmd.como_linha())
-    repositorios.tentar_analise("comando", grava)
-
-
-def gravar_estado_banco(resumo) -> None:
-    """Estado persistente da regra de imobilidade -> estado_dispositivo. So grava quando algo relevante mudou."""
-    try:
-        chave = (resumo.user_id, resumo.device_id)
-        if _estado_gravado.get(chave) == resumo.assinatura:
-            return
-        if repositorios.tentar_analise("estado", lambda a: a.gravar_estado_dispositivo(resumo.como_linha())):
-            _estado_gravado[chave] = resumo.assinatura
-    except Exception as e:  # noqa: BLE001
-        print(f"  [db] falha ao preparar estado_dispositivo user={resumo.user_id}: {type(e).__name__}: {str(e)[:200]}")
-
-
 def _arquivo_alerta(alerta) -> str:
     """Arquivo alerta_*.json (enquanto const_comum.GRAVAR_ARQUIVOS). Devolve o nome do arquivo."""
     prefixo = "alerta" if alerta.tipo == "luz_inadequada" else "alerta_imobilidade"
@@ -80,43 +42,8 @@ def _arquivo_alerta(alerta) -> str:
     return filename
 
 
-def aplicar_alerta(alerta) -> None:
-    """Arquivo alerta_*.json (enquanto const_comum.GRAVAR_ARQUIVOS), tabela `alertas` e log."""
-    filename = _arquivo_alerta(alerta)
-    gravar_alerta_banco(alerta.user_id, alerta.device_id, alerta.tipo, alerta.dados, alerta.schema_version,
-                        alerta.instante)
-    print(f"  >>> ALERTA gerado: {filename} -> {alerta.dados['mensagem']}")
-
-
-def _isolar(nome: str, fn) -> None:
-    try:
-        fn()
-    except Exception as e:  # noqa: BLE001
-        print(f"  [{nome}] falha ao aplicar a decisao (ignorada): {type(e).__name__}: {str(e)[:200]}")
-
-
-def aplicar(decisoes, entregar=None) -> None:
-    """Efeitos das decisoes. `entregar(cmd)`, se dado, e chamado depois de gravar cada comando (caminho direto);
-    sem ele o comando fica so no banco, para a borda entregar."""
-    for c in decisoes.confirmacoes:
-        _isolar("confirmacao", c.aplicar)
-    for a in decisoes.alertas:
-        _isolar("alerta", lambda a=a: aplicar_alerta(a))
-    for r in decisoes.estados:
-        _isolar("estado", lambda r=r: gravar_estado_banco(r))
-    for cmd in decisoes.comandos:
-        def comando(cmd=cmd):
-            gravar_comando_banco(cmd)
-            if entregar is not None:
-                entregar(cmd)
-        _isolar(f"comando episodeId={cmd.episodio.episodio_id} user={cmd.user_id}", comando)
-
-
-# ============================================================================
-# S4: a analise que AGE pelo banco (sinalizador comum.const.ACOES_PELO_BANCO)
-# ============================================================================
 def aplicar_na_transacao(tx, decisoes, assinaturas_gravadas: dict, assinaturas_novas: dict) -> list:
-    """Grava as decisoes POR `tx` (a transacao do ciclo da analise), na mesma ordem de `aplicar`: confirmacoes,
+    """Grava as decisoes POR `tx` (a transacao do ciclo da analise), na ordem do modulo: confirmacoes,
     alertas, estados e, por fim, cada comando (episodio + comando, DS5/DS6). Nao entrega nada (a borda le
     `comandos_push`) e NAO engole excecao: falha do banco desfaz o ciclo inteiro, cursor incluido (DS5).
 

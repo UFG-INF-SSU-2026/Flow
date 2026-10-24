@@ -3,10 +3,9 @@ Laco da analise por cursor (S3a do split). Banco falso (sem Docker), relogio exp
 (`executar_ciclo`): so o teste da thread espera de verdade.
 
 Cobre: conversao das linhas, os tres cursores e o batimento, a transacao unica, lacuna de id, leitura malformada,
-falha numa regra, "so registra" (nenhuma tabela de saida escrita), estado proprio (nao o do caminho direto), idade
+falha numa regra, "so registra" (nenhuma tabela de saida escrita), estado proprio (nao o PADRAO), idade
 maxima, vigia, ownership da resposta (DS1) e a thread (inicia, para, sobrevive a falha do banco sem inundar o log).
 """
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -15,7 +14,6 @@ import pytest
 
 from analise import const as const_analise
 from analise import laco, nucleo
-from borda import caminho_direto
 from comum import const as const_comum
 from comum import mensagens
 from flow_db import ciclo_analise
@@ -258,14 +256,14 @@ class TestLaco:
         assert f"comando={mensagens.TIPO_SOLICITADA}" in saida and "user=1" in saida
         assert "bridge-dev" not in saida and "idoso-sim" not in saida and "payload" not in saida
 
-    def test_usa_estado_proprio_e_nao_toca_no_do_caminho_direto(self, mundo):
+    def test_usa_estado_proprio_e_nao_toca_no_padrao(self, mundo):
         m = mundo
         m.borda.gravar_leituras(queda_wokwi())
         m.rel.ir_para(4)
         m.laco.executar_ciclo()
         assert m.laco.estado is not nucleo.PADRAO
         assert m.laco.estado.queda.episodios                    # o laco abriu o episodio...
-        assert not nucleo.PADRAO.queda.episodios                # ...e o estado do caminho direto segue limpo
+        assert not nucleo.PADRAO.queda.episodios                # ...e o estado PADRAO segue limpo
         assert not nucleo.PADRAO.imobilidade.estados
 
     def test_resposta_estou_bem_encerra_o_episodio_do_laco(self, mundo):
@@ -510,28 +508,3 @@ class TestThread:
         m.borda.gravar_leituras([leitura_app(0, 1)])
         time.sleep(0.05)
         assert m.bd.cursor_analise["ultimo_leitura_id"] == 0
-
-
-# ============================================================================ adaptador da borda
-class TestAdaptador:
-    def test_sinalizador_desligado_nao_sobe_o_laco(self, monkeypatch):
-        monkeypatch.setattr(const_analise, "LACO_ATIVO", False)
-        assert caminho_direto.iniciar_laco() is None
-
-    def test_sinalizador_ligado_sobe_o_laco_e_parar_o_encerra(self, monkeypatch):
-        chamadas = []
-
-        class Falso:
-            def iniciar(self):
-                chamadas.append("iniciar")
-                return threading.current_thread()
-
-            def parar(self, timeout):
-                chamadas.append(("parar", timeout))
-
-        monkeypatch.setattr(const_analise, "LACO_ATIVO", True)
-        monkeypatch.setattr(caminho_direto, "_laco", None)            # restaurado ao fim do teste
-        monkeypatch.setattr(caminho_direto.laco, "LacoAnalise", Falso)
-        assert caminho_direto.iniciar_laco() is threading.current_thread()
-        caminho_direto.parar_laco(1.0)
-        assert chamadas == ["iniciar", ("parar", 1.0)]

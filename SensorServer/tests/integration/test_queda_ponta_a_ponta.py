@@ -21,8 +21,12 @@ from analise import regra_queda
 from _apoio import aguardar
 from _cenarios import FluxoQueda
 
-TIPOS_CICLO_CONFIRMADO = ["episodio.aberto", "push.entrega", "push.entrega", "push.ack", "confirmacao.resposta",
-                          "episodio.encerrado", "push.entrega", "push.entrega"]
+TIPOS_CICLO_CONFIRMADO = ["episodio.aberto", "push.ack", "confirmacao.resposta", "episodio.encerrado"]
+
+
+def _entregas(banco) -> list[tuple]:
+    """(canal, resultado) de cada linha de `entregas_push`: a entrega agora e da borda e fica no banco."""
+    return [(e["canal"], e["resultado"]) for e in banco.tabelas["entregas_push"]]
 
 
 class Cenario(FluxoQueda):
@@ -64,7 +68,7 @@ def _abertos(ler_confirmacoes) -> list[dict]:
 
 
 # ------------------------------------------------------------------ (1) a (3)
-def test_1_pedido_chega_nos_dois_canais(cenario, ler_confirmacoes):
+def test_1_pedido_chega_nos_dois_canais(cenario, ler_confirmacoes, banco):
     msg_app, msg_wk = cenario.provocar_queda()
 
     assert msg_app["messageId"] == msg_wk["messageId"]
@@ -75,9 +79,8 @@ def test_1_pedido_chega_nos_dois_canais(cenario, ler_confirmacoes):
         assert m["payload"]["timeoutMs"] == 5000        # tempo congelado: sem desconto de replay
         assert m["payload"]["motivo"] == const_analise.MOTIVO_A
 
-    entregas = [l for l in ler_confirmacoes(1) if l["tipo"] == "push.entrega"]
-    assert {(l["canal"], l["resultado"]) for l in entregas} == {("app", "ENTREGUE_AO_CANAL"),
-                                                                 ("wokwi", "ENTREGUE_AO_CANAL")}
+    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 2)
+    assert set(_entregas(banco)) == {("app", "enviado"), ("wokwi", "enviado")}
 
 
 def test_2_ack_e_estou_bem_encerram_como_confirmado(cenario, ler_confirmacoes):
@@ -97,7 +100,7 @@ def test_2_ack_e_estou_bem_encerram_como_confirmado(cenario, ler_confirmacoes):
     assert [l["tipo"] for l in ler_confirmacoes(1)] == TIPOS_CICLO_CONFIRMADO
 
 
-def test_3_sem_resposta_expira_depois_de_timeout_mais_margem(cenario, ler_confirmacoes):
+def test_3_sem_resposta_expira_depois_de_timeout_mais_margem(cenario, ler_confirmacoes, banco):
     pedido, _ = cenario.provocar_queda()
 
     cenario.relogio.avancar(const_comum.TIMEOUT_CONFIRMACAO_S)        # passou o tempo do idoso, falta a margem
@@ -113,10 +116,9 @@ def test_3_sem_resposta_expira_depois_de_timeout_mais_margem(cenario, ler_confir
     assert regra_queda._episodios[1].resultado == "EXPIRADO"
 
     # a ultima linha de entrega e gravada logo depois do envio; espera ela aparecer
-    assert aguardar(lambda: len(ler_confirmacoes(1)) >= 6)
-    assert [l["tipo"] for l in ler_confirmacoes(1)] == [
-        "episodio.aberto", "push.entrega", "push.entrega",
-        "episodio.encerrado", "push.entrega", "push.entrega"]
+    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 4)
+    assert aguardar(lambda: len(ler_confirmacoes(1)) >= 2)
+    assert [l["tipo"] for l in ler_confirmacoes(1)] == ["episodio.aberto", "episodio.encerrado"]
 
 
 # ------------------------------------------------------------------------ (4)
@@ -126,7 +128,7 @@ def test_4_resposta_tardia_depois_do_encerramento_e_marcada_como_tardia(cenario,
     cenario.relogio.avancar(const_comum.TIMEOUT_CONFIRMACAO_S + const_comum.MARGEM_SERVIDOR_S)
     for enc in cenario.pushes():
         assert enc["payload"]["resultado"] == "EXPIRADO"
-    assert aguardar(lambda: len(ler_confirmacoes(1)) >= 6)       # as entregas do encerramento ja foram gravadas
+    assert aguardar(lambda: len(ler_confirmacoes(1)) >= 2)       # o encerramento ja foi gravado
     antes = len(ler_confirmacoes(1))
 
     cenario.resposta_app(mid)                                    # ESTOU_BEM que chegou atrasado
@@ -224,7 +226,7 @@ def test_7_a_mesma_dinamica_vinda_do_wokwi_nao_dispara(cenario):
 
 
 # ------------------------------------------------------------------------ (8)
-def test_8_conteudo_e_ordem_do_confirmacoes_jsonl(cenario, ler_confirmacoes):
+def test_8_conteudo_e_ordem_do_confirmacoes_jsonl(cenario, ler_confirmacoes, banco):
     pedido, _ = cenario.provocar_queda()
     mid, ep = pedido["messageId"], pedido["episodeId"]
     cenario.ack_bridge(mid)
@@ -236,12 +238,8 @@ def test_8_conteudo_e_ordem_do_confirmacoes_jsonl(cenario, ler_confirmacoes):
     carimbos = [l["timestamp"] for l in linhas]
     assert all(carimbos) and carimbos == sorted(carimbos)        # ISO 8601 UTC: ordem textual = ordem no tempo
 
-    aberto, e1, e2, ack, resp, encerrado, e3, e4 = linhas
+    aberto, ack, resp, encerrado = linhas
     assert aberto["episodeId"] == ep and aberto["motivo"] == const_analise.MOTIVO_A
-    for entrega, canal in ((e1, "app"), (e2, "wokwi")):          # o pedido, canal por canal (ordem de CANAIS)
-        assert (entrega["canal"], entrega["resultado"]) == (canal, "ENTREGUE_AO_CANAL")
-        assert entrega["messageId"] == mid and entrega["episodeId"] == ep
-        assert entrega["messageType"] == mensagens.TIPO_SOLICITADA
     assert (ack["eventType"], ack["state"], ack["source"], ack["device_id"]) == (
         "push.ack", "ATIVADO", "wokwi", "bridge-dev")
     assert (resp["eventType"], resp["state"], resp["source"], resp["device_id"]) == (
@@ -250,7 +248,11 @@ def test_8_conteudo_e_ordem_do_confirmacoes_jsonl(cenario, ler_confirmacoes):
         assert retorno["messageId"] == mid and retorno["episodeId"] == ep
         assert "tardia" not in retorno and "mensagem_desconhecida" not in retorno
     assert encerrado["episodeId"] == ep and encerrado["resultado"] == "CONFIRMADO"
-    for entrega, canal in ((e3, "app"), (e4, "wokwi")):          # o encerramento, canal por canal
-        assert (entrega["canal"], entrega["resultado"]) == (canal, "ENTREGUE_AO_CANAL")
-        assert entrega["messageId"] == enc_app["messageId"] and entrega["episodeId"] == ep
-        assert entrega["messageType"] == mensagens.TIPO_ENCERRADA
+
+    # as entregas (pedido e encerramento, canal por canal) ficam em `entregas_push`, uma linha por canal
+    assert aguardar(lambda: len(banco.tabelas["entregas_push"]) >= 4)
+    por_mensagem = {}
+    for e in banco.tabelas["entregas_push"]:
+        por_mensagem.setdefault(e["message_id"], set()).add((e["canal"], e["resultado"]))
+    assert por_mensagem == {mid: {("app", "enviado"), ("wokwi", "enviado")},
+                            enc_app["messageId"]: {("app", "enviado"), ("wokwi", "enviado")}}

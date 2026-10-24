@@ -1,14 +1,14 @@
 """
-Acesso unico do servidor aos repositorios de banco (borda e analise).
+Acesso unico de cada servico aos repositorios de banco (borda e analise).
 
-Enquanto borda e analise forem o mesmo processo, os dois lados vivem aqui, cada um com o seu papel no banco e o seu
-disjuntor. Quem usa (borda/server.py, borda/authz.py, borda/caminho_direto.py, analise/efeitos.py) NUNCA toca em SQL nem em pool: chama borda()/analise() ou
-tentar_borda()/tentar_analise().
+Cada servico e um processo e abre SO o pool do seu papel no banco (flow_borda ou flow_analise), cada um com o seu
+disjuntor. Quem usa (borda/server.py, borda/authz.py, analise/laco.py...) NUNCA toca em SQL nem em pool: chama
+borda()/analise() ou tentar_borda()/tentar_analise().
 
-  iniciar()    -> processo unico: sobe os dois pools e VERIFICA a versao do esquema; falha com mensagem clara (o servidor
-                  nao sobe). Com FLOW_DB_FAKE=1 usa o banco falso em memoria (sem Docker).
-  iniciar_borda() / iniciar_analise() -> S5, dois processos: cada servico abre SO o seu pool (o fake nao vale aqui).
-  usar_fake()  -> instala um banco falso novo (testes). Devolve o BancoFalso.
+  iniciar_borda() / iniciar_analise() -> sobe SO o pool do papel do servico e VERIFICA a versao do esquema; falha com
+                  mensagem clara (o servico nao sobe). O banco falso nao vale aqui: ele vive na memoria de um processo.
+  usar_fake()  -> instala um banco falso novo, com as duas fachadas (testes e `FLOW_DB_FAKE=1` no modo de desenvolvimento
+                  da borda). Devolve o BancoFalso.
   tentar_*()   -> executa uma escrita sem NUNCA levantar excecao: falha vai para o log e aciona o disjuntor.
                   Devolve True se gravou. O fluxo principal (aceitar dados, responder ao dispositivo) nao depende disto.
 """
@@ -37,8 +37,8 @@ def _zerar_disjuntores() -> None:
 
 def _recusar_fake_isolado(servico: str) -> None:
     if os.environ.get("FLOW_DB_FAKE") == "1":
-        raise RuntimeError(f"FLOW_DB_FAKE=1 so vale no processo unico (o banco falso vive na memoria de um processo): "
-                           f"o servico '{servico}' isolado precisa do PostgreSQL.")
+        raise RuntimeError(f"FLOW_DB_FAKE=1 nao vale com processos separados (o banco falso vive na memoria de um "
+                           f"processo): o servico '{servico}' precisa do PostgreSQL.")
 
 
 def _abrir(servico: str):
@@ -60,25 +60,9 @@ def _abrir(servico: str):
     return classe(pool)
 
 
-def iniciar() -> None:
-    """Processo UNICO: abre os dois lados. Levanta RuntimeError (mensagem sem senha) se o banco faltar ou estiver defasado."""
-    if os.environ.get("FLOW_DB_FAKE") == "1":
-        usar_fake()
-        return
-    repo_borda = _abrir("borda")
-    try:
-        repo_analise = _abrir("analise")
-    except Exception:
-        repo_borda.fechar()
-        raise
-    _zerar_disjuntores()
-    _borda.repo = repo_borda
-    _analise.repo = repo_analise
-
-
 def iniciar_borda() -> None:
-    """S5, processo da BORDA: abre SO o pool do papel flow_borda (o papel da analise nem e lido). tentar_analise()
-    vira no-op. Mesmas falhas de iniciar()."""
+    """Processo da BORDA: abre SO o pool do papel flow_borda (o papel da analise nem e lido). tentar_analise()
+    vira no-op. Levanta RuntimeError (mensagem sem senha) se o banco faltar ou estiver defasado."""
     _recusar_fake_isolado("borda")
     repo = _abrir("borda")
     _zerar_disjuntores()
@@ -86,7 +70,7 @@ def iniciar_borda() -> None:
 
 
 def iniciar_analise() -> None:
-    """S5, processo da ANALISE: abre SO o pool do papel flow_analise. tentar_borda() vira no-op."""
+    """Processo da ANALISE: abre SO o pool do papel flow_analise. tentar_borda() vira no-op. Mesmas falhas de iniciar_borda()."""
     _recusar_fake_isolado("analise")
     repo = _abrir("analise")
     _zerar_disjuntores()

@@ -11,6 +11,8 @@ from analise import nucleo
 from analise import regra_queda
 from borda import server
 
+pytestmark = pytest.mark.usefixtures("pipeline")     # a analise roda em memoria apos cada POST
+
 
 def _app(**extra) -> dict:
     corpo = {"source": "app", "user_id": 1, "device_id": "cel1", "timestamp_envio": int(time.time() * 1000),

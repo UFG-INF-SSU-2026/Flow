@@ -1,7 +1,7 @@
 # Banco de dados (PostgreSQL + TimescaleDB) — parte 1
 
-Estado desta entrega: camada de acesso, esquema, permissões e integração do servidor atual (dupla escrita).
-A separação em dois serviços e o fim dos arquivos ficam para a parte 2.
+Estado: camada de acesso, esquema, permissões, e o servidor separado em **borda** e **análise**, ligadas só por este banco (split concluído).
+A parte 2 (retenção, backup, remoção da `telemetria` e dos arquivos de transição, contas/sessões no banco) ainda não foi feita; as seções abaixo dizem o que ela vai mudar.
 
 ## Subir do zero (a partir de `SensorServer/`)
 
@@ -12,7 +12,9 @@ pip install -r requirements.txt
 python -m flow_db provisionar   # cria/ajusta os papeis flow_borda e flow_analise (idempotente)
 python -m flow_db migrar        # aplica as migracoes pendentes (idempotente, com trava)
 python -m flow_db status        # versao aplicada x disponivel
-python -m borda.server                # recusa subir se o banco faltar ou estiver defasado
+python -m borda                       # a borda (.env.borda); recusa subir se o banco faltar ou estiver defasado
+python -m analise                     # a análise (.env.analise), em outro terminal
+# ou: scripts/preparar.sh e scripts/tudo.sh (ver INSTRUCOES.md)
 ```
 
 Senhas dos papéis: só letras, números, `_` e `-`, mínimo 16 (`python -c "import secrets; print(secrets.token_urlsafe(24))"`).
@@ -28,9 +30,9 @@ Senhas dos papéis: só letras, números, `_` e `-`, mínimo 16 (`python -c "imp
 
 Nenhum papel apaga em tabela de fronteira (só `sessoes`). A retenção é feita pelo TimescaleDB (administrativo).
 
-## Dupla escrita (transição)
+## Dupla escrita (transição; sai na parte 2)
 
-Por padrão o servidor grava o banco **e** os arquivos de hoje. `FLOW_GRAVAR_ARQUIVOS=0` desliga os arquivos;
+Por padrão a borda e a análise gravam o banco **e** os arquivos de hoje (alertas e confirmações pela análise, depois do commit; telemetria agregada e auditoria pela borda). `FLOW_GRAVAR_ARQUIVOS=0` desliga os arquivos;
 `FLOW_GRAVAR_TELEMETRIA_LEGADO=0` para a tabela `telemetria`. As leituras (`leituras`) vão por uma fila limitada
 (`const.MAX_FILA_LEITURAS`) e são gravadas em lote pela thread de descarga; se o banco cair, o servidor segue
 aceitando dados e as mais antigas saem ao estourar o teto.
@@ -46,8 +48,11 @@ aceitando dados e as mais antigas saem ao estourar o teto.
 - `pytest -m banco` — contrato contra o PostgreSQL real, em um banco descartável `flow_teste` (recriado a cada sessão).
   Exige o container no ar e as 3 senhas no `.env`.
 
-## Fora desta parte
+## O que a parte 2 ainda vai mudar
 
-`contas.json`/`sessoes.json` continuam sendo a fonte de autenticação (as tabelas `contas`/`sessoes` já existem e têm
-permissão, mas o `borda/auth.py` ainda não as usa). Processo de análise separado, consumo por cursor e `/health` com
-`saude_pipeline` (a visão e `RepoBorda.ler_saude()` já estão prontos).
+- **Retenção e backup:** política de retenção das tabelas de fronteira (hoje feita só pelo TimescaleDB, administrativo) e rotina de backup.
+- **Tabela `telemetria` (legado):** removida, junto com `FLOW_GRAVAR_TELEMETRIA_LEGADO`; `leituras` é a fonte.
+- **Arquivos de transição:** `FLOW_GRAVAR_ARQUIVOS` e `dataUsers/` saem (agregado, confirmações, alertas, auditoria).
+- **Contas e sessões:** `contas.json`/`sessoes.json` continuam sendo a fonte de autenticação (as tabelas `contas`/`sessoes` já existem e têm permissão, mas `borda/auth.py` ainda não as usa).
+
+O banco é criado do zero (não há migração dos `.json` antigos).

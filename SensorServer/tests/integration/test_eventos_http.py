@@ -11,6 +11,8 @@ from analise import regra_queda
 from borda import server
 from borda.sse_hub import HUB
 
+pytestmark = pytest.mark.usefixtures("pipeline")     # a analise e a entrega rodam em memoria apos cada POST
+
 RETORNOS = [("push.ack", "ATIVADO"), ("push.ack", "REJEITADO"),
             ("confirmacao.resposta", "ESTOU_BEM"), ("confirmacao.resposta", "SEM_RESPOSTA")]
 
@@ -34,8 +36,8 @@ def _sem(corpo: dict, *campos) -> dict:
 
 
 def _abrir_episodio(user_id: int = 1):
-    """Abre um episodio (gatilho B) e registra a mensagem do pedido, como caminho_direto._emitir_pedido faz.
-    Devolve (pedido, mensagem). Nao despacha para os canais."""
+    """Abre um episodio (gatilho B) e registra a mensagem do pedido, (o episodio fica no estado PADRAO, que e o do laco dos testes).
+    Devolve (pedido, mensagem). Nao grava comando: nada e entregue aos canais."""
     pedido = regra_queda.abrir_por_imobilidade(user_id)
     msg = mensagens.criar_pedido_confirmacao(user_id, pedido.episode_id, pedido.timeout_s, pedido.motivo)
     regra_queda.anotar_mensagem(user_id, pedido.episode_id, msg["messageId"])
@@ -170,19 +172,19 @@ class TestMensagemDesconhecida:
 
 # ------------------------------- mensagem conhecida ---------------------------
 class TestMensagemConhecida:
-    def test_estou_bem_encerra_como_confirmado_e_avisa_os_dois_canais(self, cli, tokens, ler_confirmacoes):
+    def test_estou_bem_encerra_como_confirmado_e_avisa_os_dois_canais(self, cli, tokens, ler_confirmacoes, banco):
         pedido, msg = _abrir_episodio()
         r = cli.post("/eventos", _app("confirmacao.resposta", "ESTOU_BEM", msg["messageId"]), tokens["idoso"])
         assert r.status_code == 200 and r.get_json() == {"status": "ok"}
 
         assert regra_queda._episodios[1].resultado == "CONFIRMADO"
         assert [l["tipo"] for l in _sem_abertura(ler_confirmacoes)] == [
-            "confirmacao.resposta", "episodio.encerrado", "push.entrega", "push.entrega"]
-        resposta, encerrado, *entregas = _sem_abertura(ler_confirmacoes)
+            "confirmacao.resposta", "episodio.encerrado"]
+        resposta, encerrado = _sem_abertura(ler_confirmacoes)
         assert resposta["episodeId"] == pedido.episode_id and "mensagem_desconhecida" not in resposta
         assert encerrado["resultado"] == "CONFIRMADO"
-        assert {(l["canal"], l["resultado"]) for l in entregas} == {("app", "SEM_CANAL_ATIVO"),
-                                                                    ("wokwi", "SEM_CANAL_ATIVO")}
+        assert {(e["canal"], e["resultado"]) for e in banco.tabelas["entregas_push"]} == {("app", "sem_conexao"),
+                                                                                         ("wokwi", "sem_conexao")}
         for canal, guardadas in _encerramentos_no_anel().items():   # sem conexao, mas o anel guarda para o replay
             assert [m["payload"]["resultado"] for m in guardadas] == ["CONFIRMADO"], canal
             assert guardadas[0]["episodeId"] == pedido.episode_id

@@ -1,11 +1,9 @@
-"""Funcoes auxiliares da borda: verificar_versao, _ler_user_id; efeitos.nome_seguro e o despacho do caminho direto."""
+"""Funcoes auxiliares da borda: verificar_versao, _ler_user_id; efeitos.nome_seguro."""
 import pytest
 
-from types import SimpleNamespace
-
 from comum import const as const_comum
-from analise import efeitos, regra_queda
-from borda import caminho_direto, server
+from analise import efeitos
+from borda import server
 
 
 class TestVerificarVersao:
@@ -67,59 +65,3 @@ class TestNomeSeguro:
 
     def test_nao_sai_da_pasta(self):
         assert "/" not in efeitos.nome_seguro("../../etc/passwd")
-
-
-# ------------------------------- _despachar ---------------------------------
-MSG = {"episodeId": "ep1", "messageId": "m1", "messageType": "queda.confirmacao_solicitada"}
-
-
-def _canal(nome, resultado="ENTREGUE_AO_CANAL", falha=None, chamadas=None):
-    def enviar(user_id, msg):
-        if chamadas is not None:
-            chamadas.append((nome, user_id, msg["messageId"]))
-        if falha:
-            raise falha
-        return resultado
-    return SimpleNamespace(CANAL=nome, enviar=enviar)
-
-
-def _entregas(ler_confirmacoes):
-    return [(l["canal"], l["resultado"]) for l in ler_confirmacoes(1) if l["tipo"] == "push.entrega"]
-
-
-class TestDespachar:
-    def test_registra_um_push_entrega_por_canal(self, monkeypatch, ler_confirmacoes):
-        monkeypatch.setattr(caminho_direto, "CANAIS", [_canal("a"), _canal("b", "SEM_CANAL_ATIVO")])
-        caminho_direto._despachar(1, MSG)
-        assert _entregas(ler_confirmacoes) == [("a", "ENTREGUE_AO_CANAL"), ("b", "SEM_CANAL_ATIVO")]
-        linha = ler_confirmacoes(1)[0]
-        assert (linha["episodeId"], linha["messageId"], linha["messageType"]) == \
-               ("ep1", "m1", "queda.confirmacao_solicitada")
-
-    def test_falha_de_um_canal_nao_impede_o_outro(self, monkeypatch, ler_confirmacoes):
-        chamadas = []
-        monkeypatch.setattr(caminho_direto, "CANAIS", [_canal("a", falha=RuntimeError("boom"), chamadas=chamadas),
-                                               _canal("b", chamadas=chamadas)])
-        caminho_direto._despachar(1, MSG)                         # nao levanta
-        assert [c[0] for c in chamadas] == ["a", "b"]
-        assert _entregas(ler_confirmacoes) == [("a", "ERRO_NO_CANAL"), ("b", "ENTREGUE_AO_CANAL")]
-
-    def test_falha_em_todos_os_canais(self, monkeypatch, ler_confirmacoes):
-        monkeypatch.setattr(caminho_direto, "CANAIS", [_canal("a", falha=OSError()), _canal("b", falha=ValueError())])
-        caminho_direto._despachar(1, MSG)
-        assert _entregas(ler_confirmacoes) == [("a", "ERRO_NO_CANAL"), ("b", "ERRO_NO_CANAL")]
-
-    def test_falha_ao_gravar_o_resultado_de_um_canal_nao_impede_o_outro(self, monkeypatch, ler_confirmacoes):
-        chamadas = []
-        monkeypatch.setattr(caminho_direto, "CANAIS", [_canal("a", chamadas=chamadas), _canal("b", chamadas=chamadas)])
-        original = regra_queda.registrar
-
-        def registrar(uid, tipo, dados):
-            if dados.get("canal") == "a":
-                raise OSError("disco cheio")
-            return original(uid, tipo, dados)
-
-        monkeypatch.setattr(regra_queda, "registrar", registrar)
-        caminho_direto._despachar(1, MSG)
-        assert [c[0] for c in chamadas] == ["a", "b"]
-        assert _entregas(ler_confirmacoes) == [("b", "ENTREGUE_AO_CANAL")]

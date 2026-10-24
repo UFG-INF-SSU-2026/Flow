@@ -73,7 +73,7 @@ Ainda faltam dimensões importantes de contexto (localização dentro da casa, s
 
 - **Smartphone Android:** concentra os sensores internos, realiza a coleta contínua e, desde o Marco 3, também **recebe do servidor** o pedido de confirmação quando uma queda é suspeitada.
 - **ESP32 simulado (Wokwi) + WokwiBridge:** segundo produtor de dados (acelerômetro MPU6050), com um **buzzer** e um botão "Estou bem". O ESP32 só fala serial; a ponte (bridge) faz a comunicação de rede por ele, nos dois sentidos.
-- **Servidor local:** recebe os dados, autentica e autoriza quem os envia, analisa o acelerômetro e envia mensagens de volta aos dispositivos, na mesma rede Wi-Fi.
+- **Servidor local:** dois processos ligados por um banco (PostgreSQL + TimescaleDB): a **borda** recebe os dados, autentica e autoriza quem os envia e entrega as mensagens de volta aos dispositivos; a **análise** (sem porta de rede) analisa o acelerômetro e decide. Tudo na mesma rede Wi-Fi.
 - **Comunicação de ida (dispositivo → servidor):** HTTP, a cada 1 segundo (intervalo editável), dentro da mesma sub-rede, sem exposição à internet nesta fase.
 - **Comunicação de volta (servidor → dispositivo):** push por **SSE**. O dispositivo abre a conexão com o servidor e o servidor empurra as mensagens por ela, então nenhum dispositivo precisa abrir porta para receber. No celular o canal só existe enquanto o app está aberto em primeiro plano (limitação assumida, ver `docs/arquitetura.md`, seção 13.2).
 - **Persistência, escalabilidade e acesso remoto por cuidadores** continuam fora do alcance desta fase.
@@ -91,7 +91,7 @@ A ideia central é que um **servidor central use os dados dos sensores para gera
 As ações (atuações) previstas pelo grupo são:
 
 - **Pedir confirmação ao idoso (Marco 3, foco no acelerômetro):** se o servidor concluir que o idoso provavelmente caiu (impacto seguido de imobilidade, ou imobilidade prolongada), ele envia uma mensagem solicitando confirmação. No **Wokwi**, isso aciona um buzzer, silenciado pelo botão "Estou bem"; no **celular**, toca um alerta sonoro e aparece o botão "Estou bem". O botão tem **tempo limite de 5 segundos** (configurável em um único ponto do servidor). A resposta do idoso, ou a falta dela, é **recebida e armazenada pelo servidor**; o que fazer com ela depois ainda não foi decidido.
-- **Avisar o cuidador** caso alguma informação obtida pelo sistema mereça ser informada (por exemplo, um possível indício de queda ou uma condição de luz inadequada à noite). Hoje isso é a gravação de um arquivo de alerta no servidor; ainda não existe um app do cuidador.
+- **Avisar o cuidador** caso alguma informação obtida pelo sistema mereça ser informada (por exemplo, um possível indício de queda ou uma condição de luz inadequada à noite). Hoje isso é a gravação de um alerta no banco (e de um arquivo, na transição); ainda não existe um app do cuidador.
 
 Outras ações poderão ser adicionadas futuramente.
 
@@ -159,7 +159,7 @@ flowchart TD
     M -->|"Sim"| N["Aviso ao cuidador<br/>(visão de produto)"]
 ```
 
-O trecho **Servidor → push → alerta no dispositivo → resposta armazenada** é novo no Marco 3. O trecho do aviso ao cuidador é visão de produto: hoje o servidor apenas grava um arquivo de alerta.
+O trecho **Servidor → push → alerta no dispositivo → resposta armazenada** é novo no Marco 3. O trecho do aviso ao cuidador é visão de produto: hoje o servidor apenas grava o alerta no banco.
 
 ---
 

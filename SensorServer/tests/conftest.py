@@ -47,17 +47,16 @@ const_comum.DATA_DIR = os.path.join(_TMP, "dataUsers")
 import pytest  # noqa: E402
 from werkzeug.serving import make_server  # noqa: E402
 
-from analise import efeitos  # noqa: E402
 from analise import regra_imobilidade  # noqa: E402
 from analise import regra_luz  # noqa: E402
 from analise import regra_queda  # noqa: E402
 from borda import auth  # noqa: E402
-from borda import caminho_direto  # noqa: E402
 from borda import server  # noqa: E402
 from borda import tempo  # noqa: E402
 from borda.sse_hub import HUB  # noqa: E402
 from comum import mensagens  # noqa: E402
 from flow_db import repositorios  # noqa: E402
+from _pipeline import Pipeline  # noqa: E402
 
 
 def _limpar_estado() -> None:
@@ -69,7 +68,6 @@ def _limpar_estado() -> None:
         d.clear()
     server._registros_recentes.clear()
     server._fila_leituras.clear()
-    efeitos._estado_gravado.clear()
     server._descartes_leituras = 0
     repositorios.usar_fake()      # banco falso novo (vazio) a cada teste
     HUB._conns.clear()
@@ -96,6 +94,17 @@ def banco():
     """O BancoFalso do teste atual (borda e analise enxergam o mesmo). Use .borda()/.analise() para ler pelos repositorios
     ou .tabelas[...] para inspecionar."""
     return repositorios.banco_falso()
+
+
+@pytest.fixture
+def pipeline(request, monkeypatch):
+    """A analise e a entrega de push em memoria (tests/_pipeline.py). Quem a pede enxerga, depois de cada POST em /dados e
+    /eventos do `cli` (e do `servidor_real`), as decisoes ja gravadas e o push ja entregue, como no sistema de dois processos.
+    O vigia do laco usa o relogio sem atraso (o relogio dos testes e congelado ou explicito)."""
+    monkeypatch.setattr(const_analise, "ATRASO_VIGIA_S", 0)
+    p = Pipeline()
+    request.getfixturevalue("cli").apos_postar = p.drenar
+    return p
 
 
 @pytest.fixture
@@ -190,29 +199,28 @@ def relogio(monkeypatch):
 
 
 @pytest.fixture
-def servidor_real(contas, monkeypatch):
-    """Servidor Flask real (Werkzeug, threaded) numa porta efemera, mais uma thread vigia.
-    Devolve um ClienteReal. Contas e constantes de tempo ja prontas; keepalive curto."""
+def servidor_real(contas, monkeypatch, pipeline):
+    """Servidor Flask real (Werkzeug, threaded) numa porta efemera, mais uma thread que roda a analise e a entrega
+    (o vigia expira episodios quando o relogio de teste avanca). Devolve um ClienteReal, que tambem as roda depois de
+    cada POST. Contas e constantes de tempo ja prontas; keepalive curto."""
     monkeypatch.setattr(const_borda, "KEEPALIVE_S", 0.3)
-    monkeypatch.setattr(const_analise, "INTERVALO_VIGIA_S", 0.05)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
     srv = make_server("127.0.0.1", 0, server.app, threaded=True)
     parar = threading.Event()
 
-    def vigia():
+    def ciclos():
         while not parar.is_set():
-            try:
-                caminho_direto._vigia_iteracao()
-            except Exception:  # noqa: BLE001
-                pass
-            parar.wait(const_analise.INTERVALO_VIGIA_S)
+            pipeline.drenar()
+            parar.wait(0.05)
 
-    threads = [threading.Thread(target=srv.serve_forever, daemon=True), threading.Thread(target=vigia, daemon=True)]
+    threads = [threading.Thread(target=srv.serve_forever, daemon=True), threading.Thread(target=ciclos, daemon=True)]
     for t in threads:
         t.start()
     try:
-        yield ClienteReal(f"http://127.0.0.1:{srv.server_port}")
+        cliente = ClienteReal(f"http://127.0.0.1:{srv.server_port}")
+        cliente.apos_postar = pipeline.drenar
+        yield cliente
     finally:
         parar.set()
         srv.shutdown()

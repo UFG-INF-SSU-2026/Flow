@@ -10,8 +10,8 @@ Regras de uso:
   - Este modulo NAO importa nada do projeto (e um modulo folha). `borda/const.py` e `analise/const.py` so importam
     este, e so para que o .env ja esteja carregado quando elas leem o ambiente.
   - Ao ser importado, carrega SensorServer/.env para o ambiente do processo; variavel de ambiente ja definida no
-    terminal VENCE o arquivo. Ver .env.example e _carregar_dotenv(). Processo unico: um .env so; dois processos (S5):
-    .env.borda e .env.analise, escolhidos por FLOW_SERVICO (ver SERVICO abaixo).
+    terminal VENCE o arquivo. Ver .env.example e _carregar_dotenv(). Cada servico le o seu: .env.borda e .env.analise,
+    escolhidos por FLOW_SERVICO (ver SERVICO abaixo); o .env administrativo e so de migracoes, provisionamento e compose.
   - Os demais modulos importam o modulo (`from comum import const as const_comum`) e leem `const_comum.X` NA HORA DO
     USO (nunca `from comum.const import X`), para que um unico ajuste valha para todos os pontos de uso, inclusive
     em testes. Cada constante tem UM dono: ajuste-a no modulo do dono.
@@ -41,8 +41,8 @@ def _carregar_dotenv(caminho: Path) -> bool:
 
 # Servico que este processo e (S5). Os pontos de entrada `python -m borda` e `python -m analise` definem FLOW_SERVICO
 # ANTES de importar qualquer modulo do projeto; cada servico le SO o seu arquivo de ambiente e nenhum le o `.env`
-# administrativo (migracoes, provisionamento e compose). Vazio = processo unico / ferramentas (`python -m borda.server`,
-# simuladores, `python -m flow_db`): le o `.env` de sempre.
+# administrativo (migracoes, provisionamento e compose). Vazio = ferramentas e modo de desenvolvimento
+# (`python -m borda.server`, simuladores, `python -m flow_db`): le o `.env` de sempre.
 SERVICO = os.environ.get("FLOW_SERVICO", "")
 _ARQUIVO_ENV = {"": ".env", "borda": ".env.borda", "analise": ".env.analise"}
 if SERVICO not in _ARQUIVO_ENV:
@@ -130,10 +130,3 @@ TTL_ENCERRAMENTO_S = 10
 # Apos uma falha do banco, as escritas (fora a descarga em lote) sao puladas por este tempo (s), para a requisicao
 # nao esperar o tempo limite do pool a cada chamada durante uma queda. Vale para os dois lados (flow_db/repositorios.py).
 DB_PAUSA_APOS_FALHA_S = 5.0
-
-# Sinalizador do CUTOVER das acoes (roadmap do split, S4). 0 (padrao): o caminho direto decide, grava e entrega (como
-# sempre). 1: a ANALISE (laco por cursor) decide e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e
-# `estado_dispositivo` na mesma transacao do cursor; a BORDA le `comandos_push` por cursor, entrega por SSE e grava
-# `entregas_push`. Exige o laco ligado (FLOW_LACO_ANALISE=1), senao ninguem decidiria: sem ele o sinalizador e ignorado
-# (com aviso). Voltar ao caminho direto = FLOW_ACOES_PELO_BANCO=0 e reiniciar. Fica ate o fim da S5.
-ACOES_PELO_BANCO = os.environ.get("FLOW_ACOES_PELO_BANCO", "0") == "1"

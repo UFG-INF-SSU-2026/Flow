@@ -1,7 +1,11 @@
-"""Falha de canal e do aviso de encerramento nao derrubam o fluxo."""
+"""Falha de canal e do aviso de encerramento nao derrubam o fluxo (a entrega e da borda; a decisao, da analise)."""
+import pytest
+
 from comum import const as const_comum
 from analise import const as const_analise
-from borda import caminho_direto, canal_app, canal_wokwi
+from borda import canal_app, canal_wokwi, entrega_push
+
+pytestmark = pytest.mark.usefixtures("pipeline")
 from comum import mensagens
 from analise import regra_queda
 from borda.sse_hub import HUB
@@ -32,8 +36,8 @@ class Fluxo:
         return r
 
 
-def _entregas(ler_confirmacoes):
-    return [(l["canal"], l["resultado"]) for l in ler_confirmacoes(1) if l["tipo"] == "push.entrega"]
+def _entregas(banco):
+    return [(l["canal"], l["resultado"]) for l in banco.tabelas["entregas_push"]]
 
 
 def _resposta_app(cli, tokens, message_id):
@@ -43,7 +47,7 @@ def _resposta_app(cli, tokens, message_id):
         "messageId": message_id}, tokens["idoso"])
 
 
-def test_canal_app_falha_e_o_wokwi_ainda_recebe_o_pedido(cli, tokens, relogio, monkeypatch, ler_confirmacoes):
+def test_canal_app_falha_e_o_wokwi_ainda_recebe_o_pedido(cli, tokens, relogio, monkeypatch, banco):
     def quebrado(user_id, msg):
         raise RuntimeError("canal app quebrado")
 
@@ -51,18 +55,18 @@ def test_canal_app_falha_e_o_wokwi_ainda_recebe_o_pedido(cli, tokens, relogio, m
     r = Fluxo(cli, tokens, relogio).provocar_queda()
 
     assert r.status_code == 200                                      # nao virou 500
-    assert _entregas(ler_confirmacoes) == [("app", "ERRO_NO_CANAL"), ("wokwi", "SEM_CANAL_ATIVO")]
+    assert _entregas(banco) == [("app", "erro"), ("wokwi", "sem_conexao")]
     (guardada,) = [m for _, m in HUB._anel[(1, canal_wokwi.CANAL)]]    # o wokwi publicou (ficou no anel)
     assert guardada["messageType"] == mensagens.TIPO_SOLICITADA
     assert (1, canal_app.CANAL) not in HUB._anel
     assert regra_queda._episodios[1].encerrado_em is None             # o episodio segue aberto
 
 
-def test_falha_ao_emitir_o_pedido_nao_da_500_em_dados(cli, tokens, relogio, monkeypatch):
+def test_falha_na_entrega_do_pedido_nao_da_500_em_dados(cli, tokens, relogio, monkeypatch):
     def quebrado(*a, **k):
-        raise RuntimeError("emitir quebrou")
+        raise RuntimeError("entrega quebrou")
 
-    monkeypatch.setattr(caminho_direto, "_entregar_comando", quebrado)
+    monkeypatch.setattr(entrega_push.EntregaPush, "_entregar", quebrado)
     assert Fluxo(cli, tokens, relogio).provocar_queda().status_code == 200
 
 
@@ -71,15 +75,15 @@ def test_estou_bem_da_200_mesmo_se_o_aviso_de_encerramento_falhar(cli, tokens, r
     (message_id,) = regra_queda._mensagens
 
     def quebrado(*a, **k):
-        raise RuntimeError("despacho quebrou")
+        raise RuntimeError("entrega quebrou")
 
-    monkeypatch.setattr(caminho_direto, "_despachar", quebrado)
+    monkeypatch.setattr(entrega_push.EntregaPush, "_entregar", quebrado)
     r = _resposta_app(cli, tokens, message_id)
     assert r.status_code == 200 and r.get_json() == {"status": "ok"}
     assert regra_queda._episodios[1].resultado == "CONFIRMADO"
 
 
-def test_canal_que_falha_no_encerramento_nao_impede_o_outro(cli, tokens, relogio, monkeypatch, ler_confirmacoes):
+def test_canal_que_falha_no_encerramento_nao_impede_o_outro(cli, tokens, relogio, monkeypatch, banco):
     Fluxo(cli, tokens, relogio).provocar_queda()
     (message_id,) = regra_queda._mensagens
 
@@ -88,8 +92,7 @@ def test_canal_que_falha_no_encerramento_nao_impede_o_outro(cli, tokens, relogio
 
     monkeypatch.setattr(canal_app, "enviar", quebrado)
     assert _resposta_app(cli, tokens, message_id).status_code == 200
-    ultimos = [(l["canal"], l["resultado"]) for l in ler_confirmacoes(1)[-2:]]
-    assert ultimos == [("app", "ERRO_NO_CANAL"), ("wokwi", "SEM_CANAL_ATIVO")]
+    assert _entregas(banco)[-2:] == [("app", "erro"), ("wokwi", "sem_conexao")]
     encerradas = [m for _, m in HUB._anel[(1, canal_wokwi.CANAL)]
                   if m["messageType"] == mensagens.TIPO_ENCERRADA]
     assert len(encerradas) == 1 and encerradas[0]["payload"]["resultado"] == "CONFIRMADO"
