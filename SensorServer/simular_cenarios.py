@@ -1,5 +1,5 @@
 """
-Roda TODOS os cenarios do roadmap do split contra o sistema real (borda + analise), ponta a ponta.
+Roda TODOS os cenarios contra o sistema real (borda + analise), ponta a ponta.
 
 Cenarios (cada um e uma lista de passos com tempo relativo; a mesma lista roda no teste sem rede, ver
 tests/_transporte.py e tests/integration/test_acoes_banco_cenarios.py):

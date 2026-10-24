@@ -1,5 +1,5 @@
 """
-Os cenarios do roadmap (simular_cenarios.py) pela borda + analise, sem Docker e sem rede.
+Os cenarios de simular_cenarios.py pela borda + analise, sem Docker e sem rede.
 
 Borda do teste (Flask test_client + banco falso): as rotas so aceitam e gravam
 (`leituras`, `respostas_dispositivo`); quem decide e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e
@@ -132,7 +132,7 @@ def test_o_pedido_chega_ao_dispositivo_dentro_do_orcamento_de_latencia(mundo, ba
 
 
 def test_o_dispositivo_responde_ao_messageId_que_recebeu(mundo, banco):
-    """O id que a borda entregou e o do banco: a analise reconhece a resposta sem nenhuma traducao (a da S3b some)."""
+    """O id que a borda entregou e o do banco: a analise reconhece a resposta sem nenhuma traducao."""
     rodar, app, _w = mundo
     rodar("queda_estou_bem")
     (pedido,) = [m for _t, m in app.recebidos if m["messageType"] == mensagens.TIPO_SOLICITADA]

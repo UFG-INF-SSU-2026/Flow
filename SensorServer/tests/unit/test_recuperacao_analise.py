@@ -1,5 +1,5 @@
 """
-S6: recuperacao da analise na subida (`LacoAnalise.recuperar_estado`) e as regras de linha antiga. Banco falso, relogio
+Recuperacao da analise na subida (`LacoAnalise.recuperar_estado`) e as regras de linha antiga. Banco falso, relogio
 explicito, ciclos sincronos. Cada teste "derruba" a analise com `Mundo.reiniciar_analise()`: o estado em memoria some, o banco fica.
 """
 import time
@@ -83,7 +83,7 @@ class TestRecuperarEstado:
         m.rel.ir_para(4 + PRAZO + 20)
         m.laco.executar_ciclo()
         assert not m.comandos(mensagens.TIPO_ENCERRADA)
-        assert m.t("episodios")[0]["estado"] == "aguardando_confirmacao"      # preso no banco: o defeito que a S6 corrige
+        assert m.t("episodios")[0]["estado"] == "aguardando_confirmacao"      # preso no banco: o defeito que a recuperacao corrige
 
     def test_episodio_que_expirou_durante_a_parada_e_encerrado_no_primeiro_ciclo(self, m):
         pedido = m.pedido_na_analise()

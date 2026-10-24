@@ -1,5 +1,5 @@
 """
-Fronteiras entre os pacotes (roadmap do split, S2): conferidas pelo codigo-fonte, sem importar nada.
+Fronteiras entre os pacotes: conferidas pelo codigo-fonte, sem importar nada.
 
   comum/    nao importa borda nem analise (nem Flask)
   analise/  nao importa borda nem Flask; so conversa com a borda pelo banco
@@ -43,7 +43,7 @@ FERRAMENTAS_NA_RAIZ = {"medir_latencia.py", "simular_queda.py", "simular_cenario
 
 
 def test_nenhum_modulo_antigo_ficou_na_raiz():
-    """Depois do S2 a raiz de SensorServer/ so tem as ferramentas. Se isto falhar, sobrou arquivo do layout antigo
+    """Depois da divisao em pacotes a raiz de SensorServer/ so tem as ferramentas. Se isto falhar, sobrou arquivo do layout antigo
     (const.py, server.py, auth.py, regra_*.py...), tipico de descompactar um zip por cima da pasta antiga: apague-os."""
     sobras = sorted(f for f in os.listdir(RAIZ) if f.endswith(".py") and f not in FERRAMENTAS_NA_RAIZ)
     assert not sobras, f"apague de SensorServer/: {', '.join(sobras)}"
@@ -78,7 +78,7 @@ def test_o_nucleo_nao_faz_io_nem_usa_threads():
 
 @pytest.mark.parametrize("arquivo", _arquivos("analise"))
 def test_a_analise_nao_le_a_variavel_de_ambiente_nem_segredo_de_transporte(arquivo):
-    """Segredos por dono (principio 6): chave AES e segredo JWT sao so da borda."""
+    """Segredos por dono: chave AES e segredo JWT sao so da borda."""
     with open(os.path.join(RAIZ, arquivo), encoding="utf-8") as f:
         texto = f.read()
     assert "FLOW_JWT_SECRET" not in texto and "crypto_utils" not in texto

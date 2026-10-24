@@ -1,5 +1,5 @@
 """
-Trava de isolamento de segredos entre os dois servicos (roadmap do split, S5; principio 6: segredos por dono).
+Trava de isolamento de segredos entre os dois servicos (segredos por dono).
 
 Cada servico tem o seu `.env`, mas o ambiente do processo tambem herda variaveis do terminal. Para o isolamento nao
 depender de disciplina, os pontos de entrada chamam `exigir_ambiente(servico)` na subida: se o ambiente trouxer um

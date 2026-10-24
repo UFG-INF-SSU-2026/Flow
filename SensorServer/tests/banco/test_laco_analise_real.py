@@ -1,4 +1,4 @@
-"""S3a contra o Postgres real: o laco le os TRES fluxos pelo papel flow_analise, avanca os cursores e as metricas
+"""O laco da analise contra o Postgres real: le os TRES fluxos pelo papel flow_analise, avanca os cursores e as metricas
 numa transacao so, respeita a regra de lacunas e NAO escreve nenhuma tabela de saida (so registra as decisoes).
 
 Espelha tests/unit/test_laco_analise.py. O relogio e injetado no laco e no repositorio (sem sleep).

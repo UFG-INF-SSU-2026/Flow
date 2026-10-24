@@ -1,5 +1,5 @@
 """
-S6: testes de caos do roadmap (secao 12, S6), cada um terminando no comportamento da secao 10. Banco falso, relogio
+Testes de caos: cada um termina no comportamento esperado sob falha (docs/arquitetura.md, secao 12). Banco falso, relogio
 explicito, ciclos sincronos: nenhum depende de Docker, thread ou espera.
 
   analise derrubada no meio de um episodio    TestAnaliseDerrubada

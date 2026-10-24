@@ -8,7 +8,7 @@ Contrato do evento (definido na Atividade 02):
     luminosidade (lux), cct (Kelvin), seq_num (contador incremental por
     dispositivo, so para esse tipo de evento).
 
-RELOGIO E ESTADO EXPLICITOS (S2a do split): esta regra nao le o relogio (a hora vem do `event_time` do proprio
+RELOGIO E ESTADO EXPLICITOS: esta regra nao le o relogio (a hora vem do `event_time` do proprio
 evento) e o estado mora num `EstadoLuz` (parametro `estado=`; sem ele vale o `PADRAO` do modulo, de que `_estados`
 e apelido).
 """

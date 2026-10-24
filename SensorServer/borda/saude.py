@@ -1,8 +1,8 @@
 """
-Saude do pipeline vista pela BORDA (roadmap do split, S6): o `/health` e os alarmes em log.
+Saude do pipeline vista pela BORDA: o `/health` e os alarmes em log.
 
 Com dois processos a borda segue aceitando dados enquanto ninguem decide queda se a analise parar. Para essa falha nao ser
-silenciosa (roadmap, secao 8: "o ponto de maior risco do corte"), a borda le a VISAO `saude_pipeline` do banco (so o papel
+silenciosa, a borda le a VISAO `saude_pipeline` do banco (so o papel
 flow_borda a le; `RepoBorda.ler_saude`) e a traduz em:
 
   atraso_leituras                   id da ultima leitura gravada menos o do cursor da analise

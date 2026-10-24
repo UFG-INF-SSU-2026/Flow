@@ -90,7 +90,7 @@ def test_mesmo_device_id_em_dois_usuarios_nao_compartilha_estado(cli, tokens, br
 
 
 def test_estado_do_device_devolve_o_usuario_atualizado_por_ultimo(cli, tokens, bridge2):
-    """DS3: /estado le o resumo gravado pela analise em `estado_dispositivo`, e o resumo so e regravado quando o ESTADO
+    """/estado le o resumo gravado pela analise em `estado_dispositivo`, e o resumo so e regravado quando o ESTADO
     muda (nao a cada leitura). Entre dois usuarios no mesmo device vale a linha atualizada por ultimo."""
     tok2 = cli.login("bridge2", "senha-bridge2", "wokwi", "bridge-dev")["access_token"]
     cli.post("/dados", _wokwi("bridge-dev", 7), tokens["dispositivo"])

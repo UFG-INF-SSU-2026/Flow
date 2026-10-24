@@ -1,5 +1,5 @@
 """
-Mundo de teste do S6 (sem fixtures): banco falso com relogio explicito, a analise que AGE e fabricas de linhas.
+Mundo de teste (sem fixtures): banco falso com relogio explicito, a analise que AGE e fabricas de linhas.
 
 `Mundo.reiniciar_analise()` faz o papel de "derrubar a analise e subir outra": o processo e o estado em memoria somem (um
 `LacoAnalise` novo), o banco fica. Ciclos sao SINCRONOS (`executar_ciclo`): nenhum teste daqui depende de thread nem de espera.

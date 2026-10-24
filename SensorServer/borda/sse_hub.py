@@ -78,7 +78,7 @@ class Hub:
         return entregues
 
     def fechar_todas(self) -> int:
-        """Desligamento ordenado (S5): encerra todos os streams. O cliente reconecta (Last-Event-ID) quando a borda
+        """Desligamento ordenado: encerra todos os streams. O cliente reconecta (Last-Event-ID) quando a borda
         voltar. Devolve quantas conexoes foram fechadas."""
         with self._lock:
             conns = [c for por_device in self._conns.values() for c in por_device.values()]

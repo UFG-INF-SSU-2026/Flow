@@ -1,4 +1,4 @@
-"""S5 (dois processos): ambiente por servico, trava de isolamento, borda sem a analise, desligamento ordenado."""
+"""Dois processos: ambiente por servico, trava de isolamento, borda sem a analise, desligamento ordenado."""
 import ast
 import glob
 import os

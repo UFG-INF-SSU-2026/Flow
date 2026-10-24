@@ -60,10 +60,10 @@ Caminho de volta (servidor -> dispositivo), tambem do Marco 3. A borda NAO decid
     3. O dispositivo responde com POST /eventos: "push.ack" (ativou ou rejeitou o push) e "confirmacao.resposta"
        (ESTOU_BEM ou SEM_RESPOSTA). A borda valida o evento e o grava em `respostas_dispositivo`, com a identidade vinda do
        TOKEN (nunca do corpo). Quem associa a messageId ao episodio e, se for ESTOU_BEM de um episodio aberto, o encerra e
-       a analise (DS1).
+       a analise.
     4. O vigia da analise encerra por expiracao os episodios que ninguem respondeu. Todo encerramento (resposta ou
        expiracao) vira um comando "queda.confirmacao_encerrada", entregue pelos canais como os demais.
-    5. GET /estado/<device_id> le o resumo que a analise grava em `estado_dispositivo` (DS3) e GET /health acusa quando a
+    5. GET /estado/<device_id> le o resumo que a analise grava em `estado_dispositivo` e GET /health acusa quando a
        analise para de decidir (batimento velho ou atraso, borda/saude.py).
 
 Como rodar (a partir de SensorServer/; scripts/ faz tudo na ordem certa):
@@ -124,7 +124,7 @@ _registros_recentes: list[dict] = []
 # respostas, confirmacoes, auditoria, estado) passam por repositorios.tentar_*: falha vai para o log, nunca vira 500.
 # ---------------------------------------------------------------------------
 _fila_lock = threading.Lock()
-_parar_flush = threading.Event()          # S5: pede o fim da thread de descarga (encerrar())
+_parar_flush = threading.Event()          # pede o fim da thread de descarga (encerrar())
 _thread_flush: threading.Thread | None = None
 _fila_leituras: list[dict] = []
 _descartes_leituras = 0
@@ -263,7 +263,7 @@ def _flush_loop() -> None:
     leituras em lote; a cada const_borda.JANELA_AGREGACAO_S grava tambem uma linha por usuario que recebeu dado
     (de app e/ou wokwi) na janela (telemetria agregada, como antes)."""
     ultima_janela = time.monotonic()
-    while not _parar_flush.wait(const_borda.INTERVALO_DESCARGA_S):    # S5: o desligamento acorda e encerra a thread
+    while not _parar_flush.wait(const_borda.INTERVALO_DESCARGA_S):    # o desligamento acorda e encerra a thread
         try:
             _descarregar_leituras()
         except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
@@ -285,7 +285,7 @@ _monitor: "saude.MonitorSaude | None" = None
 
 
 def _monitor_saude() -> "saude.MonitorSaude":
-    """O monitor de saude do pipeline (S6), criado na primeira necessidade (a rota /health ou a subida das threads)."""
+    """O monitor de saude do pipeline, criado na primeira necessidade (a rota /health ou a subida das threads)."""
     global _monitor
     if _monitor is None:
         _monitor = saude.MonitorSaude(estatisticas=_estatisticas_borda)
@@ -485,7 +485,7 @@ def obter_estado_imobilidade(device_id):
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Disponibilidade da borda (`status`, como sempre) e, desde a S6, o estado do pipeline: se a analise esta decidindo
+    """Disponibilidade da borda (`status`, como sempre) e o estado do pipeline: se a analise esta decidindo
     (batimento e atraso lidos do banco) e os contadores locais da fila de leituras. Sempre 200: a borda esta de pe mesmo
     com a analise parada; quem monitora olha `pipeline.estado` (borda/saude.py)."""
     return jsonify({"status": "ok", **_monitor_saude().corpo()})
@@ -517,7 +517,7 @@ def iniciar_threads() -> None:
         _thread_flush = threading.Thread(target=_flush_loop, name="flow-flush", daemon=True)
         _thread_flush.start()
         via_banco.iniciar()
-        _monitor_saude().iniciar()     # S6: alarmes em log (atraso, batimento velho, descartes)
+        _monitor_saude().iniciar()     # alarmes em log (atraso, batimento velho, descartes)
         _threads_iniciadas = True
 
 
@@ -537,7 +537,7 @@ def _descarga_final(prazo_s: float) -> int:
 
 
 def encerrar(prazo_s: float | None = None) -> None:
-    """DESLIGAMENTO ORDENADO da borda (S5). Chamado por borda/servico.py depois de parar de aceitar conexoes:
+    """DESLIGAMENTO ORDENADO da borda. Chamado por borda/servico.py depois de parar de aceitar conexoes:
     1. para a thread de descarga (para a descarga final ter uma unica escritora) e o pipeline (entrega em curso termina);
     2. encerra os streams SSE (os clientes reconectam quando a borda voltar);
     3. descarrega o que restou da fila de leituras e do buffer de agregacao;

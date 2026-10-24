@@ -1,4 +1,4 @@
-"""python -m borda  ->  a BORDA como processo proprio (S5). Ver borda/servico.py.
+"""python -m borda  ->  a BORDA como processo proprio. Ver borda/servico.py.
 
 A variavel abaixo precisa existir ANTES de qualquer outro import do projeto: comum/const.py escolhe o arquivo de
 ambiente (.env.borda) por FLOW_SERVICO."""

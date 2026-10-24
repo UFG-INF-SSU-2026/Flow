@@ -108,23 +108,23 @@ HORA_FIM_NOITE = 6
 LEITURAS_CONSECUTIVAS_PARA_ALERTA = 3
 
 # ===========================================================================
-# 5. LACO DA ANALISE POR CURSOR (S3 e S4 do split)
+# 5. LACO DA ANALISE POR CURSOR
 # ===========================================================================
 
-# Espera (s) entre dois ciclos de leitura. E uma das tres esperas do orcamento de latencia (secao 9 do roadmap): o pior
+# Espera (s) entre dois ciclos de leitura. E uma das tres esperas do orcamento de latencia (ORCAMENTO_LATENCIA_S): o pior
 # caso soma esta espera. Se ainda houver dado para ler (lote cheio), o laco nao espera. O vigia de episodios e um passo
 # de cada ciclo, entao o atraso maximo entre o prazo do servidor e o encerramento EXPIRADO e esta espera (mais ATRASO_VIGIA_S).
 INTERVALO_LEITURA_S = 0.25
 
 # Idade (s), contada do instante da ingestao, acima da qual uma leitura ou resposta so RECONSTROI o estado das regras
-# e nao pode disparar acao (principio 4: agir apenas sobre o recente). Evita alertar com dado velho ao reprocessar
+# e nao pode disparar acao (agir apenas sobre o recente). Evita alertar com dado velho ao reprocessar
 # apos uma parada. A decisao sobre linha antiga sai marcada como "reconstrucao" e e contada nas metricas.
 # Valor inicial, a calibrar.
 IDADE_MAX_ACAO_S = 30
 
 # O vigia do laco usa o relogio real MENOS este atraso (s). Cobre o dado ainda em transito (descarga da borda +
 # leitura da analise) para nao expirar um episodio cuja resposta ja chegou, mas ainda nao foi lida. Igual a soma
-# das duas esperas que antecedem a analise (roadmap, secao 9).
+# das duas esperas que antecedem a analise (ver ORCAMENTO_LATENCIA_S).
 ATRASO_VIGIA_S = 0.5
 
 # Falha repetida do laco (banco fora do ar, por exemplo): no maximo uma linha de log neste intervalo (s).
@@ -137,19 +137,19 @@ VERSAO_CODIGO = "ensaio"
 # Idem, quando a analise AGE (`python -m analise`): grava comandos, alertas, confirmacoes, episodios e estado.
 VERSAO_CODIGO_ACOES = "split-1"
 
-# Orcamento de latencia do roadmap (secao 9: 3 esperas de 250 ms): quanto a cadeia borda -> banco -> analise -> banco ->
+# Orcamento de latencia (3 esperas de 250 ms): quanto a cadeia borda -> banco -> analise -> banco ->
 # borda pode acrescentar a deteccao e ao envio do push. E a regua de `medir_latencia.py` e dos testes de cenario.
 ORCAMENTO_LATENCIA_S = 0.75
 
 # ===========================================================================
-# 6. DESLIGAMENTO ORDENADO (S5 do split)
+# 6. DESLIGAMENTO ORDENADO
 # ===========================================================================
 
 # Desligamento ordenado da analise (`python -m analise`): tempo maximo (s) para o ciclo em curso chegar ao commit do cursor.
 PRAZO_ENCERRAMENTO_ANALISE_S = 10
 
 # ===========================================================================
-# 7. OBSERVABILIDADE E RESILIENCIA (S6 do split)
+# 7. OBSERVABILIDADE E RESILIENCIA
 # ===========================================================================
 
 # Recuperacao na subida: a analise reconstroi o estado das janelas das regras relendo as leituras dos ULTIMOS
@@ -162,7 +162,7 @@ JANELA_REPROCESSAMENTO_S = 30
 # Teto de leituras relidas na recuperacao (as mais recentes ate o cursor). Protege a memoria se a janela tiver muito dado.
 LIMITE_REPROCESSAMENTO = 5_000
 
-# FLOW_RECUPERAR_ESTADO=0 desliga a recuperacao na subida (volta ao comportamento da S5: estado das regras vazio).
+# FLOW_RECUPERAR_ESTADO=0 desliga a recuperacao na subida (estado das regras comeca vazio).
 RECUPERAR_AO_INICIAR = os.environ.get("FLOW_RECUPERAR_ESTADO", "1") != "0"
 
 # Alarme de atraso: se a leitura mais antiga de um ciclo ja tem mais que isto (s) ao ser lida, a analise esta atrasada

@@ -74,7 +74,7 @@ Módulos do servidor (pacotes em `SensorServer/`; o servidor roda em dois proces
 | `analise/const.py` | Constantes da análise (limiares, janelas, cooldown, retenções, período do vigia). Ver 14. |
 | **`comum/`** | Só o que os dois lados partilham: constantes comuns e carregador do `.env` (`const.py`), carregador e validador dos contratos (`schemas.py`, `contratos.py`) e o contrato da mensagem de push (`mensagens.py`: criação, validade, recálculo no replay). |
 | **`flow_db/`** | Banco: conexão, migrações, papéis, interfaces e implementações de acesso (borda e análise) e `repositorios.py` (disjuntor e pools dos dois lados). CLI: `python -m flow_db`. |
-| `simular_queda.py`, `simular_cenarios.py`, `medir_latencia.py` | Utilitários (fora do servidor; exigem borda e análise rodando): simulam um wokwi que sofre impacto e fica imóvel / rodam os cenários do roadmap de ponta a ponta / medem a latência do push. |
+| `simular_queda.py`, `simular_cenarios.py`, `medir_latencia.py` | Utilitários (fora do servidor; exigem borda e análise rodando): simulam um wokwi que sofre impacto e fica imóvel / rodam os cenários de ponta a ponta / medem a latência do push. |
 | `tests/` | Suíte pytest (`unit/` e `integration/`); ver 14.1. |
 
 Dependências: a **borda** não importa a análise e a **análise** não importa a borda (só conversam pelo banco); `comum/` e `flow_db/` não importam nenhum dos dois (conferido por `tests/unit/test_fronteiras.py`). `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; o `nucleo.py` monta a mensagem e a `borda/entrega_push.py` entrega). `nucleo.py` importa as regras, `comum.mensagens` e `comum.contratos` (a mesma validação estrutural da borda); nenhuma regra importa o núcleo; `auth` não conhece Flask. Os três `const` (`comum`, `borda`, `analise`) são módulos folha (só o comum lê o `.env`; os outros dois importam o comum apenas para que ele já esteja carregado), e os demais fazem `from <pacote> import const as const_<pacote>` e leem `const_<pacote>.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
@@ -602,7 +602,7 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | --- | --- | --- |
 | `FLOW_JWT_SECRET` | `SensorServer/.env` ou ambiente | Obrigatório; ≥ 32 bytes. |
 | `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | `SensorServer/.env` ou ambiente | Opcionais; padrão `contas.json`, `sessoes.json`. |
-| `.env.borda`, `.env.analise` | `SensorServer/` | S5: um arquivo por serviço (modelos `.example`); o `.env` fica só administrativo. Cada serviço recusa segredo de outro dono no ambiente (`comum/isolamento.py`). |
+| `.env.borda`, `.env.analise` | `SensorServer/` | Um arquivo por serviço (modelos `.example`); o `.env` fica só administrativo. Cada serviço recusa segredo de outro dono no ambiente (`comum/isolamento.py`). |
 | `FLOW_DB_FAKE` | ambiente (testes/dev) | `1` usa o banco falso em memória; só com `python -m borda.server` e a suíte. `python -m borda` e `python -m analise` o recusam. |
 | `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de fundo da borda (flush, entrega e saúde) e a exigência do segredo na subida; usado pela suíte de testes. |
 | `FLOW_SENHA` | ambiente da CLI `borda/auth.py` | Opcional; senha sem prompt ao criar contas. |
@@ -644,10 +644,10 @@ Itens abstratos que **não** são elementos novos do sistema (esses estão em 2.
 - **Segurança de transporte:** TLS e chave por dispositivo (13.2).
 - **Calibração da detecção de queda** com dados reais (9.4).
 
-### 15.1 Pendências registradas (fora do split)
+### 15.1 Pendências registradas
 
-- **Serviço de notificação aos cuidadores:** consumiria `alertas` e `confirmacoes` do banco como terceiro serviço (papel de banco próprio); o split deixou o contrato pronto, sem o serviço.
-- **HTTPS (seção 17 do roadmap):** a borda continua em HTTP; TLS fica para a fase de produção (13.2).
+- **Serviço de notificação aos cuidadores:** consumiria `alertas` e `confirmacoes` do banco como terceiro serviço (papel de banco próprio); a separação entre borda e análise deixou o contrato pronto, sem o serviço.
+- **HTTPS:** a borda continua em HTTP; TLS fica para a fase de produção (13.2).
 - **Chave AES por dispositivo:** hoje fixa e compartilhada (13.2).
 - **Modo "ensaio" da análise** (`LacoAnalise(agir=False)`): mantido de propósito, útil para reprocessar sem agir; não é usado em produção.
 - **Parte 2 do banco (B2.x):** retenção, backup, remoção da tabela `telemetria` (`FLOW_GRAVAR_TELEMETRIA_LEGADO`), dos arquivos de transição (`FLOW_GRAVAR_ARQUIVOS`) e da auditoria em arquivo; migração das contas/sessões de `contas.json`/`sessoes.json` para as tabelas. Esta entrega não muda nada disso.

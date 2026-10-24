@@ -14,7 +14,7 @@ separacao validar_evento / eh_duplicado / avaliar-e-atuar), para que as
 duas regras do servidor sigam o mesmo padrao e fiquem faceis de explicar
 lado a lado na verificacao oral.
 
-RELOGIO E ESTADO EXPLICITOS (S2a do split): `processar_evento` recebe o instante (`agora`, segundos desde a epoca)
+RELOGIO E ESTADO EXPLICITOS: `processar_evento` recebe o instante (`agora`, segundos desde a epoca)
 em vez de ler o relogio, e o estado mora num `EstadoImobilidade` (parametro `estado=`; sem ele vale o `PADRAO` do
 modulo, de que `_estados` e apelido). O nucleo (nucleo.py) sempre passa os dois.
 """

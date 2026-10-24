@@ -1,5 +1,5 @@
 """
-Entrega do push (roadmap do split, S4/S7): a BORDA le `comandos_push` por cursor, entrega por SSE e grava
+Entrega do push: a BORDA le `comandos_push` por cursor, entrega por SSE e grava
 `entregas_push` e o cursor da borda (`cursor_borda`). E o unico caminho do push: a analise decide e grava o comando, e
 quem fala com os dispositivos e a borda.
 

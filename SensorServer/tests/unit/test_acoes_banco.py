@@ -1,6 +1,6 @@
 """
-S4 do split: a analise que AGE pelo banco, a entrega de push da borda por cursor e o pipeline da borda (via_banco).
-Banco falso (sem Docker), relogio explicito e ciclos SINCRONOS. A prova ponta a ponta (os cenarios do roadmap pelo
+A analise que AGE pelo banco, a entrega de push da borda por cursor e o pipeline da borda (via_banco).
+Banco falso (sem Docker), relogio explicito e ciclos SINCRONOS. A prova ponta a ponta (os cenarios de simular_cenarios.py pelo
 banco, com as rotas reais) esta em tests/integration/test_acoes_banco_cenarios.py.
 """
 import threading
@@ -179,7 +179,7 @@ class TestLacoAgindo:
         with pytest.raises(ConnectionError):
             m.laco.executar_ciclo()
         assert all(not m.t(t) for t in ("comandos_push", "episodios", "confirmacoes", "estado_dispositivo"))
-        assert m.bd.cursor_analise["ultimo_leitura_id"] == 0           # o cursor tambem foi desfeito (DS5)
+        assert m.bd.cursor_analise["ultimo_leitura_id"] == 0           # o cursor tambem foi desfeito
 
         estado["falhar"] = False
         m.laco.executar_ciclo()

@@ -1,5 +1,5 @@
 """
-nucleo: "processar este lote com este relogio e este estado" (S2a do roadmap do split).
+nucleo: "processar este lote com este relogio e este estado".
 
 Sem Flask, sem thread, sem banco e sem sleep: cada leitura traz o seu instante (`em(t)`), e o nucleo e quem
 decide. Os efeitos (arquivo, banco, push) so acontecem no laco da analise (efeitos.aplicar_na_transacao).

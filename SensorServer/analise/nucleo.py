@@ -1,5 +1,5 @@
 """
-Nucleo das regras (roadmap do split, S2): "processar este lote com este relogio e este estado".
+Nucleo das regras: "processar este lote com este relogio e este estado".
 
 Entra: leituras e respostas de dispositivo, cada uma com o seu INSTANTE DE INGESTAO (o `instante_ingestao` que a
 borda grava em `leituras` / `respostas_dispositivo`), e o `EstadoRegras` de quem esta processando.
@@ -75,7 +75,7 @@ class Leitura:
 class Resposta:
     """Uma resposta de dispositivo (a linha de `respostas_dispositivo`): o evento JA normalizado por
     `borda.validacao.validar_evento_retorno` ({eventType, state, messageId, device_id, source}). A identidade
-    (`user_id`, `device_id`) vem do token, nunca do corpo (DS1)."""
+    (`user_id`, `device_id`) vem do token, nunca do corpo."""
     instante: datetime          # instante_ingestao (UTC)
     user_id: int
     device_id: str | None
@@ -114,8 +114,8 @@ class MudancaEpisodio:
 
 @dataclass(frozen=True)
 class Comando:
-    """Mensagem de push a entregar (linha de `comandos_push`), com a mudanca de episodio que vai na MESMA transacao
-    (DS5/DS6). O `message_id` e gerado aqui, pelo nucleo (DS2)."""
+    """Mensagem de push a entregar (linha de `comandos_push`), com a mudanca de episodio que vai na MESMA transacao.
+    O `message_id` e gerado aqui, pelo nucleo."""
     user_id: int
     device_id: str | None       # dispositivo que originou o episodio (informativo)
     mensagem: dict              # contrato push-mensagem
@@ -320,7 +320,7 @@ def _regra_de_imobilidade(estado: EstadoRegras, leitura: Leitura, payload: dict,
 
 
 def _resumo_de_estado(estado: EstadoRegras, leitura: Leitura, d: Decisoes) -> None:
-    """Resumo do estado de imobilidade do dispositivo (DS3). Nunca levanta: um resumo perdido nao vale uma leitura."""
+    """Resumo do estado de imobilidade do dispositivo. Nunca levanta: um resumo perdido nao vale uma leitura."""
     try:
         resumo = regra_imobilidade.obter_estado(leitura.device_id, estado=estado.imobilidade)
         if resumo is None or resumo.get("user_id") != leitura.user_id:
@@ -383,7 +383,7 @@ def processar_leitura(estado: EstadoRegras, leitura: Leitura) -> Decisoes:
 
 def processar_resposta(estado: EstadoRegras, resposta: Resposta) -> Decisoes:
     """Resposta de dispositivo (push.ack, confirmacao.resposta) -> decisoes. Correlaciona por `messageId` e, se for
-    ESTOU_BEM de um episodio aberto, encerra como CONFIRMADO. A resposta de outro usuario nao encerra nada (DS1)."""
+    ESTOU_BEM de um episodio aberto, encerra como CONFIRMADO. A resposta de outro usuario nao encerra nada."""
     d = Decisoes()
     with regra_queda.coletar_registros() as anotados:
         try:

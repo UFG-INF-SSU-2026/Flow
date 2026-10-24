@@ -1,7 +1,7 @@
 """
 Um ciclo da analise: ler o lote, produzir as saidas e avancar o cursor NUMA transacao so (item 3.6 do roadmap).
 
-Sem Flask; usa so a interface RepoAnalise (banco real ou falso). E o ponto de integracao do split.
+Sem Flask; usa so a interface RepoAnalise (banco real ou falso). E o ponto de integracao entre a analise e o banco.
 
 Garantias:
   - excecao em `processar` desfaz as saidas E o cursor; o proximo ciclo reprocessa o mesmo lote;
@@ -46,7 +46,7 @@ def processar_lote(repo: RepoAnalise, processar: Callable[[RepoAnalise, list[dic
 
 
 # ---------------------------------------------------------------------------
-# Ciclo de TRES fluxos (S3a do split): leituras, respostas_dispositivo e entregas_push numa transacao so.
+# Ciclo de TRES fluxos: leituras, respostas_dispositivo e entregas_push numa transacao so.
 # ---------------------------------------------------------------------------
 @dataclass
 class Lote:

@@ -334,7 +334,7 @@ Contas continuam sendo da borda: `python -m borda.auth criar-conta` (o `contas.j
 cursor; a borda para de aceitar, para a entrega, fecha os streams SSE (os clientes reconectam), descarrega a fila de
 leituras e o buffer e fecha o pool. Reiniciar a análise não desconecta ninguém; reiniciar a borda não perde o estado da análise.
 
-**4. O que ficou para depois.** Não fazem parte do split e estão registrados em `docs/arquitetura.md` (seção 15.1): o serviço de notificação aos cuidadores, o HTTPS (seção 17 do roadmap) e a chave AES por dispositivo. A
+**4. O que ficou para depois.** Ficam fora desta entrega e estão registrados em `docs/arquitetura.md` (seção 15.1): o serviço de notificação aos cuidadores, o HTTPS e a chave AES por dispositivo. A
 persistência (retenção, backup, remoção da tabela `telemetria` e dos arquivos de transição) é a parte 2 do banco (B2.x).
 
 **Observações de operação.**

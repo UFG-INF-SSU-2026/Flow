@@ -1,7 +1,7 @@
 """
 Constantes COMUNS do SensorServer: so o que a borda E a analise precisam enxergar igual, mais o carregador do .env.
 
-Divisao da configuracao (roadmap do split, principio 8):
+Divisao da configuracao:
   comum/const.py     (este)  pasta de dados, fontes, versoes dos contratos, prazos do push, pausa do banco
   borda/const.py             rede, autenticacao, auditoria, SSE, descarga de leituras
   analise/const.py           limiares e prazos das regras (queda, imobilidade, luz) e o periodo do vigia
@@ -39,7 +39,7 @@ def _carregar_dotenv(caminho: Path) -> bool:
     return load_dotenv(caminho, override=False, interpolate=False, encoding="utf-8-sig")
 
 
-# Servico que este processo e (S5). Os pontos de entrada `python -m borda` e `python -m analise` definem FLOW_SERVICO
+# Servico que este processo e. Os pontos de entrada `python -m borda` e `python -m analise` definem FLOW_SERVICO
 # ANTES de importar qualquer modulo do projeto; cada servico le SO o seu arquivo de ambiente e nenhum le o `.env`
 # administrativo (migracoes, provisionamento e compose). Vazio = ferramentas e modo de desenvolvimento
 # (`python -m borda.server`, simuladores, `python -m flow_db`): le o `.env` de sempre.

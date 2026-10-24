@@ -135,10 +135,10 @@ TAMANHO_LOTE_LEITURAS = 500
 MAX_FILA_LEITURAS = 20_000
 
 # ===========================================================================
-# 6. ENTREGA DE PUSH PELO BANCO (S4 do split)
+# 6. ENTREGA DE PUSH PELO BANCO
 # ===========================================================================
 
-# Espera (s) entre dois ciclos de leitura de `comandos_push`: a terceira espera do orcamento de latencia (roadmap, secao 9).
+# Espera (s) entre dois ciclos de leitura de `comandos_push`: a terceira espera do orcamento de latencia (ver analise/const.py, ORCAMENTO_LATENCIA_S).
 # Se o lote veio cheio a borda nao espera.
 INTERVALO_LEITURA_COMANDOS_S = 0.25
 
@@ -153,14 +153,14 @@ JANELA_COMANDOS_S = 60
 INTERVALO_LOG_FALHA_ENTREGA_S = 10
 
 # ===========================================================================
-# 7. DESLIGAMENTO ORDENADO (S5 do split)
+# 7. DESLIGAMENTO ORDENADO
 # ===========================================================================
 
 # Desligamento ordenado: tempo maximo (s) para a descarga final das leituras e para as threads terminarem.
 PRAZO_ENCERRAMENTO_S = 10
 
 # ===========================================================================
-# 8. OBSERVABILIDADE: /health E ALARMES (S6 do split)
+# 8. OBSERVABILIDADE: /health E ALARMES
 # ===========================================================================
 
 # O /health acusa o pipeline "degradado" quando a analise passa deste tempo (s) sem renovar o batimento em
@@ -172,7 +172,7 @@ LIMIAR_BATIMENTO_ANALISE_S = _numero_do_ambiente("FLOW_LIMIAR_BATIMENTO_S", 5.0)
 # Atraso (em leituras, id da ultima leitura gravada menos o do cursor da analise) a partir do qual o /health acusa
 # "degradado". O valor inicial equivale a cerca de 30 s de duas fontes a 1 leitura/s: acima disso a analise ja esta
 # descartando acoes por idade (analise/const.py, IDADE_MAX_ACAO_S). ENTRADA DA RETENCAO DO BANCO (parte 2, B2.4): o
-# limiar de atraso e o que a retencao das tabelas precisa superar com folga. A calibrar com a medicao da S6.
+# limiar de atraso e o que a retencao das tabelas precisa superar com folga. A calibrar com medicao.
 # FLOW_LIMIAR_ATRASO_LEITURAS ajusta.
 LIMIAR_ATRASO_LEITURAS = _numero_do_ambiente("FLOW_LIMIAR_ATRASO_LEITURAS", 60)
 

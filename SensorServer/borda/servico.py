@@ -1,5 +1,5 @@
 """
-A BORDA como processo proprio (roadmap do split, S5): `python -m borda` (a partir de SensorServer/).
+A BORDA como processo proprio: `python -m borda` (a partir de SensorServer/).
 
 Unico processo com porta de rede, com a chave AES, o segredo JWT e as contas. Le SO o `.env.borda` e o papel de banco
 flow_borda; nao importa a analise (conferido por tests/unit/test_fronteiras.py e tests/unit/test_dois_processos.py).

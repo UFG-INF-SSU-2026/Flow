@@ -1,13 +1,11 @@
 """
-Validacao ESTRUTURAL da borda (DS4 do roadmap do split): a unica porta de entrada dos dados dos dispositivos.
+Validacao ESTRUTURAL da borda: a unica porta de entrada dos dados dos dispositivos.
 
 Usa os contratos de schemas/ (via comum.contratos). Confere forma, tipos e vocabulario; NAO decide nada de negocio
 (faixa fisica, sentinelas, plausibilidade ficam nas regras, que na analise toleram campos e versoes desconhecidos).
 
 O comportamento externo e o de sempre: corpo malformado -> 400 (CorpoInvalido); conteudo invalido de requisicao ja
 autenticada -> o chamador descarta e responde 200. Nenhuma mensagem de erro daqui contem o conteudo recebido.
-
-Este modulo vai para borda/ na reorganizacao da etapa S2.
 """
 from comum import const as const_comum
 from comum import contratos

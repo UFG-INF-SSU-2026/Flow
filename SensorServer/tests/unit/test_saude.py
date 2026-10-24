@@ -1,5 +1,5 @@
 """
-S6: saude do pipeline (`borda/saude.py`) e o /health da borda. Sem Docker: banco falso e relogio explicito.
+Saude do pipeline (`borda/saude.py`) e o /health da borda. Sem Docker: banco falso e relogio explicito.
 
 Cobre a classificacao pelos limiares, o monitor (cache, alarmes em log, thread) e a rota, que continua respondendo 200 com
 `status: ok` e so acrescenta `pipeline` e `borda`.

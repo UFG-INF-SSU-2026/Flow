@@ -1,11 +1,11 @@
 """
-Pipeline da BORDA (roadmap do split, S5/S7): a borda nao decide e nao conhece a analise; o banco e o unico elo.
+Pipeline da BORDA: a borda nao decide e nao conhece a analise; o banco e o unico elo.
 
 E o que `borda/server.py` usa para tudo que depende da analise. A leitura ja foi para a fila de descarga e a resposta do
 dispositivo ja foi gravada em `respostas_dispositivo` pela propria rota: quem decide e o OUTRO processo
 (`python -m analise`), que grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e `estado_dispositivo`.
 
-    estado_do_dispositivo(id)   le `estado_dispositivo` (DS3), onde a analise grava o resumo
+    estado_do_dispositivo(id)   le `estado_dispositivo`, onde a analise grava o resumo
     iniciar()                   sobe a thread que le `comandos_push` por cursor e entrega por SSE
     parar()                     desligamento ordenado: o ciclo de entrega em curso termina
 

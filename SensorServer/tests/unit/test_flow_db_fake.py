@@ -196,7 +196,7 @@ class TestSaudeEAuditoria:
 
 
 class TestLeiturasDaRecuperacao:
-    """S6: o mesmo contrato que tests/banco/test_contrato_repos.py confere no Postgres real."""
+    """O mesmo contrato que tests/banco/test_contrato_repos.py confere no Postgres real."""
 
     def test_leituras_recentes_ate_o_cursor_as_mais_recentes_em_ordem_de_id(self, borda, analise):
         borda.gravar_leituras([leitura(seg=i * 10) for i in range(5)])

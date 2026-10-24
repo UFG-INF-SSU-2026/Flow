@@ -1,17 +1,17 @@
 """
-S0 do split: mede, ponta a ponta, quanto o servidor leva para empurrar o pedido de confirmacao depois do gatilho.
-E a REGUA do orcamento de latencia (roadmap do split, secoes 9 e S6): rode ANTES do split (linha de base) e depois de
-cada etapa que mexa no caminho dos dados.
+Mede, ponta a ponta, quanto o servidor leva para empurrar o pedido de confirmacao depois do gatilho.
+E a REGUA do orcamento de latencia: rode ANTES de uma mudanca que mexa no caminho dos dados (linha de base) e depois
+dela.
 
 Faz login como o bridge (conta 'dispositivo', fonte wokwi), abre o SSE /push/wokwi e repete N rodadas de:
   - queda:        2 leituras normais, IMPACTO, repouso. Tempo = envio do impacto ate o push chegar.
   - imobilidade:  1 decisao ALERTA_IMOBILIDADE (gatilho B). Tempo = envio da decisao ate o push chegar.
 Entre rodadas espera o episodio expirar e o cooldown passar (const_analise.COOLDOWN_S): por isso cada rodada leva ~1 min.
 
-S6: com a linha de base da S0 (as medianas medidas ANTES do split) o script diz se o split coube no orcamento do roadmap
-(secao 9: const_analise.ORCAMENTO_LATENCIA_S, 3 esperas de 250 ms). Informe as medianas da S0 em segundos:
+Com a linha de base (as medianas medidas ANTES da mudanca) o script diz se a mudanca coube no orcamento de latencia
+(const_analise.ORCAMENTO_LATENCIA_S, 3 esperas de 250 ms). Informe as medianas da linha de base em segundos:
     FLOW_LATENCIA_BASE_QUEDA_S=<mediana da queda>  FLOW_LATENCIA_BASE_IMOB_S=<mediana da imobilidade>
-O veredito compara o PIOR CASO medido com a base mais o orcamento. Fora do orcamento: o roadmap manda avaliar
+O veredito compara o PIOR CASO medido com a base mais o orcamento. Fora do orcamento: vale avaliar
 LISTEN/NOTIFY, so como complemento ao cursor. Sem a base, o script so imprime os tempos.
 
 Uso (na pasta SensorServer, com o servidor rodando; a borda e a analise sobem por `python -m borda` e `python -m analise`):
@@ -131,7 +131,7 @@ def resumo(nome, medidas):
 
 
 def base_da_s0(nome: str) -> float | None:
-    """Mediana medida na S0 (variavel de ambiente `nome`, em segundos), ou None se nao informada."""
+    """Mediana da linha de base (variavel de ambiente `nome`, em segundos), ou None se nao informada."""
     bruto = os.environ.get(nome)
     if not bruto:
         return None
@@ -142,7 +142,7 @@ def base_da_s0(nome: str) -> float | None:
 
 
 def veredito(nome, medidas, base):
-    """Compara o pior caso medido com `base` + orcamento de latencia (roadmap, secao 9). Imprime e devolve True (cabe),
+    """Compara o pior caso medido com `base` + orcamento de latencia. Imprime e devolve True (cabe),
     False (nao cabe) ou None (sem base ou sem medida)."""
     ok = [m for m in medidas if m is not None]
     if base is None or not ok:
@@ -150,7 +150,7 @@ def veredito(nome, medidas, base):
     orcamento = const_analise.ORCAMENTO_LATENCIA_S
     acrescimo_mediano, acrescimo_pior = statistics.median(ok) - base, max(ok) - base
     cabe = acrescimo_pior <= orcamento
-    print(f"  {nome}: base S0 {base:.2f}s; acrescimo mediano {acrescimo_mediano:+.2f}s, pior caso {acrescimo_pior:+.2f}s "
+    print(f"  {nome}: base {base:.2f}s; acrescimo mediano {acrescimo_mediano:+.2f}s, pior caso {acrescimo_pior:+.2f}s "
           f"(orcamento {orcamento:.2f}s) -> {'DENTRO do orcamento' if cabe else 'FORA do orcamento'}")
     return cabe
 
@@ -179,11 +179,10 @@ def main():
     vereditos = [veredito("queda", queda, base_da_s0("FLOW_LATENCIA_BASE_QUEDA_S")),
                  veredito("imobilidade", imob, base_da_s0("FLOW_LATENCIA_BASE_IMOB_S"))]
     if any(v is False for v in vereditos):
-        print("\nO split nao coube no orcamento: avalie LISTEN/NOTIFY como COMPLEMENTO ao cursor (nunca no lugar dele), "
-              "roadmap secao 9.")
+        print("\nA mudanca nao coube no orcamento: avalie LISTEN/NOTIFY como COMPLEMENTO ao cursor (nunca no lugar dele).")
     elif all(v is None for v in vereditos):
-        print("\nSem a base da S0 nao ha veredito (FLOW_LATENCIA_BASE_QUEDA_S e FLOW_LATENCIA_BASE_IMOB_S).")
-    print("\nAnote estes numeros em docs/split-linha-de-base.md.")
+        print("\nSem a linha de base nao ha veredito (FLOW_LATENCIA_BASE_QUEDA_S e FLOW_LATENCIA_BASE_IMOB_S).")
+    print("\nAnote estes numeros: eles sao a linha de base da proxima comparacao.")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """
 Relogio do ponto de ENTRADA do sistema (modulo folha: nao importa nada do projeto).
 
-Roadmap do split, principio 3: as regras nao leem o relogio; recebem o instante como argumento. Quem le o relogio
+As regras nao leem o relogio; recebem o instante como argumento. Quem le o relogio
 e so quem esta na borda do fluxo:
 
   - a borda, UMA vez por requisicao, ao aceitar o dado (esse e o `instante_ingestao` gravado em `leituras` e

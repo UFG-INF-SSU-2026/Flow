@@ -1,10 +1,10 @@
 """
-Laco da analise por cursor (S3a do split). Banco falso (sem Docker), relogio explicito e ciclos SINCRONOS
+Laco da analise por cursor. Banco falso (sem Docker), relogio explicito e ciclos SINCRONOS
 (`executar_ciclo`): so o teste da thread espera de verdade.
 
 Cobre: conversao das linhas, os tres cursores e o batimento, a transacao unica, lacuna de id, leitura malformada,
 falha numa regra, "so registra" (nenhuma tabela de saida escrita), estado proprio (nao o PADRAO), idade
-maxima, vigia, ownership da resposta (DS1) e a thread (inicia, para, sobrevive a falha do banco sem inundar o log).
+maxima, vigia, ownership da resposta e a thread (inicia, para, sobrevive a falha do banco sem inundar o log).
 """
 import time
 from datetime import datetime, timedelta, timezone
@@ -243,7 +243,7 @@ class TestLaco:
         assert cmd.episodio.estado == "aguardando_confirmacao" and cmd.criado_em == T0 + timedelta(seconds=4)
         assert [(o, r) for _d, o, r in m.decisoes if _d.comandos] == [("leitura", False)]
         assert metricas(m)[laco.M_COMANDOS] == 1
-        assert saidas_vazias(m)                      # S3a: o laco NAO grava alertas, comandos, episodios...
+        assert saidas_vazias(m)                      # ensaio (agir=False): o laco NAO grava alertas, comandos, episodios...
 
     def test_o_log_mostra_a_decisao_sem_conteudo_da_leitura(self, mundo, capsys):
         m = mundo
@@ -332,7 +332,7 @@ class TestLaco:
         m.rel.ir_para(4 + const_analise.IDADE_MAX_ACAO_S + 1)
         m.laco.executar_ciclo()
         decisoes_de_leitura = [(o, r) for d, o, r in m.decisoes if o == "leitura" and d.comandos]
-        assert decisoes_de_leitura == [("leitura", True)]       # decidiu, mas marcada: a S4 nao agira
+        assert decisoes_de_leitura == [("leitura", True)]       # decidiu, mas marcada: o laco que age nao agira
         assert metricas(m)[laco.M_LEITURAS_ANTIGAS] == 5
         assert metricas(m)[laco.M_DECISOES_ANTIGAS] >= 1
 

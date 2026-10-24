@@ -56,7 +56,7 @@ class RepoAnalise(ABC):
         return self._ler_seguras(self.ler_entregas_novas, "instante", depois_de_id, instante_minimo, limite,
                                  espera_lacuna_s)
 
-    # ---- recuperacao na subida (S6): so leitura, nunca avanca cursor ----
+    # ---- recuperacao na subida: so leitura, nunca avanca cursor ----
     @abstractmethod
     def ler_leituras_recentes(self, ate_id: int, instante_minimo: datetime, limite: int = 5000) -> list[dict]:
         """As leituras mais recentes com id <= ate_id (o cursor) e instante_ingestao >= instante_minimo, ate `limite`

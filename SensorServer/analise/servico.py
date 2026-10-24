@@ -1,12 +1,12 @@
 """
-A ANALISE como processo proprio (roadmap do split, S5): `python -m analise` (a partir de SensorServer/).
+A ANALISE como processo proprio: `python -m analise` (a partir de SensorServer/).
 
 Sem porta de rede, sem chave AES, sem segredo JWT, sem contas. Le SO o `.env.analise` e o papel de banco flow_analise.
 Roda o laco por cursor (analise/laco.py) com `agir=True`: le `leituras`, `respostas_dispositivo` e `entregas_push`, decide
-e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e `estado_dispositivo` na mesma transacao do cursor (DS5);
+e grava `comandos_push`, `alertas`, `confirmacoes`, `episodios` e `estado_dispositivo` na mesma transacao do cursor;
 o vigia de episodios e um passo do laco. A borda (outro processo) entrega o push a partir de `comandos_push`.
 
-Na subida (S6) o laco RECUPERA o estado das regras antes do primeiro ciclo: rele as leituras dos ultimos segundos ate o
+Na subida o laco RECUPERA o estado das regras antes do primeiro ciclo: rele as leituras dos ultimos segundos ate o
 cursor (sem agir), restaura os episodios abertos e recentes a partir do banco e so entao segue do cursor, agindo apenas
 sobre leitura recente (analise/laco.py, `recuperar_estado`). FLOW_RECUPERAR_ESTADO=0 desliga.
 

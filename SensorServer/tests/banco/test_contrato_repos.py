@@ -138,7 +138,7 @@ def test_consultar_leituras_mais_recentes_primeiro(borda):
     assert [l["payload"]["x"] for l in borda.consultar_leituras(1, limite=2)] == [2, 1]
 
 
-# ------------------------------------------------------------------ S6: leituras da recuperacao na subida
+# ------------------------------------------------------------------ leituras da recuperacao na subida
 def test_leituras_recentes_ate_o_cursor_as_mais_recentes_em_ordem_de_id(borda, analise):
     borda.gravar_leituras([leitura(i * 10) for i in range(5)])              # t = 0, 10, 20, 30, 40
     ids = [l["id"] for l in analise.ler_leituras_novas(0)]

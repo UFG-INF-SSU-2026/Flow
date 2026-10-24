@@ -11,7 +11,7 @@ Gatilhos:
 
 Um unico episodio aberto por user_id, com cooldown depois de encerrado.
 
-RELOGIO EXPLICITO (S2a do split). Nenhuma decisao daqui le o relogio: todo instante vem no argumento `agora`
+RELOGIO EXPLICITO. Nenhuma decisao daqui le o relogio: todo instante vem no argumento `agora`
 (segundos desde a epoca; o nucleo passa o `instante_ingestao` da leitura). O `_agora()` so existe como padrao para
 quem chama sem `agora` (testes e chamadas avulsas); o nucleo (nucleo.py) nunca o usa.
 
@@ -296,7 +296,7 @@ def anotar_mensagem(user_id: int, episode_id: str, message_id: str, agora: float
 
 def restaurar_episodio(user_id: int, episode_id: str, motivo: str, aberto_em: float, encerrado_em: float | None = None,
                        resultado: str | None = None, message_ids=(), estado: EstadoQueda | None = None) -> None:
-    """RECUPERACAO NA SUBIDA (S6): recoloca no estado um episodio que a instancia anterior da analise ja gravou, com as
+    """RECUPERACAO NA SUBIDA: recoloca no estado um episodio que a instancia anterior da analise ja gravou, com as
     `messageId` dos seus pedidos (e por elas que a resposta do dispositivo sera ligada ao episodio). Nao registra, nao
     abre nem encerra nada: so devolve ao estado o que o banco ja sabe. `aberto_em` e `encerrado_em` sao instantes em
     segundos desde a epoca; o prazo e recalculado como em `_abrir`. Chamar em ordem crescente de `aberto_em`: so o
@@ -314,7 +314,7 @@ def restaurar_episodio(user_id: int, episode_id: str, motivo: str, aberto_em: fl
 
 def descartar_episodio(user_id: int, episode_id: str, estado: EstadoQueda | None = None) -> None:
     """Esquece UM episodio e as `messageId` dele, como se nunca tivesse sido aberto. Usado pela analise quando o episodio
-    nasceu de leitura antiga demais para agir (principio 4): ele nao virou push nem registro, entao nao pode ficar no
+    nasceu de leitura antiga demais para agir: ele nao virou push nem registro, entao nao pode ficar no
     estado nem como "aberto" (bloquearia a queda real que chegar logo depois) nem como "encerrado" (o cooldown contaria
     a partir do relogio de agora, e nao de uma queda que nunca foi tratada)."""
     est = _estado(estado)

@@ -1,6 +1,6 @@
 # Banco de dados (PostgreSQL + TimescaleDB) — parte 1
 
-Estado: camada de acesso, esquema, permissões, e o servidor separado em **borda** e **análise**, ligadas só por este banco (split concluído).
+Estado: camada de acesso, esquema, permissões, e o servidor separado em **borda** e **análise**, ligadas só por este banco.
 A parte 2 (retenção, backup, remoção da `telemetria` e dos arquivos de transição, contas/sessões no banco) ainda não foi feita; as seções abaixo dizem o que ela vai mudar.
 
 ## Subir do zero (a partir de `SensorServer/`)
