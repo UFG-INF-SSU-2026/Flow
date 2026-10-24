@@ -80,6 +80,9 @@ def ambiente(tmp_path, monkeypatch):
     """Isola cada teste: segredo, pastas em tmp_path, scrypt barato e estado global zerado."""
     monkeypatch.setenv("FLOW_JWT_SECRET", SEGREDO)
     monkeypatch.setattr(const_comum, "DATA_DIR", str(tmp_path / "dataUsers"))
+    # O padrao do servidor e NAO gravar arquivos (FLOW_GRAVAR_ARQUIVOS=0). Os testes dos arquivos legados ligam a flag aqui;
+    # os que provam o padrao desligado a desligam de novo (tests/unit/test_const.py, test_banco_servidor.py).
+    monkeypatch.setattr(const_comum, "GRAVAR_ARQUIVOS", True)
     monkeypatch.setattr(const_borda, "CONTAS_PATH", str(tmp_path / "contas.json"))
     monkeypatch.setattr(const_borda, "SESSOES_PATH", str(tmp_path / "sessoes.json"))
     monkeypatch.setattr(const_borda, "SCRYPT_N", 2 ** 4)   # login e criar_conta em milissegundos

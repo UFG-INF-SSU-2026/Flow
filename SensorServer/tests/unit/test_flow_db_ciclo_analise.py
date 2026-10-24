@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import pytest
 
-from flow_db.ciclo_analise import processar_lote
+from flow_db.ciclo_analise import instante_minimo_do_cursor, processar_ciclo, processar_lote
 from flow_db.fake import BancoFalso
 from tests.unit.test_flow_db_lacunas import ESPERA, T0, Relogio, abrir_buraco, ids, leitura
 
@@ -106,3 +106,35 @@ def test_limite_do_lote(borda, analise):
     assert processar_lote(analise, gravar_alertas, limite=2) == 2
     assert analise.ler_cursor()["ultimo_leitura_id"] == 2
     assert processar_lote(analise, gravar_alertas, limite=10) == 3
+
+
+# --- limite de instante ancorado no cursor (descarta particoes antigas sem perder linha legitima) -------------------
+def test_instante_minimo_do_cursor():
+    assert instante_minimo_do_cursor({"ultimo_leitura_instante": T0}, 3600) == T0 - timedelta(hours=1)
+    assert instante_minimo_do_cursor({"ultimo_leitura_instante": None}, 3600) is None      # cursor virgem: sem limite
+    assert instante_minimo_do_cursor({"ultimo_leitura_instante": T0}, None) is None        # sem janela: sem limite
+
+
+def test_janela_do_cursor_nao_perde_linha_comum(borda, analise):
+    borda.gravar_leituras([leitura(i) for i in range(3)])
+    assert processar_ciclo(analise, lambda tx, lote: None, janela_cursor_s=3600).leituras == 3
+    borda.gravar_leituras([leitura(10)])
+    r = processar_ciclo(analise, lambda tx, lote: None, janela_cursor_s=3600)
+    assert (r.leituras, r.lacunas) == (1, 0)
+
+
+def test_linha_mais_velha_que_a_janela_fica_de_fora_e_vira_lacuna_contada(borda, analise, relogio):
+    borda.gravar_leituras([leitura(i) for i in range(3)])
+    processar_ciclo(analise, lambda tx, lote: None, janela_cursor_s=3600)
+    borda.gravar_leituras([leitura(-7200), leitura(5)])         # a primeira (id 4) esta 2 h antes do cursor
+    relogio.avancar(60)                                         # o buraco deixa de ser "recente"
+    r = processar_ciclo(analise, lambda tx, lote: None, janela_cursor_s=3600)
+    assert (r.leituras, r.lacunas) == (1, 1)
+    assert analise.ler_cursor()["metricas"]["lacunas_ignoradas"] == 1
+
+
+def test_sem_janela_o_comportamento_antigo_continua(borda, analise):
+    borda.gravar_leituras([leitura(i) for i in range(3)])
+    processar_ciclo(analise, lambda tx, lote: None)
+    borda.gravar_leituras([leitura(-7200)])
+    assert processar_ciclo(analise, lambda tx, lote: None).leituras == 1

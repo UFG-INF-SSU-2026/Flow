@@ -292,3 +292,19 @@ class TestRotasSemReferenciaQuebrada:
         corpo = {k: v for k, v in _evento_app().items() if k != "schemaVersion"}
         r = cli.post("/eventos", corpo, tokens["idoso"])
         assert r.status_code == 200 and r.get_json() == {"status": "ok"}
+
+
+def test_padrao_nao_grava_arquivos_legados():
+    """FLOW_GRAVAR_ARQUIVOS: sem a variavel (ou diferente de 1) o servidor grava so no banco."""
+    import subprocess
+    import sys
+
+    def valor(env_extra):
+        env = {k: v for k, v in os.environ.items() if k != "FLOW_GRAVAR_ARQUIVOS"} | env_extra
+        saida = subprocess.run([sys.executable, "-c", "from comum import const; print(const.GRAVAR_ARQUIVOS)"],
+                               capture_output=True, text=True, env=env, cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        return saida.stdout.strip()
+
+    assert valor({}) == "False"
+    assert valor({"FLOW_GRAVAR_ARQUIVOS": "0"}) == "False"
+    assert valor({"FLOW_GRAVAR_ARQUIVOS": "1"}) == "True"

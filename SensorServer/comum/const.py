@@ -61,10 +61,9 @@ DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO)
 # alertas e confirmacoes).
 DATA_DIR = "dataUsers"
 
-# Dupla escrita (fase de transicao): enquanto 1, o servidor continua gravando os arquivos de hoje (usuario_*.jsonl,
-# alerta_*.json, confirmacoes_*.jsonl, auditoria.jsonl) ALEM do banco. Desligue com FLOW_GRAVAR_ARQUIVOS=0 quando o
-# banco for a unica fonte.
-GRAVAR_ARQUIVOS = os.environ.get("FLOW_GRAVAR_ARQUIVOS", "1") != "0"
+# Arquivos legados (usuario_*.jsonl, alerta_*.json, confirmacoes_*.jsonl, auditoria.jsonl): por padrao NAO sao gravados;
+# o banco e a unica fonte. Ligue com FLOW_GRAVAR_ARQUIVOS=1 so se quiser os arquivos alem do banco.
+GRAVAR_ARQUIVOS = os.environ.get("FLOW_GRAVAR_ARQUIVOS", "0") == "1"
 
 # Fontes de telemetria aceitas. Definicao unica.
 FONTES_VALIDAS = {"app", "wokwi"}

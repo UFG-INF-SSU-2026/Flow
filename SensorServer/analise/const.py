@@ -116,6 +116,15 @@ LEITURAS_CONSECUTIVAS_PARA_ALERTA = 3
 # de cada ciclo, entao o atraso maximo entre o prazo do servidor e o encerramento EXPIRADO e esta espera (mais ATRASO_VIGIA_S).
 INTERVALO_LEITURA_S = 0.25
 
+# Janela (s) do limite de instante das consultas por cursor (leituras, respostas e entregas). O limite e ANCORADO no
+# `ultimo_leitura_instante` do cursor (nao no relogio): instante_minimo = esse instante - JANELA_CONSULTA_CURSOR_S. Assim a
+# consulta `id > cursor` descarta as particoes antigas e nenhuma linha legitima e perdida, mesmo depois de uma parada
+# longa (o cursor fica parado e o limite junto). Com o cursor ainda sem instante, nao ha limite. So uma linha com id acima
+# do cursor e instante de ingestao mais de JANELA antes do instante do cursor fica de fora (vira buraco contado em
+# `lacunas_ignoradas`): so ocorre com buffer da borda descarregado depois de horas de banco fora, linha que seria
+# "antiga" (so reconstruiria estado) de qualquer jeito.
+JANELA_CONSULTA_CURSOR_S = 3600
+
 # Idade (s), contada do instante da ingestao, acima da qual uma leitura ou resposta so RECONSTROI o estado das regras
 # e nao pode disparar acao (agir apenas sobre o recente). Evita alertar com dado velho ao reprocessar
 # apos uma parada. A decisao sobre linha antiga sai marcada como "reconstrucao" e e contada nas metricas.

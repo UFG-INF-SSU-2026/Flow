@@ -10,7 +10,7 @@ Garantias:
   - a leitura respeita a regra de lacunas de id (_lacunas.py).
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable
 
 from . import config
@@ -87,17 +87,32 @@ def somar_metricas(base: dict | None, delta: dict | None) -> dict | None:
     return soma
 
 
+def instante_minimo_do_cursor(cursor: dict, janela_s: float | None) -> datetime | None:
+    """Limite de instante ancorado no cursor: `ultimo_leitura_instante - janela_s` (None se nao ha janela ou instante).
+    Permite ao banco descartar as particoes mais antigas que o cursor sem depender do relogio."""
+    referencia = cursor.get("ultimo_leitura_instante")
+    if janela_s is None or referencia is None:
+        return None
+    return referencia - timedelta(seconds=janela_s)
+
+
 def processar_ciclo(repo: RepoAnalise, processar: Callable[[RepoAnalise, Lote], dict | None], *,
                     espera_lacuna_s: float = config.ESPERA_LACUNA_S, instante_minimo: datetime | None = None,
-                    limite: int = config.LIMITE_LOTE, versao_codigo: str | None = None) -> ResultadoCiclo:
+                    limite: int = config.LIMITE_LOTE, versao_codigo: str | None = None,
+                    janela_cursor_s: float | None = None) -> ResultadoCiclo:
     """Le os tres fluxos, processa e avanca os tres cursores (e as metricas) NUMA transacao so.
 
     `processar(tx, lote)` recebe SO a transacao `tx` e devolve, se quiser, contadores para somar em
     `cursor_analise.metricas` (ex.: {"leituras_malformadas": 1}). As lacunas ignoradas dos tres fluxos entram na
     chave `lacunas_ignoradas`. Excecao em `processar` desfaz tudo (cursores incluidos): o proximo ciclo le o mesmo lote.
     Sem nada novo, so renova o batimento (o que distingue \"analise parada\" de \"sem dado\").
+
+    `janela_cursor_s` (quando `instante_minimo` nao e dado) limita as tres consultas por instante, ancorado no cursor
+    (ver `instante_minimo_do_cursor`): as particoes mais antigas que o cursor nao sao varridas.
     """
     cursor = repo.ler_cursor()
+    if instante_minimo is None:
+        instante_minimo = instante_minimo_do_cursor(cursor, janela_cursor_s)
     leituras, lac_l = repo.ler_leituras_seguras(cursor["ultimo_leitura_id"], instante_minimo, limite, espera_lacuna_s)
     respostas, lac_r = repo.ler_respostas_seguras(cursor["ultimo_resposta_id"], instante_minimo, limite, espera_lacuna_s)
     entregas, lac_e = repo.ler_entregas_seguras(cursor["ultimo_entrega_id"], instante_minimo, limite, espera_lacuna_s)

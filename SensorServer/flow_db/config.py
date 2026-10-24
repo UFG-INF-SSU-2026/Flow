@@ -36,6 +36,7 @@ TIMEOUT_POOL_S = 2.0         # espera maxima por uma conexao livre do pool
 TIMEOUT_ABERTURA_POOL_S = 5.0  # espera maxima para o pool abrir na subida do servico
 
 _SENHA_VALIDA = re.compile(r"^[A-Za-z0-9_-]{16,}$")
+_SENHA_ADMIN_VALIDA = re.compile(r"^[A-Za-z0-9_-]+$")      # a administrativa: so o alfabeto (o tamanho fica a criterio de quem a cria)
 
 
 class ConfigBanco(RuntimeError):
@@ -96,6 +97,8 @@ def dsn_admin() -> str:
     senha = _env("FLOW_DB_PASSWORD")
     if senha is None:
         raise ConfigBanco("FLOW_DB_PASSWORD (senha administrativa) nao definida.")
+    if _SENHA_ADMIN_VALIDA.match(senha) is None:
+        raise ConfigBanco("FLOW_DB_PASSWORD invalida: use so letras, numeros, '_' e '-'.")
     return _conninfo(usuario_admin(), senha, "flow-admin")
 
 

@@ -86,3 +86,16 @@ class TestSenhas:
         assert config.senha_do_papel(config.PAPEL_BORDA) == "b" * 20
         with pytest.raises(config.ConfigBanco):
             config.senha_do_papel(config.PAPEL_ANALISE)
+
+
+class TestSenhaAdministrativa:
+    def test_alfabeto_valido_gera_dsn(self, monkeypatch):
+        monkeypatch.setenv("FLOW_DB_PASSWORD", "Admin_ok-123")
+        assert "Admin_ok-123" in config.dsn_admin()
+
+    @pytest.mark.parametrize("senha", ["com espaco", "aspas'aqui", "acento-ç", "ponto.e$"])
+    def test_alfabeto_invalido_e_recusado_sem_revelar_o_valor(self, monkeypatch, senha):
+        monkeypatch.setenv("FLOW_DB_PASSWORD", senha)
+        with pytest.raises(config.ConfigBanco, match="FLOW_DB_PASSWORD") as e:
+            config.dsn_admin()
+        assert senha not in str(e.value)

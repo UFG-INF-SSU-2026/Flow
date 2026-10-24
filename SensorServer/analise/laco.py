@@ -225,7 +225,8 @@ class LacoAnalise:
         self._assinaturas_novas, self._depois_do_commit = {}, []      # tentativa nova (a anterior, se falhou, foi desfeita)
         self._ultimo_lote = None
         versao = const_analise.VERSAO_CODIGO_ACOES if self._agir else const_analise.VERSAO_CODIGO
-        resultado = ciclo_analise.processar_ciclo(repo, self._processar_lote, versao_codigo=versao)
+        resultado = ciclo_analise.processar_ciclo(repo, self._processar_lote, versao_codigo=versao,
+                                                  janela_cursor_s=const_analise.JANELA_CONSULTA_CURSOR_S)
         if self._agir:
             self._apos_commit()
         self._alarmar()
