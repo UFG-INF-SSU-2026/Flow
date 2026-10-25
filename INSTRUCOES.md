@@ -84,7 +84,7 @@ FLOW_DB_PASSWORD=<valor gerado>
 
 A análise lê desse arquivo **só** as variáveis `FLOW_ANALISE_*` e `FLOW_TLS_*` (caminhos do certificado): o segredo dos tokens e a senha do banco nunca entram no ambiente dela. (Sem `.env`, é possível exportar as variáveis no terminal.)
 
-Crie as duas contas do protótipo (a senha é pedida no terminal). Ambas apontam para a **mesma pessoa** (`--user-id 1`), e é isso que faz o servidor juntar app e wokwi:
+Crie as duas contas do protótipo (a senha é pedida no terminal). As contas ficam no banco, então ele precisa estar no ar (`scripts/preparar.sh` o sobe) e o `.env` preenchido: Ambas apontam para a **mesma pessoa** (`--user-id 1`), e é isso que faz o servidor juntar app e wokwi:
 
 ```bash
 cd SensorServer
@@ -97,7 +97,7 @@ python -m borda.auth criar-conta --id bridge1 --papel dispositivo --user-id 1 --
 >
 > Para criar contas sem o prompt de senha (scripts), defina `FLOW_SENHA` no ambiente antes de rodar o comando. A senha das contas **não** fica no `.env` do servidor.
 
-Os arquivos `contas.json` e `sessoes.json` são criados em `SensorServer/` e não vão para o Git.
+Contas e sessões ficam nas tabelas `contas` e `sessoes` do banco; não há arquivo de contas em disco. Se o volume do banco for recriado (`docker compose down -v`), as contas somem junto: crie-as de novo.
 
 ### Certificado TLS (uma vez)
 
@@ -203,7 +203,7 @@ pip install -r requirements.txt   # inclui o pytest
 python -m pytest
 ```
 
-A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados), `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo, banco e análise fora do ar e ciclo de queda ponta a ponta) e `tests/banco/` (o mesmo contrato do repositório no PostgreSQL real; fora da execução padrão: `python -m pytest -m banco`, com o container no ar). Nos testes a análise roda em memória no lugar do processo. Ela é independente do seu ambiente: **não lê o seu `.env`** (`FLOW_SEM_DOTENV=1`), define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`), usa um banco falso em memória e grava contas e sessões numa pasta temporária, então **não usa nem altera** o seu `contas.json` real.
+A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados), `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo, banco e análise fora do ar e ciclo de queda ponta a ponta) e `tests/banco/` (o mesmo contrato do repositório no PostgreSQL real; fora da execução padrão: `python -m pytest -m banco`, com o container no ar). Nos testes a análise roda em memória no lugar do processo. Ela é independente do seu ambiente: **não lê o seu `.env`** (`FLOW_SEM_DOTENV=1`), define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`), usa um banco falso em memória (que também guarda contas e sessões), então **não usa nem altera** as suas contas reais.
 
 ### Bridge (pytest)
 
@@ -332,7 +332,7 @@ O banco é só da borda. `python -m borda.server` continua importável (Flask/WS
 | Só a análise | `scripts/analise.sh` | `scripts\analise.ps1` |
 | Tudo | `scripts/tudo.sh` | `scripts\tudo.ps1` (uma janela por serviço) |
 
-Contas são da borda: `python -m borda.auth criar-conta` (o `contas.json` fica em `SensorServer/`; se mudar `FLOW_CONTAS_PATH` no `.env`, defina o mesmo no terminal ao criar a conta).
+Contas ficam no banco: `python -m borda.auth criar-conta` (com o banco no ar; sem ele o comando recusa com uma mensagem clara).
 
 **3. Desligar.** Ctrl+C (ou SIGTERM; Ctrl+Break no Windows) em cada processo. A borda para de aceitar, para as threads de fundo, fecha os streams SSE (os clientes reconectam), descarrega a fila de leituras e fecha o pool. Reiniciar a análise não desconecta ninguém: a borda restaura o estado dela do banco.
 

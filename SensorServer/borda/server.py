@@ -337,6 +337,12 @@ def _versao_invalida_400(versao_atual: int):
                     "mensagem": f"schemaVersion invalido ou nao suportado (maximo {versao_atual})"}), 400
 
 
+def _login_sem_banco(erro: "auth.ServicoIndisponivel"):
+    """Contas e sessoes estao no banco: sem ele, login e refresh respondem 503. Quem ja tem access token segue enviando
+    (o JWT e conferido sem banco) e as leituras continuam na fila."""
+    return negar(503, erro.codigo, mensagem="banco indisponivel; tente de novo em instantes")
+
+
 @app.route("/auth/login", methods=["POST"])
 def login():
     corpo = _decifrar_corpo()
@@ -351,6 +357,8 @@ def login():
         tokens = auth.login(ident, str(corpo.get("segredo", "")), corpo.get("fonte"), corpo.get("device_id"))
     except auth.Bloqueado as e:
         return negar(429, "bloqueado", ident if e.conta_existe else None)   # so conta que existe
+    except auth.ServicoIndisponivel as e:
+        return _login_sem_banco(e)
     except auth.AuthError as e:
         return negar(401, e.codigo, ident if e.conta_existe else None)
     return _resposta_cifrada(tokens)
@@ -365,6 +373,8 @@ def refresh():
         return _versao_invalida_400(const_comum.SCHEMA_VERSION_AUTH)
     try:
         tokens = auth.refresh(str(corpo.get("refresh_token", "")))
+    except auth.ServicoIndisponivel as e:
+        return _login_sem_banco(e)
     except auth.AuthError as e:
         return negar(401, e.codigo)
     return _resposta_cifrada(tokens)

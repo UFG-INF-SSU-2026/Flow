@@ -58,7 +58,7 @@ Módulos do servidor (pacotes em `SensorServer/`):
 | `borda/efeitos.py` | Aplicar as decisões: grava confirmações, alertas, estado e, por fim, episódio + comando numa transação; só depois do commit entrega o push (SSE, app e wokwi). Se o banco falha, guarda as decisões e tenta de novo. |
 | `borda/servico.py` | Ponto de entrada da borda (`python -m borda`): serve HTTPS (sem certificado não sobe), subida e desligamento ordenado. |
 | `borda/const.py` | Constantes da borda (porta, tokens, bloqueio de login, limite de corpo, SSE, filas, chamada à análise). Ver 14. |
-| `borda/auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens (contas e sessões em JSON, `FLOW_CONTAS_PATH`/`FLOW_SESSOES_PATH`). Não conhece Flask. CLI: `python -m borda.auth criar-conta`. |
+| `borda/auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens (contas e sessões nas tabelas `contas` e `sessoes` do banco, pelo repositório recebido por parâmetro). Não conhece Flask. CLI: `python -m borda.auth criar-conta` (exige o banco no ar). |
 | `borda/authz.py` | **Autorização:** papel → permissões e escopo por pessoa; a negação vai para o log (rota, motivo, conta, IP; nunca o conteúdo). |
 | `borda/validacao.py` | Validação **estrutural** dos corpos, pelos contratos de `schemas/`. |
 | `borda/sse_hub.py` | Mecanismo comum de push por SSE: conexões, fila limitada por conexão, keepalive, replay. |
@@ -182,10 +182,10 @@ O `user_id` é uma consequência da conta: não é digitado no app nem no bridge
 
 ### 4.2 Login e tokens
 
-- **Senhas:** `scrypt` com sal por conta, comparação em tempo constante. Contas criadas por CLI (`python -m borda.auth criar-conta ...`); não há auto-cadastro. Persistidas em `contas.json`.
+- **Senhas:** `scrypt` com sal por conta, comparação em tempo constante. Contas criadas por CLI (`python -m borda.auth criar-conta ...`); não há auto-cadastro. Gravadas na tabela `contas` do banco; nenhum arquivo de dados fica em disco.
 - **`POST /auth/login`** (corpo em envelope cifrado): `identificador`, `segredo`, `fonte`, `device_id`. Resposta (também cifrada): `access_token`, `refresh_token`, `expires_in`, `papel`, `user_ids`. A senha nunca trafega em claro.
 - **Access token:** JWT HS256, validade padrão 1 h; claims `sub`, `papel`, `user_ids`, `fonte`, `device_id`, `iat`, `exp`, `jti`. Enviado em `Authorization: Bearer`.
-- **Refresh token:** opaco, validade padrão 7 dias, **uso único** (rotativo). O servidor guarda só o hash em `sessoes.json`, de modo que reiniciar o servidor não derruba as sessões.
+- **Refresh token:** opaco, validade padrão 7 dias, **uso único** (rotativo). O servidor guarda só o hash, na tabela `sessoes` do banco, de modo que reiniciar o servidor não derruba as sessões. O consumo é atômico (`DELETE ... RETURNING`) e, no refresh, acontece na mesma transação que grava o par novo: se o banco falhar no meio, a sessão não se perde.
 - **Bloqueio:** 5 falhas em 15 minutos para o mesmo identificador bloqueiam novas tentativas por 15 minutos (`429`). A resposta é idêntica para conta inexistente e senha errada.
 - **Segredo de assinatura:** variável `FLOW_JWT_SECRET` (mínimo 32 bytes). Sem ela o servidor não sobe.
 
@@ -305,7 +305,7 @@ vigia (a cada 0,25 s): POST /vigiar ──→ decisões de expiração ──→
 4. Leitura ou resposta com mais de `IDADE_MAX_ACAO_S` (30 s) só reconstrói estado: não gera push. A exceção é a resposta que encerra um episódio real.
 5. Análise fora do ar (rede, prazo de 1 s, erro 5xx): a borda continua aceitando e gravando leituras; o que espera a análise fica numa fila limitada (`MAX_FILA_ANALISE`), e o `/health` mostra `degradado`.
 
-**Se a borda cai e volta:** reinicia limpa; na primeira chamada manda a restauração (do banco) à análise. **Se o banco cai:** as leituras ficam na fila limitada (`MAX_FILA_LEITURAS`) e nenhuma decisão é aplicada nem push enviado até o banco confirmar; as decisões já tomadas ficam guardadas e são regravadas ao voltar.
+**Se a borda cai e volta:** reinicia limpa; na primeira chamada manda a restauração (do banco) à análise. **Se o banco cai:** as leituras ficam na fila limitada (`MAX_FILA_LEITURAS`) e nenhuma decisão é aplicada nem push enviado até o banco confirmar; as decisões já tomadas ficam guardadas e são regravadas ao voltar. Só **login e refresh** dependem do banco (contas e sessões moram nele) e respondem `503` (`servico_indisponivel`, sem contar como falha de senha); o access token é um JWT conferido sem banco, então quem já está logado segue enviando leituras.
 
 ### 8.1 Leituras em lote
 
@@ -571,7 +571,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | Borda parada | A análise fica ociosa (só a borda a chama); nada é aceito nem entregue. Ao voltar, a borda reinicia limpa e restaura a análise a partir do banco; o que não expirou volta a valer. |
 | Token expira com o stream aberto | `event: reautenticar`, fechamento, renovação e reconexão. |
 | Refresh recusado | Bridge refaz login com o segredo do ambiente; app pede nova autenticação. |
-| Reinício | Borda: sessões persistem, os streams reconectam e a análise recebe o estado de volta do banco. Análise: ao voltar, o `boot_id` novo faz a borda mandar `/restaurar` (leituras recentes, episódios abertos e `messageId`s, do banco) antes da próxima chamada; os novos `id` de push são maiores que os da execução anterior. |
+| Reinício | Borda: sessões persistem (estão no banco), os streams reconectam e a análise recebe o estado de volta do banco. Análise: ao voltar, o `boot_id` novo faz a borda mandar `/restaurar` (leituras recentes, episódios abertos e `messageId`s, do banco) antes da próxima chamada; os novos `id` de push são maiores que os da execução anterior. |
 | `messageId` repetido | Ignorado pelo dispositivo. |
 | Resposta duplicada ou tardia | Armazenada com `tardia: true` e o `episodeId` da sua mensagem; não reabre nem altera episódio encerrado. `messageId` desconhecida: `mensagem_desconhecida: true`. |
 | Duas fontes ou dois gatilhos disparam | Um episódio só. |
@@ -593,7 +593,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 - **Autenticação** por conta (senha com scrypt, tokens de curta duração, refresh rotativo, bloqueio por tentativas).
 - **Autorização** negando por padrão, em dois estágios, com a identidade vinda do token e nunca do que o cliente declara.
 - **Auditoria** de negações.
-- **Segredos fora do repositório:** `FLOW_JWT_SECRET` em `SensorServer/.env` (fora do Git) ou variável de ambiente; `contas.json`, `sessoes.json` e a pasta `certs/` (a chave privada do TLS) ignorados pelo Git; sem o segredo, ou sem o certificado, o servidor não sobe.
+- **Segredos fora do repositório:** `FLOW_JWT_SECRET` em `SensorServer/.env` (fora do Git) ou variável de ambiente; a pasta `certs/` (a chave privada do TLS) ignorada pelo Git (contas e sessões ficam no banco, não em arquivo); sem o segredo, ou sem o certificado, o servidor não sobe.
 
 ### 13.2 Limitações assumidas (projeto acadêmico)
 
@@ -613,7 +613,6 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | Item | Onde | Observação |
 | --- | --- | --- |
 | `FLOW_JWT_SECRET` | `SensorServer/.env` ou ambiente | Obrigatório; ≥ 32 bytes. |
-| `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | `SensorServer/.env` ou ambiente | Opcionais; padrão `contas.json`, `sessoes.json`. |
 | `FLOW_ANALISE_TOKEN`, `FLOW_ANALISE_PORT`, `FLOW_ANALISE_URL` | `SensorServer/.env` ou ambiente | Token compartilhado entre borda e análise (obrigatório, ≥ 16 caracteres); porta da análise (padrão 5100, só em `127.0.0.1`); endereço que a borda usa (padrão `https://127.0.0.1:5100`; precisa ser `https://`). Um só `.env`: a análise lê dele apenas o que começa com `FLOW_ANALISE_` ou `FLOW_TLS_`. |
 | `FLOW_TLS_CERT`, `FLOW_TLS_KEY` | `SensorServer/.env` ou ambiente | Opcionais; padrão `certs/flow.crt` e `certs/flow.key` (relativo a `SensorServer/`), gerados por `scripts/gerar_certificado.py`. A borda e a análise não sobem sem o par; a borda também o usa para conferir a análise e o banco. |
 | `FLOW_DB_SSLMODE` | `SensorServer/.env` ou ambiente | `verify-full` (padrão) ou `verify-ca`; não há modo sem TLS. |
@@ -627,7 +626,7 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | Timeout do botão | `SensorServer/comum/const.py` | Sem recompilar app nem firmware. |
 | Limiares, cooldown, fusão de fontes, retenções | `SensorServer/analise/const.py` | Idem. |
 | Porta, limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, fila do SSE, filas e prazos da chamada à análise | `SensorServer/borda/const.py` | Idem. |
-| Versão atual de cada contrato | `SensorServer/comum/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
+| Versão atual de cada contrato | `SensorServer/comum/const.py` | Cada constante tem comentário com unidade e efeito. |
 | Versão do core ESP32 | `arduino-cli core list` | 3.x (usa `tone`/`noTone`). |
 
 Ordem de subida: certificado TLS e banco (`scripts/preparar.*` fazem os dois) → contas criadas → borda e análise (a ordem entre as duas é indiferente) → simulação Wokwi (aba visível, `rfc2217ServerPort = 4000`) → bridge → app. Compilar o app exige o certificado já gerado (`res/raw/flow_cert.pem`). O firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
@@ -638,7 +637,7 @@ Ordem de subida: certificado TLS e banco (`scripts/preparar.*` fazem os dois) �
 
 | Alvo | Como | Observação |
 | --- | --- | --- |
-| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, contrato e API da análise, contrato do repositório no banco falso, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização, banco e análise fora do ar, e queda ponta a ponta). O TLS tem um teste só de configuração (`tests/unit/test_tls.py`: o certificado serve a análise, o cliente da borda o confere e o banco recebe `verify-full`); os de integração seguem sem TLS. Nos testes de integração a análise roda em memória, no lugar do processo, chamada pelo mesmo cliente da produção (`tests/_pipeline.py`; a descarga, a análise e a entrega rodam de forma síncrona depois de cada POST), sobre o banco falso. `pytest -m banco` roda o mesmo contrato do repositório no PostgreSQL real (banco descartável `flow_teste`). Usa segredo próprio, sem threads de fundo, e grava contas e sessões em pasta temporária: não toca nos dados reais. |
+| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, contrato e API da análise, contrato do repositório no banco falso, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização, banco e análise fora do ar, e queda ponta a ponta). O TLS tem um teste só de configuração (`tests/unit/test_tls.py`: o certificado serve a análise, o cliente da borda o confere e o banco recebe `verify-full`); os de integração seguem sem TLS. Nos testes de integração a análise roda em memória, no lugar do processo, chamada pelo mesmo cliente da produção (`tests/_pipeline.py`; a descarga, a análise e a entrega rodam de forma síncrona depois de cada POST), sobre o banco falso. `pytest -m banco` roda o mesmo contrato do repositório no PostgreSQL real (banco descartável `flow_teste`). Usa segredo próprio, sem threads de fundo, e usa o banco falso em memória, que também guarda contas e sessões: não toca nos dados reais. |
 | Ponte | `cd WokwiBridge && python -m pytest` (`pytest.ini`) | `tests/test_bridge.py`: tradução e validação das mensagens de push, roteamento das linhas da serial, parser SSE e renovação de sessão. Sem rede e sem serial. |
 | Ponte, ponta a ponta | `WokwiBridge/tests/fake_firmware.py` | Substitui a serial por um firmware falso (impacto, `push.ack`, `ESTOU_BEM`). Exige servidor no ar e `FLOW_BRIDGE_DEVICE=esp32-falso`. Não é pytest. |
 | Firmware | `sketch/host_test/` | Lógica do firmware no PC, com um Arduino falso; opcional. |
@@ -663,7 +662,7 @@ Itens abstratos que **não** são elementos novos do sistema (esses estão em 2.
 
 - **Serviço de notificação aos cuidadores:** consumiria `alertas` e `confirmacoes` do banco como terceiro serviço; a separação entre borda e análise deixou o contrato pronto, sem o serviço.
 - **Chave AES por dispositivo:** hoje fixa e compartilhada (13.2).
-- **Contas e sessões em tabelas:** ficam em JSON (`contas.json`, `sessoes.json`) por serem poucas e só da borda; migrar para o banco só se o número de contas ou de réplicas da borda crescer.
 - **Retenção e compressão de dados** (leituras antigas): `leituras` é uma hypertable do TimescaleDB, mas sem compressão, retenção nem agregados contínuos; as demais tabelas são comuns. Ver `docs/banco.md`.
+- **Refresh com o banco fora, no app:** a borda responde `503` ao refresh quando o banco está indisponível (a sessão não é consumida), mas `AuthClient.renovar` do app trata qualquer resposta sem corpo como refresh recusado e apaga a sessão local, deslogando o idoso. Correção prevista: em `renovar`, com código HTTP 500 ou mais, devolver `false` sem chamar `sair()`. O bridge não sofre disso: refaz o login e tenta de novo.
 - **Auditoria de negações em banco:** hoje a negação vai só para o log; guardar em tabela fica para quando for necessária.
 - **Fila de espera durável:** as filas de leituras e de itens à espera da análise são em memória; se a borda cair com a fila cheia, o que não foi gravado se perde (a análise se refaz do banco).

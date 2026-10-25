@@ -99,6 +99,32 @@ class Pg(PgBase, Repo):
             return conn.execute("SELECT id, episodio_id, message_id, tipo, criado_em, expira_em FROM comandos_push"
                                 " WHERE episodio_id = ANY(%s) ORDER BY id", (ids,)).fetchall()
 
+    def criar_conta(self, c: dict) -> bool:
+        with self._cx() as conn:
+            linha = conn.execute(
+                "INSERT INTO contas (id, papel, user_ids, fontes, hash, criada_em) VALUES (%s, %s, %s, %s, %s, %s)"
+                " ON CONFLICT (id) DO NOTHING RETURNING id",
+                (c["id"], c["papel"], list(c["user_ids"]), list(c["fontes"]), c["hash"], c["criada_em"])).fetchone()
+        return linha is not None
+
+    def buscar_conta(self, conta_id: str) -> dict | None:
+        with self._cx() as conn:
+            return conn.execute("SELECT * FROM contas WHERE id = %s", (conta_id,)).fetchone()
+
+    def gravar_sessao(self, s: dict) -> None:
+        with self._cx() as conn:
+            conn.execute("INSERT INTO sessoes (token_hash, conta_id, fonte, device_id, expira_em)"
+                         " VALUES (%s, %s, %s, %s, %s)",
+                         (s["token_hash"], s["conta_id"], s.get("fonte"), s.get("device_id"), s["expira_em"]))
+
+    def consumir_sessao(self, token_hash: str) -> dict | None:
+        with self._cx() as conn:
+            return conn.execute("DELETE FROM sessoes WHERE token_hash = %s RETURNING *", (token_hash,)).fetchone()
+
+    def podar_sessoes(self, agora: datetime) -> int:
+        with self._cx() as conn:
+            return conn.execute("DELETE FROM sessoes WHERE expira_em <= %s", (agora,)).rowcount
+
     @contextmanager
     def transacao(self):
         if self._conn is not None:      # ja dentro de uma transacao: reaproveita

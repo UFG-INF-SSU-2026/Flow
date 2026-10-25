@@ -25,10 +25,13 @@ def auditar(rota: str, status: int, codigo: str, conta: str | None = None) -> No
     print(f"  [authz] negado {status} {codigo} rota={rota} conta={conta or '-'} ip={request.remote_addr}")
 
 
-def negar(status: int, codigo: str, conta: str | None = None):
+def negar(status: int, codigo: str, conta: str | None = None, mensagem: str | None = None):
     auditar(request.path, status, codigo, conta)
     headers = {"WWW-Authenticate": "Bearer"} if status == 401 else {}
-    return jsonify({"status": "erro", "codigo": codigo}), status, headers
+    corpo = {"status": "erro", "codigo": codigo}
+    if mensagem:
+        corpo["mensagem"] = mensagem
+    return jsonify(corpo), status, headers
 
 
 def exige(permissao: str, fonte: str | None = None):

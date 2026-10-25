@@ -7,7 +7,6 @@ Constantes de tempo sao ajustadas com monkeypatch.setattr(const, ...) em cada te
 import logging
 import os
 import sys
-import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -18,14 +17,11 @@ if RAIZ not in sys.path:
 
 from _apoio import SEGREDO, ClienteFlask, ClienteReal  # noqa: E402
 
-# Antes de importar o servidor: segredo e caminhos fora da pasta real.
-_TMP = tempfile.mkdtemp(prefix="flow_tests_")
+# Antes de importar o servidor: segredo e ambiente isolados do .env real.
 os.environ["FLOW_SEM_DOTENV"] = "1"    # os testes nunca leem o SensorServer/.env real
 os.environ["FLOW_JWT_SECRET"] = SEGREDO
 os.environ["FLOW_SEM_THREADS"] = "1"   # importar server nao sobe as threads de fundo
 os.environ["FLOW_DB_FAKE"] = "1"       # banco falso em memoria: os testes nunca falam com PostgreSQL (so tests/banco)
-os.environ["FLOW_CONTAS_PATH"] = os.path.join(_TMP, "contas.json")
-os.environ["FLOW_SESSOES_PATH"] = os.path.join(_TMP, "sessoes.json")
 
 from borda import const as const_borda  # noqa: E402
 
@@ -76,11 +72,9 @@ def _limpar_estado() -> None:
 
 
 @pytest.fixture(autouse=True)
-def ambiente(tmp_path, monkeypatch):
-    """Isola cada teste: segredo, contas em tmp_path, scrypt barato e estado global zerado."""
+def ambiente(monkeypatch):
+    """Isola cada teste: segredo, scrypt barato e estado global zerado (o banco falso novo guarda contas e sessoes)."""
     monkeypatch.setenv("FLOW_JWT_SECRET", SEGREDO)
-    monkeypatch.setattr(const_borda, "CONTAS_PATH", str(tmp_path / "contas.json"))
-    monkeypatch.setattr(const_borda, "SESSOES_PATH", str(tmp_path / "sessoes.json"))
     monkeypatch.setattr(const_borda, "SCRYPT_N", 2 ** 4)   # login e criar_conta em milissegundos
     _limpar_estado()
     yield

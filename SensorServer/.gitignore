@@ -6,7 +6,7 @@
 # certificado TLS e chave privada (gerados por scripts/gerar_certificado.py); nunca vao para o Git
 certs/
 
-# contratos versionados e fixtures de teste (os demais .json, como contas.json e sessoes.json, ficam fora do Git)
+# contratos versionados e fixtures de teste (os demais .json ficam fora do Git)
 !schemas/*.json
 !tests/fixtures/*.json
 

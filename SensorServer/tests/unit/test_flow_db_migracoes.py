@@ -33,7 +33,8 @@ def test_o_esquema_so_tem_as_tabelas_que_a_borda_usa():
     criadas = set()
     for m in migracoes.listar():
         criadas |= set(re.findall(r"CREATE TABLE\s+(?:IF NOT EXISTS\s+)?([a-z_]+)", m.caminho.read_text(encoding="utf-8")))
-    assert criadas == {"leituras", "alertas", "confirmacoes", "episodios", "comandos_push", "estado_dispositivo"}
+    assert criadas == {"leituras", "alertas", "confirmacoes", "episodios", "comandos_push", "estado_dispositivo",
+                       "contas", "sessoes"}
 
 
 class TestConfig:

@@ -1,6 +1,7 @@
 -- 0001: esquema do Flow. PostgreSQL comum, exceto "leituras", que e uma hypertable do TimescaleDB (a unica); sem
 -- compressao, retencao nem agregados continuos.
 -- Quem escreve em todas elas e a borda (Servidor 1); a analise nao toca no banco.
+-- Contas e sessoes de login tambem moram aqui (tabelas comuns): nao ha arquivo de dados em disco.
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- Uma linha por leitura aceita (instante_ingestao = relogio do servidor ao aceitar o dado).
@@ -86,3 +87,24 @@ CREATE TABLE estado_dispositivo (
     estado        jsonb   NOT NULL,
     PRIMARY KEY (user_id, device_id)
 );
+
+-- Contas de login (criadas pela CLI `python -m borda.auth criar-conta`). `hash` e o scrypt da senha.
+CREATE TABLE contas (
+    id         text PRIMARY KEY,
+    papel      text NOT NULL,
+    user_ids   integer[] NOT NULL,
+    fontes     text[] NOT NULL,
+    hash       text NOT NULL,
+    criada_em  timestamptz NOT NULL
+);
+
+-- Refresh tokens em uso (so o hash do token). Sem chave estrangeira para `contas`: remover uma conta com sessao aberta
+-- faz o refresh recusar ("conta removida"), nao apagar a sessao em cascata.
+CREATE TABLE sessoes (
+    token_hash text PRIMARY KEY,
+    conta_id   text NOT NULL,
+    fonte      text,
+    device_id  text,
+    expira_em  timestamptz NOT NULL
+);
+CREATE INDEX sessoes_expira_idx ON sessoes (expira_em);

@@ -3,14 +3,17 @@ Autenticacao (Marco 3): contas, senhas, login, refresh e tokens.
 
 Nao conhece Flask. A camada HTTP fica em borda/server.py; a checagem por rota em borda/authz.py.
 
-Uso (CLI):
+Contas e sessoes (hash do refresh token) moram no banco, pelo repositorio (flow_db). As funcoes que o usam recebem `repo` por
+parametro opcional; sem ele, valem o repositorio instalado pela borda (ou o banco falso, nos testes). So login e refresh
+dependem do banco: o access token e um JWT e e conferido sem ele.
+
+Uso (CLI, exige o banco no ar e o .env preenchido):
     python -m borda.auth criar-conta --id idoso1 --papel idoso --user-id 1 --fontes app
 """
 import argparse
 import getpass
 import hashlib
 import hmac
-import json
 import os
 import secrets
 import sys
@@ -18,11 +21,13 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import jwt  # PyJWT
 
 from borda import const as const_borda   # TTLs, bloqueio, caminhos, papeis e custo do scrypt
 from comum import const as const_comum   # fontes validas
+from flow_db import repositorios
 
 _lock = threading.RLock()
 _falhas: dict[str, list[float]] = {}
@@ -50,6 +55,11 @@ class Bloqueado(AuthError):
 
 class TokenInvalido(AuthError):
     codigo = "token_invalido"
+
+
+class ServicoIndisponivel(AuthError):
+    """O banco falhou durante login ou refresh. A borda responde 503 (nao e credencial errada: nao conta como falha)."""
+    codigo = "servico_indisponivel"
 
 
 @dataclass(frozen=True)
@@ -100,22 +110,26 @@ _HASH_FALSO = hash_senha("hash-falso-para-igualar-tempo")  # conta inexistente g
 
 
 # ------------------------------ persistencia -------------------------------
-def _ler_json(path: str, padrao):
+def _repo(repo=None):
+    r = repo if repo is not None else repositorios.repo()
+    if r is None:
+        raise ServicoIndisponivel("banco nao iniciado")
+    return r
+
+
+def _instante(epoch_s: float) -> datetime:
+    return datetime.fromtimestamp(epoch_s, tz=timezone.utc)
+
+
+def _no_banco(operacao, *args):
+    """Falha do banco em login/refresh vira ServicoIndisponivel (503); a causa fica encadeada, nunca vai ao cliente."""
     try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return padrao
+        return operacao(*args)
+    except Exception as e:  # noqa: BLE001  (erro de conexao, timeout, pool esgotado...)
+        raise ServicoIndisponivel(f"{type(e).__name__}") from e
 
 
-def _gravar_json(path: str, dados) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(dados, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
-
-
-def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str], senha: str) -> None:
+def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str], senha: str, repo=None) -> None:
     if papel not in const_borda.PAPEIS_VALIDOS:
         raise ValueError(f"papel invalido: {papel}")
     if not set(fontes) <= const_comum.FONTES_VALIDAS:
@@ -131,13 +145,10 @@ def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str
             raise ValueError(f"papel '{papel}' exige fontes == ['{permitida}'], recebeu {fontes}")
     if papel == "admin" and user_ids:
         raise ValueError("papel 'admin' nao tem --user-id (ele nao e escopado a uma pessoa)")
-    with _lock:
-        contas = _ler_json(const_borda.CONTAS_PATH, {})
-        if conta_id in contas:
-            raise ValueError(f"conta ja existe: {conta_id}")
-        contas[conta_id] = {"id": conta_id, "papel": papel, "user_ids": user_ids,
-                            "fontes": fontes, "hash": hash_senha(senha)}
-        _gravar_json(const_borda.CONTAS_PATH, contas)
+    criada = _repo(repo).criar_conta({"id": conta_id, "papel": papel, "user_ids": list(user_ids), "fontes": list(fontes),
+                                      "hash": hash_senha(senha), "criada_em": _instante(time.time())})
+    if not criada:
+        raise ValueError(f"conta ja existe: {conta_id}")
 
 
 # --------------------------------- tokens ----------------------------------
@@ -159,14 +170,11 @@ def verificar_token(token: str) -> Principal:
                      float(c["exp"]))
 
 
-def _par_de_tokens(conta: dict, fonte, device_id, agora: float) -> dict:
+def _par_de_tokens(conta: dict, fonte, device_id, agora: float, repo) -> dict:
     refresh_token = secrets.token_urlsafe(48)
-    sessoes = _ler_json(const_borda.SESSOES_PATH, {})
-    sessoes = {h: s for h, s in sessoes.items() if s["exp"] > agora}  # limpa vencidas
-    sessoes[hashlib.sha256(refresh_token.encode()).hexdigest()] = {
-        "conta_id": conta["id"], "fonte": fonte, "device_id": device_id, "exp": agora + const_borda.REFRESH_TTL_S,
-    }
-    _gravar_json(const_borda.SESSOES_PATH, sessoes)
+    repo.podar_sessoes(_instante(agora))   # limpa as vencidas
+    repo.gravar_sessao({"token_hash": hashlib.sha256(refresh_token.encode()).hexdigest(), "conta_id": conta["id"],
+                        "fonte": fonte, "device_id": device_id, "expira_em": _instante(agora + const_borda.REFRESH_TTL_S)})
     return {
         "access_token": _emitir_access(conta, fonte, device_id, agora),
         "refresh_token": refresh_token,
@@ -211,12 +219,13 @@ def device_id_valido(device_id) -> bool:
     return device_id is None or (isinstance(device_id, str) and len(device_id) <= const_comum.MAX_DEVICE_ID_LEN)
 
 
-def login(identificador: str, segredo: str, fonte: str | None, device_id: str | None) -> dict:
+def login(identificador: str, segredo: str, fonte: str | None, device_id: str | None, repo=None) -> dict:
     if not device_id_valido(device_id):   # defesa; server.login ja responde 400 antes de chegar aqui
         raise ValueError("device_id invalido")
     agora = time.time()
+    r = _repo(repo)
     with _lock:
-        conta = _ler_json(const_borda.CONTAS_PATH, {}).get(identificador)
+        conta = _no_banco(r.buscar_conta, identificador)   # banco fora: 503, sem contar como falha de senha
         existe = conta is not None
         try:
             _checar_bloqueio(identificador, agora)
@@ -231,24 +240,26 @@ def login(identificador: str, segredo: str, fonte: str | None, device_id: str | 
             erro.conta_existe = existe
             raise erro
         _falhas.pop(identificador, None)
-        return _par_de_tokens(conta, fonte, device_id, agora)
+        return _no_banco(_par_de_tokens, conta, fonte, device_id, agora, r)
 
 
-def refresh(refresh_token: str) -> dict:
+def refresh(refresh_token: str, repo=None) -> dict:
     agora = time.time()
     h = hashlib.sha256(refresh_token.encode()).hexdigest()
+    r = _repo(repo)
+    motivo = "refresh invalido ou expirado"
     with _lock:
-        sessoes = _ler_json(const_borda.SESSOES_PATH, {})
-        s = sessoes.pop(h, None)  # uso unico: se existia, sai do arquivo ja nesta chamada, valido ou expirado
-        if s is None:
-            raise TokenInvalido("refresh invalido ou expirado")   # desconhecido: nada mudou, nao regrava
-        _gravar_json(const_borda.SESSOES_PATH, sessoes)
-        if s["exp"] <= agora:
-            raise TokenInvalido("refresh invalido ou expirado")
-        conta = _ler_json(const_borda.CONTAS_PATH, {}).get(s["conta_id"])
-        if conta is None:
-            raise TokenInvalido("conta removida")
-        return _par_de_tokens(conta, s["fonte"], s["device_id"], agora)
+        try:
+            with r.transacao() as tx:   # uma transacao: se o banco falhar no meio, a sessao NAO e consumida
+                s = tx.consumir_sessao(h)   # uso unico: se existia, sai do banco ja nesta chamada, valida ou vencida
+                if s is not None and s["expira_em"] > _instante(agora):
+                    conta = tx.buscar_conta(s["conta_id"])
+                    if conta is not None:
+                        return _par_de_tokens(conta, s["fonte"], s["device_id"], agora, tx)
+                    motivo = "conta removida"
+        except Exception as e:  # noqa: BLE001
+            raise ServicoIndisponivel(f"{type(e).__name__}") from e
+    raise TokenInvalido(motivo)
 
 
 # ----------------------------------- CLI -----------------------------------
@@ -263,10 +274,20 @@ def _cli() -> int:
     a = ap.parse_args()
     senha = os.environ.get("FLOW_SENHA") or getpass.getpass("Senha: ")
     try:
+        repositorios.iniciar()   # abre o banco pelo .env (FLOW_DB_*); sem banco no ar, recusa com mensagem clara
+    except RuntimeError as e:
+        print(f"erro: {e}", file=sys.stderr)
+        return 1
+    try:
         criar_conta(a.id, a.papel, a.user_id, a.fontes, senha)
     except ValueError as e:
         print(f"erro: {e}", file=sys.stderr)
         return 1
+    except Exception as e:  # noqa: BLE001  (o banco caiu no meio: mensagem curta, sem detalhes de conexao)
+        print(f"erro: o banco falhou ao gravar a conta ({type(e).__name__}).", file=sys.stderr)
+        return 1
+    finally:
+        repositorios.desinstalar()
     print(f"conta '{a.id}' criada ({a.papel}, user_ids={a.user_id}, fontes={a.fontes})")
     return 0
 

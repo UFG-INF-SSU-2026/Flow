@@ -115,6 +115,23 @@ def transacao_e_tudo_ou_nada(repo):
     assert repo.listar_comandos_de_episodios(["e2"]) == []
 
 
+def contas_e_sessoes(repo):
+    conta = {"id": "idoso1", "papel": "idoso", "user_ids": [1], "fontes": ["app"], "hash": "scrypt$aa$bb", "criada_em": T0}
+    assert repo.criar_conta(conta) is True
+    assert repo.criar_conta({**conta, "hash": "outro"}) is False                      # duplicada: recusada, nada muda
+    assert repo.buscar_conta("idoso1") == conta and repo.buscar_conta("nenhuma") is None
+
+    def sessao(token, seg):
+        return {"token_hash": token, "conta_id": "idoso1", "fonte": "app", "device_id": "cel1", "expira_em": _t(seg)}
+    repo.gravar_sessao(sessao("a", 10))
+    repo.gravar_sessao(sessao("b", 20))
+    repo.gravar_sessao(sessao("c", 30))
+    assert repo.consumir_sessao("a") == sessao("a", 10)
+    assert repo.consumir_sessao("a") is None                                           # uso unico
+    assert repo.podar_sessoes(_t(20)) == 1                                             # "b" venceu (expira_em <= agora)
+    assert repo.consumir_sessao("b") is None and repo.consumir_sessao("c") == sessao("c", 30)
+
+
 TODOS = [leituras_em_lote_e_recentes, comando_e_idempotente_pelo_message_id, alerta_e_confirmacao_voltam_com_id,
          episodio_upsert_preserva_encerramento_e_funde_dados, episodios_recentes_incluem_os_abertos_de_qualquer_idade,
-         estado_do_dispositivo_upsert_e_leitura_por_device, transacao_e_tudo_ou_nada]
+         estado_do_dispositivo_upsert_e_leitura_por_device, transacao_e_tudo_ou_nada, contas_e_sessoes]

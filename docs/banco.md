@@ -20,7 +20,7 @@ Sem Docker, para desenvolver: `FLOW_DB_FAKE=1 python -m borda.server` (banco em 
 
 **Certificado recriado** (`python scripts/gerar_certificado.py --forcar`): `docker compose restart db`. O TLS não exige recriar o volume. Sem `certs/flow.crt` e `certs/flow.key` o container não sobe, e sem o certificado a borda não conecta.
 
-**Banco antigo:** a migração `0001_base.sql` cria a extensão `timescaledb` e converte `leituras` em hypertable, e isso exige a imagem do TimescaleDB. Um volume criado antes, com a imagem `postgres:17` simples (ou com o esquema anterior), não serve: recrie com `docker compose down -v` e suba de novo (`scripts/preparar.sh`). Os dados de teste não são migrados.
+**Banco antigo:** a migração `0001_base.sql` cria a extensão `timescaledb` e converte `leituras` em hypertable, e isso exige a imagem do TimescaleDB. Um volume criado antes, com a imagem `postgres:17` simples (ou com o esquema anterior), não serve: recrie com `docker compose down -v` e suba de novo (`scripts/preparar.sh`). Os dados de teste não são migrados, **inclusive as contas**: depois do `down -v`, recrie-as (`python -m borda.auth criar-conta`, ver `INSTRUCOES.md`).
 
 ## Tabelas
 
@@ -32,8 +32,10 @@ Sem Docker, para desenvolver: `FLOW_DB_FAKE=1 python -m borda.server` (banco em 
 | `episodios` | Um episódio de queda por linha, com o estado e o motivo do encerramento. |
 | `comandos_push` | Histórico das mensagens de push (`message_id` único). É daqui que a restauração tira os `messageId` de cada episódio. |
 | `estado_dispositivo` | Resumo da imobilidade por dispositivo (`GET /estado/<device_id>`), gravado só quando muda. |
+| `contas` | Contas de login (`id`, `papel`, `user_ids`, `fontes`, hash scrypt da senha, `criada_em`). Criadas pela CLI `python -m borda.auth criar-conta`, que exige o banco no ar. |
+| `sessoes` | Refresh tokens em uso (só o hash do token, a conta, a fonte, o `device_id` e `expira_em`). Uso único: `DELETE ... RETURNING`. Sem chave estrangeira para `contas`: remover a conta faz o refresh recusar. As vencidas são podadas a cada login ou refresh. |
 
-Quem grava é sempre a borda: as leituras em lote (uma só thread) e, numa transação, as decisões da análise (`borda/efeitos.py`). Se o banco cai, as leituras ficam numa fila limitada em memória (`MAX_FILA_LEITURAS`) e nenhuma decisão é aplicada nem push enviado até ele voltar. Contas e sessões **não** estão no banco: ficam em `contas.json` e `sessoes.json` (só da borda).
+Quem grava é sempre a borda: as leituras em lote (uma só thread) e, numa transação, as decisões da análise (`borda/efeitos.py`). Se o banco cai, as leituras ficam numa fila limitada em memória (`MAX_FILA_LEITURAS`) e nenhuma decisão é aplicada nem push enviado até ele voltar. Contas e sessões também estão no banco (tabelas comuns): não há arquivo de dados em disco. Com o banco fora, só login e refresh falham (`503`); o access token é conferido sem banco e quem já está logado segue enviando.
 
 ## Testes
 
@@ -68,6 +70,9 @@ SELECT application_name, state, count(*) FROM pg_stat_activity WHERE datname = '
 -- hypertables (deve listar só `leituras`) e seus pedaços (chunks)
 SELECT hypertable_name, num_chunks, compression_enabled FROM timescaledb_information.hypertables;
 SELECT chunk_name, range_start, range_end FROM timescaledb_information.chunks WHERE hypertable_name = 'leituras' ORDER BY range_start;
+
+-- contas cadastradas (o hash da senha nao e listado)
+SELECT id, papel, user_ids, fontes FROM contas;
 
 -- tamanho em disco (para `leituras`, hypertable_size soma todos os chunks; pg_total_relation_size só veria a tabela-mãe)
 SELECT pg_size_pretty(hypertable_size('leituras')) AS leituras;

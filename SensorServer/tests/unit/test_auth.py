@@ -183,24 +183,23 @@ class TestRefresh:
         with pytest.raises(auth.TokenInvalido):
             auth.refresh(t["refresh_token"])
 
-    def test_expirado_some_do_arquivo_na_primeira_tentativa(self, contas, relogio_auth, monkeypatch):
+    def test_expirado_some_do_banco_na_primeira_tentativa(self, contas, banco, relogio_auth, monkeypatch):
         monkeypatch.setattr(const_borda, "REFRESH_TTL_S", 10)
         t = _login_ok()
         outro = auth.login("bridge1", "senha-bridge", "wokwi", "b")   # segunda sessao, nao deve ser afetada
-        assert len(auth._ler_json(const_borda.SESSOES_PATH, {})) == 2
+        assert len(banco.tabelas["sessoes"]) == 2
         relogio_auth.avancar(11)
         with pytest.raises(auth.TokenInvalido):
             auth.refresh(t["refresh_token"])
-        restantes = auth._ler_json(const_borda.SESSOES_PATH, {})
-        assert len(restantes) == 1
-        assert hashlib.sha256(outro["refresh_token"].encode()).hexdigest() in restantes
+        restantes = [l["token_hash"] for l in banco.tabelas["sessoes"]]
+        assert restantes == [hashlib.sha256(outro["refresh_token"].encode()).hexdigest()]
 
-    def test_desconhecido_nao_mexe_no_arquivo(self, contas):
+    def test_desconhecido_nao_mexe_nas_sessoes(self, contas, banco):
         _login_ok()
-        antes = auth._ler_json(const_borda.SESSOES_PATH, {})
+        antes = list(banco.tabelas["sessoes"])
         with pytest.raises(auth.TokenInvalido):
             auth.refresh("nao-existe")
-        assert auth._ler_json(const_borda.SESSOES_PATH, {}) == antes
+        assert banco.tabelas["sessoes"] == antes
 
     def test_dentro_da_validade_funciona(self, contas, relogio_auth, monkeypatch):
         monkeypatch.setattr(const_borda, "REFRESH_TTL_S", 10)
@@ -208,9 +207,9 @@ class TestRefresh:
         relogio_auth.avancar(9)
         assert auth.refresh(t["refresh_token"])["papel"] == "idoso"
 
-    def test_conta_removida_falha(self, contas):
+    def test_conta_removida_falha(self, contas, banco):
         t = _login_ok()
-        auth._gravar_json(const_borda.CONTAS_PATH, {})
+        banco.tabelas["contas"].clear()
         with pytest.raises(auth.TokenInvalido):
             auth.refresh(t["refresh_token"])
 

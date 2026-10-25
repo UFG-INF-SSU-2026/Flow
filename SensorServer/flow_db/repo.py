@@ -61,6 +61,28 @@ class Repo(ABC):
         """Comandos de push dos episodios dados, em ordem de id (campos: id, episodio_id, message_id, tipo, criado_em,
         expira_em). Devolve os `message_id` que ligam a resposta do dispositivo ao episodio."""
 
+    # ---- contas e sessoes de login ----
+    @abstractmethod
+    def criar_conta(self, conta: dict) -> bool:
+        """Chaves: id, papel, user_ids (lista de int), fontes (lista de str), hash, criada_em. Devolve False, sem gravar
+        nada, se ja existe uma conta com esse id."""
+
+    @abstractmethod
+    def buscar_conta(self, conta_id: str) -> dict | None:
+        """A conta (mesmas chaves de criar_conta) ou None."""
+
+    @abstractmethod
+    def gravar_sessao(self, sessao: dict) -> None:
+        """Chaves: token_hash, conta_id, fonte, device_id, expira_em."""
+
+    @abstractmethod
+    def consumir_sessao(self, token_hash: str) -> dict | None:
+        """Uso unico e atomico: devolve a sessao e a apaga na mesma operacao (vencida ou nao), ou None se nao existe."""
+
+    @abstractmethod
+    def podar_sessoes(self, agora: datetime) -> int:
+        """Apaga as sessoes com expira_em <= agora. Devolve quantas."""
+
     @abstractmethod
     def transacao(self) -> AbstractContextManager["Repo"]:
         """with repo.transacao() as tx: ... commit ao sair; qualquer excecao desfaz tudo."""

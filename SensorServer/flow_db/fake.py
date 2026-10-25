@@ -1,8 +1,8 @@
 """
 Banco falso em memoria: a interface `Repo` sem Docker (testes e `FLOW_DB_FAKE=1`).
 
-Imita: ids sequenciais (IDENTITY), CHECKs principais, message_id unico em comandos_push, upsert de episodios e estado e
-transacao com desfazer (`transacao()`). As tabelas ficam em `tabelas[nome]` (listas de dicts) para os testes inspecionarem.
+Imita: ids sequenciais (IDENTITY), CHECKs principais, message_id unico em comandos_push, id unico em contas, uso unico das
+sessoes, upsert de episodios e estado e transacao com desfazer (`transacao()`). As tabelas ficam em `tabelas[nome]` (listas de dicts) para os testes inspecionarem.
 """
 import copy
 import threading
@@ -12,7 +12,7 @@ from typing import Sequence
 
 from .repo import Repo
 
-TABELAS = ("leituras", "comandos_push", "alertas", "confirmacoes", "episodios", "estado_dispositivo")
+TABELAS = ("leituras", "comandos_push", "alertas", "confirmacoes", "episodios", "estado_dispositivo", "contas", "sessoes")
 COM_ID = {"leituras", "comandos_push", "alertas", "confirmacoes"}
 
 _FONTES = {"app", "wokwi"}
@@ -152,3 +152,37 @@ class BancoFalso(Repo):
         achados = self._selecionar("comandos_push", lambda l: l.get("episodio_id") in ids)
         return sorted(({k: l.get(k) for k in ("id", "episodio_id", "message_id", "tipo", "criado_em", "expira_em")}
                        for l in achados), key=lambda l: l["id"])
+
+    # ---- contas e sessoes de login ----
+    def criar_conta(self, c: dict) -> bool:
+        with self._lock:
+            if any(l["id"] == c["id"] for l in self.tabelas["contas"]):
+                return False
+            self._inserir("contas", {"id": c["id"], "papel": c["papel"], "user_ids": list(c["user_ids"]),
+                                     "fontes": list(c["fontes"]), "hash": c["hash"], "criada_em": c["criada_em"]})
+            return True
+
+    def buscar_conta(self, conta_id):
+        achadas = self._selecionar("contas", lambda l: l["id"] == conta_id)
+        return achadas[0] if achadas else None
+
+    def gravar_sessao(self, s: dict) -> None:
+        with self._lock:
+            if any(l["token_hash"] == s["token_hash"] for l in self.tabelas["sessoes"]):
+                raise ValueError("token_hash ja existe")
+            self._inserir("sessoes", {"token_hash": s["token_hash"], "conta_id": s["conta_id"], "fonte": s.get("fonte"),
+                                      "device_id": s.get("device_id"), "expira_em": s["expira_em"]})
+
+    def consumir_sessao(self, token_hash):
+        with self._lock:
+            achada = next((l for l in self.tabelas["sessoes"] if l["token_hash"] == token_hash), None)
+            if achada is None:
+                return None
+            self.tabelas["sessoes"].remove(achada)
+            return copy.deepcopy(achada)
+
+    def podar_sessoes(self, agora) -> int:
+        with self._lock:
+            antes = len(self.tabelas["sessoes"])
+            self.tabelas["sessoes"] = [l for l in self.tabelas["sessoes"] if l["expira_em"] > agora]
+            return antes - len(self.tabelas["sessoes"])

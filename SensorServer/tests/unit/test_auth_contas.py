@@ -2,29 +2,31 @@
 import pytest
 
 from borda import auth
-from borda import const as const_borda
-def _contas() -> dict:
-    return auth._ler_json(const_borda.CONTAS_PATH, {})
+from flow_db import repositorios
+
+
+def _conta(conta_id: str) -> dict | None:
+    return repositorios.repo().buscar_conta(conta_id)
 
 
 class TestValidas:
     def test_idoso(self):
         auth.criar_conta("i", "idoso", [1], ["app"], "s")
-        c = _contas()["i"]
+        c = _conta("i")
         assert (c["papel"], c["user_ids"], c["fontes"]) == ("idoso", [1], ["app"])
         assert auth._verificar_senha("s", c["hash"])
 
     def test_dispositivo(self):
         auth.criar_conta("d", "dispositivo", [1], ["wokwi"], "s")
-        assert _contas()["d"]["fontes"] == ["wokwi"]
+        assert _conta("d")["fontes"] == ["wokwi"]
 
     def test_admin_sem_user_id(self):
         auth.criar_conta("a", "admin", [], [], "s")
-        assert _contas()["a"]["user_ids"] == []
+        assert _conta("a")["user_ids"] == []
 
     def test_cuidador_reservado_e_criavel(self):
         auth.criar_conta("c", "cuidador", [1, 2], [], "s")
-        assert _contas()["c"]["user_ids"] == [1, 2]
+        assert _conta("c")["user_ids"] == [1, 2]
 
 
 class TestInvalidas:
@@ -76,4 +78,4 @@ class TestInvalidas:
     def test_conta_invalida_nao_e_gravada(self):
         with pytest.raises(ValueError):
             auth.criar_conta("x", "idoso", [1], ["wokwi"], "s")
-        assert "x" not in _contas()
+        assert _conta("x") is None

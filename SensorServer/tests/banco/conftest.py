@@ -72,5 +72,5 @@ def repo(pool):
     """O Repo sobre o banco real, com as tabelas vazias."""
     from flow_db.pg import Pg
     with pool.connection() as conn:
-        conn.execute("TRUNCATE leituras, comandos_push, alertas, confirmacoes, episodios, estado_dispositivo RESTART IDENTITY")
+        conn.execute("TRUNCATE leituras, comandos_push, alertas, confirmacoes, episodios, estado_dispositivo, contas, sessoes RESTART IDENTITY")
     return Pg(pool)

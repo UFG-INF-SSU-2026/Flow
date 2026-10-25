@@ -1,4 +1,5 @@
 """authz.py: tabela de politica, escopo, decorador exige e registro da negacao."""
+from datetime import datetime, timezone
 
 import pytest
 from flask import Flask, g, jsonify
@@ -6,6 +7,7 @@ from flask import Flask, g, jsonify
 from borda import auth
 from borda import authz
 from borda import const as const_borda
+from flow_db import repositorios
 PERMISSOES = ["dados:enviar", "eventos:enviar", "push:receber", "dados:ler", "estado:ler"]
 ESPERADO = {
     "idoso": {"dados:enviar", "eventos:enviar", "push:receber"},
@@ -131,10 +133,8 @@ class TestExige:
     def test_fonte_do_papel_errada(self, mini):
         c, _ = mini
         # criar_conta barra esta combinacao; grava direto para simular uma conta mal configurada
-        cs = auth._ler_json(const_borda.CONTAS_PATH, {})
-        cs["idoso-x"] = {"id": "idoso-x", "papel": "idoso", "user_ids": [1], "fontes": ["app", "wokwi"],
-                         "hash": auth.hash_senha("senha-x")}
-        auth._gravar_json(const_borda.CONTAS_PATH, cs)
+        repositorios.repo().criar_conta({"id": "idoso-x", "papel": "idoso", "user_ids": [1], "fontes": ["app", "wokwi"],
+                                         "hash": auth.hash_senha("senha-x"), "criada_em": datetime.now(timezone.utc)})
         t = auth.login("idoso-x", "senha-x", "wokwi", "d")["access_token"]
         r = c.get("/enviar", headers=_bearer(t))
         assert r.status_code == 403 and r.get_json()["codigo"] == "fonte_invalida"

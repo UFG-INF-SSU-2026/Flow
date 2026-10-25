@@ -193,7 +193,7 @@ def test_cliente_que_nao_consome_enche_a_fila_e_e_desconectado_e_reconecta_com_r
 @pytest.fixture
 def reiniciar(monkeypatch, pipeline):
     """reiniciar() simula a troca dos processos: some o que estava em memoria (a analise, com o estado das regras e outro
-    boot_id; as falhas de login; o hub SSE); o banco, contas.json e sessoes.json (disco) ficam. O hub novo e criado alguns
+    boot_id; as falhas de login; o hub SSE); o banco (com contas e sessoes) fica. O hub novo e criado alguns
     segundos depois do antigo, como seria num processo novo. Devolve o hub novo."""
 
     def _reiniciar() -> Hub:

@@ -53,14 +53,6 @@ JANELA_FALHAS_S = 900
 # Duracao (s) do bloqueio de login apos estourar MAX_FALHAS: 15 minutos.
 BLOQUEIO_S = 900
 
-# Arquivo de contas (coberto pelo *.json do .gitignore). Pode ser trocado pela
-# variavel de ambiente FLOW_CONTAS_PATH.
-CONTAS_PATH = os.environ.get("FLOW_CONTAS_PATH", "contas.json")
-
-# Arquivo com o hash dos refresh tokens (sessoes persistem se o servidor
-# reiniciar). Pode ser trocado por FLOW_SESSOES_PATH.
-SESSOES_PATH = os.environ.get("FLOW_SESSOES_PATH", "sessoes.json")
-
 # Papeis aceitos na criacao de contas. 'cuidador' e reservado (sem permissoes).
 PAPEIS_VALIDOS = {"idoso", "dispositivo", "cuidador", "admin"}
 
