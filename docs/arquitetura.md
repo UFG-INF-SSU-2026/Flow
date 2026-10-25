@@ -169,24 +169,24 @@ As setas tracejadas entre `SensorServer` e os dispositivos concretos são o push
 
 ### 4.1 Contas e papéis
 
-Tudo que se conecta ao servidor é uma **conta** com `papel`, `user_ids` (pessoas monitoradas a que se refere) e `fontes` permitidas (`app`, `wokwi`).
+Tudo que se conecta ao servidor é uma **conta** com `papel`, `user_ids` (pessoas monitoradas a que se refere), `fontes` permitidas (`app`, `wokwi`) e, no papel `dispositivo`, a lista de `device_ids` que o login dela pode declarar.
 
 | Papel | Quem usa | Fonte | Observação |
 | --- | --- | --- | --- |
-| `idoso` | App do idoso | `app` | Exatamente um `user_id`. |
-| `dispositivo` | Dispositivo Wokwi (a conta é usada pela ponte, em nome do conjunto firmware + ponte) | `wokwi` | Exatamente um `user_id`. |
+| `idoso` | App do idoso | `app` | Exatamente um `user_id`. O `device_id` é **obrigatório** no login, mas livre (sem lista): o app o envia sempre. |
+| `dispositivo` | Dispositivo Wokwi (a conta é usada pela ponte, em nome do conjunto firmware + ponte) | `wokwi` | Exatamente um `user_id` e **ao menos um `device_id` permitido** (`--device-id`, repetível, só neste papel). |
 | `admin` | Operação/depuração | — | Lê `GET /dados` e `GET /estado/<id>`. |
 | `cuidador` *(abstrato)* | App do cuidador | — | Reservado; `user_ids` é lista para vincular várias pessoas. A política vigente concede **conjunto vazio** de permissões (negar por padrão); a coluna `cuidador` da tabela 4.3 é o desenho futuro, sem implementação. |
 
-O `user_id` é uma consequência da conta: não é digitado no app nem no bridge. Dois produtores da mesma pessoa têm contas apontando para o mesmo `user_id`, e é isso que faz o servidor agregá-los.
+O `user_id` é uma consequência da conta: não é digitado no app nem no bridge. Dois produtores da mesma pessoa têm contas apontando para o mesmo `user_id`, e é isso que faz o servidor agregá-los (4.4).
 
 ### 4.2 Login e tokens
 
-- **Senhas:** `scrypt` com sal por conta, comparação em tempo constante. Contas criadas por CLI (`python -m borda.auth criar-conta ...`); não há auto-cadastro. Gravadas na tabela `contas` do banco; nenhum arquivo de dados fica em disco.
-- **`POST /auth/login`** (corpo em envelope cifrado): `identificador`, `segredo`, `fonte`, `device_id`. Resposta (também cifrada): `access_token`, `refresh_token`, `expires_in`, `papel`, `user_ids`. A senha nunca trafega em claro.
+- **Senhas:** `scrypt` com sal por conta, comparação em tempo constante. Contas criadas por CLI (`python -m borda.auth criar-conta ...`, com `--device-id` para o papel `dispositivo`); não há auto-cadastro. Gravadas na tabela `contas` do banco; nenhum arquivo de dados fica em disco.
+- **`POST /auth/login`** (corpo em envelope cifrado): `identificador`, `segredo`, `fonte`, `device_id`. Resposta (também cifrada): `access_token`, `refresh_token`, `expires_in`, `papel`, `user_ids`. A senha nunca trafega em claro. **Quem julga o login é sempre o servidor**: a ponte só repassa o que o firmware forneceu (a linha do firmware usa `deviceId`; a ponte a traduz para `device_id`, o nome do contrato `auth-login`) e não guarda conta nem decide nada. O servidor confere o hash do segredo, a fonte da conta, o papel e, só então, o `device_id`: para `idoso` e `dispositivo` ele é **obrigatório** (ausente: `400`, `device_id_obrigatorio`); para `dispositivo` precisa ainda estar na lista da conta (senão `403`, `device_nao_permitido`). Os dois só são avaliados com a senha certa e **não contam como falha de senha**; só o `admin` pode omitir `fonte` e `device_id`. O token carrega o `device_id` aceito.
 - **Access token:** JWT HS256, validade padrão 1 h; claims `sub`, `papel`, `user_ids`, `fonte`, `device_id`, `iat`, `exp`, `jti`. Enviado em `Authorization: Bearer`.
 - **Refresh token:** opaco, validade padrão 7 dias, **uso único** (rotativo). O servidor guarda só o hash, na tabela `sessoes` do banco, de modo que reiniciar o servidor não derruba as sessões. O consumo é atômico (`DELETE ... RETURNING`) e, no refresh, acontece na mesma transação que grava o par novo: se o banco falhar no meio, a sessão não se perde.
-- **Bloqueio:** 5 falhas em 15 minutos para o mesmo identificador bloqueiam novas tentativas por 15 minutos (`429`). A resposta é idêntica para conta inexistente e senha errada.
+- **Bloqueio:** 5 falhas em 15 minutos para o mesmo identificador bloqueiam novas tentativas por 15 minutos (`429`). A resposta é idêntica para conta inexistente e senha errada. O contador é **por conta**, nunca por IP (todos os dispositivos de uma ponte chegam do mesmo IP). Risco registrado: quem erra a senha de uma conta várias vezes bloqueia aquele dispositivo por um tempo; o dano fica limitado a ele.
 - **Segredo de assinatura:** variável `FLOW_JWT_SECRET` (mínimo 32 bytes). Sem ela o servidor não sobe.
 
 ### 4.3 Autorização
@@ -203,9 +203,36 @@ RBAC com escopo por pessoa, **negando por padrão**.
 Dois estágios de verificação:
 
 1. **Papel e permissão**, antes de decifrar o corpo (decorador `exige(permissao, fonte=...)`): token válido, papel com a permissão, fonte do token igual à exigida. Falha → `401` ou `403`.
-2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids`, `source` deve ser a `fonte` do token e o `device_id`/`deviceId` do payload, se declarado, deve ser o `device_id` do token (o do login; o bridge usa o `deviceId` do firmware). Falha → `403`. Payload **sem** `source` válido (ausente ou fora de `app`/`wokwi`) é recusado com `400` antes da checagem de escopo, em `/dados` e em `/eventos`: nenhum caminho aceita dado ou evento sem `source`. `source` presente e diferente da fonte do token é `403`. O `user_id` precisa ser um número inteiro JSON; string (mesmo só de dígitos), booleano, decimal, `null` ou ausente é `400`. Esse estágio existe porque o `user_id` está dentro do envelope cifrado.
+2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids`, `source` deve ser a `fonte` do token e o `device_id`/`deviceId` do payload, se declarado, deve ser o `device_id` do token (o do login; o bridge usa o `deviceId` do firmware). Falha → `403`. O `device_id` **gravado** em `/dados` e `/eventos` é sempre o do token: um payload sem `deviceId` é aceito e recebe o do token (não existe mais o `device_id` inventado a partir do `user_id`). Falha → `403`. Payload **sem** `source` válido (ausente ou fora de `app`/`wokwi`) é recusado com `400` antes da checagem de escopo, em `/dados` e em `/eventos`: nenhum caminho aceita dado ou evento sem `source`. `source` presente e diferente da fonte do token é `403`. O `user_id` precisa ser um número inteiro JSON; string (mesmo só de dígitos), booleano, decimal, `null` ou ausente é `400`. Esse estágio existe porque o `user_id` está dentro do envelope cifrado.
 
 Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do token; o cliente não escolhe de quem recebe.
+
+**Matriz por rota** (conferida contra as rotas da borda):
+
+| Rota | Quem pode | Papel / fonte / escopo |
+| --- | --- | --- |
+| `POST /auth/login` | Anônimo, com credencial no corpo cifrado | Bloqueio por conta (`429`); banco fora: `503` |
+| `POST /auth/refresh` | Quem tem refresh token válido | Uso único; banco fora: `503` |
+| `POST /dados`, `POST /eventos` | `idoso` (fonte `app`) e `dispositivo` (fonte `wokwi`) | `user_id` e `source` conferidos com o token; `device_id` gravado é o do token (corpo divergente: `403`) |
+| `GET /push/app` | `idoso` | Só o `user_id` do token |
+| `GET /push/wokwi` | `dispositivo` | Só o `user_id` do token |
+| `GET /dados` | **Só `admin`** | Depuração; inclui localização, quando houver |
+| `GET /estado/<device_id>` | **Só `admin`** | Procura em todos os usuários |
+| `GET /health`, `GET /` | Anônimo | Sem dado pessoal (as únicas rotas abertas, além do login) |
+| Análise: `/analisar`, `/vigiar`, `/restaurar`, `/saude` | **Só a borda**, com `X-Flow-Analise-Token` | Comparado em tempo constante; qualquer outro chamador: `401` |
+| Banco | A borda e o operador | TLS `verify-full` |
+
+### 4.4 Um idoso com celular e Wokwi (caso de uso principal)
+
+Duas contas com o **mesmo `user_id`**: `idoso1` (papel `idoso`, fonte `app`, `device_id` obrigatório e livre) e `bridge1` (papel `dispositivo`, fonte `wokwi`, com a lista de `device_ids`). Consequências:
+
+- **a)** A máquina de queda é **uma por usuário** e funde as duas fontes (9.2.1).
+- **b)** O estado das regras é por `(user_id, device_id)`: o celular e o Wokwi não colidem.
+- **c)** O pedido de confirmação é publicado nos **dois** canais (`/push/app` e `/push/wokwi`) e a resposta de qualquer um encerra o episódio.
+- **d)** A falha de um canal não impede o outro.
+- **e)** O `device_id` do firmware precisa estar na lista da conta; senão o login leva `403`.
+
+O hub SSE entrega por `(user_id, canal)`. Duas contas `dispositivo` com `user_id` diferentes nunca recebem o comando uma da outra; vários `device_ids` na **mesma** conta (mesmo `user_id`) compartilham os comandos. Para isolar simulações, use uma conta e um `user_id` por simulação.
 
 **Registro das negações:** toda negação (`401`/`403`, e também `413` por corpo grande, com o motivo `corpo_grande`) vai para o log (rota, motivo, conta, IP), nunca o conteúdo da requisição. Não há auditoria em arquivo nem em banco por ora.
 

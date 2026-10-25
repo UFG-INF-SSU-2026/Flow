@@ -159,7 +159,8 @@ class BancoFalso(Repo):
             if any(l["id"] == c["id"] for l in self.tabelas["contas"]):
                 return False
             self._inserir("contas", {"id": c["id"], "papel": c["papel"], "user_ids": list(c["user_ids"]),
-                                     "fontes": list(c["fontes"]), "hash": c["hash"], "criada_em": c["criada_em"]})
+                                     "fontes": list(c["fontes"]), "device_ids": list(c.get("device_ids") or []),
+                                     "hash": c["hash"], "criada_em": c["criada_em"]})
             return True
 
     def buscar_conta(self, conta_id):

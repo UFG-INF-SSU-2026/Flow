@@ -9,6 +9,7 @@ dependem do banco: o access token e um JWT e e conferido sem ele.
 
 Uso (CLI, exige o banco no ar e o .env preenchido):
     python -m borda.auth criar-conta --id idoso1 --papel idoso --user-id 1 --fontes app
+    python -m borda.auth criar-conta --id bridge1 --papel dispositivo --user-id 1 --fontes wokwi --device-id esp32-1
 """
 import argparse
 import getpass
@@ -51,6 +52,16 @@ class CredenciaisInvalidas(AuthError):
 
 class Bloqueado(AuthError):
     codigo = "bloqueado"
+
+
+class DeviceIdObrigatorio(AuthError):
+    """Login de `idoso` ou `dispositivo` sem device_id. A borda responde 400; nao conta como falha de senha."""
+    codigo = "device_id_obrigatorio"
+
+
+class DeviceNaoPermitido(AuthError):
+    """Login de `dispositivo` com um device_id que nao esta na lista da conta. A borda responde 403; nao conta como falha de senha."""
+    codigo = "device_nao_permitido"
 
 
 class TokenInvalido(AuthError):
@@ -129,7 +140,8 @@ def _no_banco(operacao, *args):
         raise ServicoIndisponivel(f"{type(e).__name__}") from e
 
 
-def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str], senha: str, repo=None) -> None:
+def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str], senha: str, repo=None,
+                device_ids: list[str] | None = None) -> None:
     if papel not in const_borda.PAPEIS_VALIDOS:
         raise ValueError(f"papel invalido: {papel}")
     if not set(fontes) <= const_comum.FONTES_VALIDAS:
@@ -145,8 +157,16 @@ def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str
             raise ValueError(f"papel '{papel}' exige fontes == ['{permitida}'], recebeu {fontes}")
     if papel == "admin" and user_ids:
         raise ValueError("papel 'admin' nao tem --user-id (ele nao e escopado a uma pessoa)")
+    device_ids = list(device_ids or [])
+    if papel == "dispositivo" and not device_ids:
+        raise ValueError("papel 'dispositivo' exige ao menos um --device-id (os que o login dela pode declarar)")
+    if papel != "dispositivo" and device_ids:
+        raise ValueError("--device-id so vale para o papel 'dispositivo' (o device_id do idoso e livre)")
+    for d in device_ids:
+        if not isinstance(d, str) or not d or not device_id_valido(d):
+            raise ValueError(f"device_id invalido (texto de 1 a {const_comum.MAX_DEVICE_ID_LEN} caracteres): {d!r}")
     criada = _repo(repo).criar_conta({"id": conta_id, "papel": papel, "user_ids": list(user_ids), "fontes": list(fontes),
-                                      "hash": hash_senha(senha), "criada_em": _instante(time.time())})
+                                      "device_ids": device_ids, "hash": hash_senha(senha), "criada_em": _instante(time.time())})
     if not criada:
         raise ValueError(f"conta ja existe: {conta_id}")
 
@@ -240,6 +260,17 @@ def login(identificador: str, segredo: str, fonte: str | None, device_id: str | 
             erro.conta_existe = existe
             raise erro
         _falhas.pop(identificador, None)
+        # So depois de a credencial estar certa (quem erra a senha nao descobre o que a conta exige). Nenhum dos dois
+        # conta como falha de senha.
+        if conta["papel"] in ("idoso", "dispositivo"):
+            if not device_id:
+                erro = DeviceIdObrigatorio()
+                erro.conta_existe = True
+                raise erro
+            if conta["papel"] == "dispositivo" and device_id not in (conta.get("device_ids") or []):
+                erro = DeviceNaoPermitido()
+                erro.conta_existe = True
+                raise erro
         return _no_banco(_par_de_tokens, conta, fonte, device_id, agora, r)
 
 
@@ -271,6 +302,8 @@ def _cli() -> int:
     c.add_argument("--papel", required=True, choices=sorted(const_borda.PAPEIS_VALIDOS))
     c.add_argument("--user-id", type=int, nargs="*", default=[])
     c.add_argument("--fontes", nargs="*", default=[])
+    c.add_argument("--device-id", action="append", default=[],
+                   help="device_id permitido no login (so papel dispositivo, onde e obrigatorio; repita para varios)")
     a = ap.parse_args()
     senha = os.environ.get("FLOW_SENHA") or getpass.getpass("Senha: ")
     try:
@@ -279,7 +312,7 @@ def _cli() -> int:
         print(f"erro: {e}", file=sys.stderr)
         return 1
     try:
-        criar_conta(a.id, a.papel, a.user_id, a.fontes, senha)
+        criar_conta(a.id, a.papel, a.user_id, a.fontes, senha, device_ids=a.device_id)
     except ValueError as e:
         print(f"erro: {e}", file=sys.stderr)
         return 1
@@ -288,7 +321,8 @@ def _cli() -> int:
         return 1
     finally:
         repositorios.desinstalar()
-    print(f"conta '{a.id}' criada ({a.papel}, user_ids={a.user_id}, fontes={a.fontes})")
+    print(f"conta '{a.id}' criada ({a.papel}, user_ids={a.user_id}, fontes={a.fontes}"
+          + (f", device_ids={a.device_id}" if a.device_id else "") + ")")
     return 0
 
 

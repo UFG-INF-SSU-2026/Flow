@@ -359,6 +359,10 @@ def login():
         return negar(429, "bloqueado", ident if e.conta_existe else None)   # so conta que existe
     except auth.ServicoIndisponivel as e:
         return _login_sem_banco(e)
+    except auth.DeviceIdObrigatorio as e:
+        return negar(400, e.codigo, ident, mensagem="device_id obrigatorio para esta conta")
+    except auth.DeviceNaoPermitido as e:
+        return negar(403, e.codigo, ident)
     except auth.AuthError as e:
         return negar(401, e.codigo, ident if e.conta_existe else None)
     return _resposta_cifrada(tokens)
@@ -451,7 +455,10 @@ def receber_dados():
         if erros_app:
             print(f"  [dados] aviso: telemetria do app fora do contrato: {'; '.join(erros_app[:3])}")
 
-    device_id = str(payload.get("device_id") or payload.get("deviceId") or f"user{user_id}")
+    # O device_id gravado e SEMPRE o do token (o informado no login e conferido pela conta); o do payload so pode coincidir.
+    device_id = g.principal.device_id
+    if not device_id:      # idoso e dispositivo sempre o tem; defesa para um token sem ele
+        return negar(403, "fora_de_escopo", g.principal.conta_id)
 
     print(f"[{_agora_iso()}] Dados decifrados: user_id={user_id} source={source} device_id={device_id}")
 

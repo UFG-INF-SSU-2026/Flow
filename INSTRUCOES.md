@@ -90,10 +90,12 @@ Crie as duas contas do protótipo (a senha é pedida no terminal). As contas fic
 cd SensorServer
 pip install -r requirements.txt
 python -m borda.auth criar-conta --id idoso1  --papel idoso       --user-id 1 --fontes app
-python -m borda.auth criar-conta --id bridge1 --papel dispositivo --user-id 1 --fontes wokwi
+python -m borda.auth criar-conta --id bridge1 --papel dispositivo --user-id 1 --fontes wokwi --device-id esp32-decisao-imobilidade-01
 ```
 
-> O ID do usuário **não é mais digitado** no app nem no bridge: ele vem da conta. Para simular outra pessoa, crie outro par de contas com outro `--user-id`.
+A conta do bridge (papel `dispositivo`) **lista os `device_id` que pode usar** (`--device-id`, repita para vários): o do firmware (o `DEVICE_ID` de `sketch.ino`, o mesmo de `FLOW_BRIDGE_DEVICE`) precisa estar na lista, senão o login leva `403` (`device_nao_permitido`). O `idoso1` (app) também informa um `device_id` no login (o app já o envia), mas ele é livre. Os dois logins são julgados **pelo servidor**: o bridge só repassa o login.
+
+> O ID do usuário **não é mais digitado** no app nem no bridge: ele vem da conta. Para simular outra pessoa, crie outro par de contas com outro `--user-id` (uma conta e um `user_id` por simulação isolam os pedidos de confirmação: contas de `user_id` diferentes nunca recebem o push uma da outra).
 >
 > Para criar contas sem o prompt de senha (scripts), defina `FLOW_SENHA` no ambiente antes de rodar o comando. A senha das contas **não** fica no `.env` do servidor.
 
@@ -291,6 +293,7 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 | --- | --- |
 | Servidor não sobe e reclama de segredo | `FLOW_JWT_SECRET` ausente (ou com menos de 32 bytes) em `SensorServer/.env`, e não definido no terminal em que o servidor foi iniciado. Ao subir, o servidor mostra se leu o `.env` |
 | App ou bridge recebem `401` no login | usuário ou senha errados (no bridge: `FLOW_BRIDGE_SECRET` do `.env`, ou uma variável do terminal que sobrepõe o arquivo); após várias falhas há bloqueio temporário (`429`) |
+| Login do bridge recusado com `403` (`device_nao_permitido`) ou `400` (`device_id_obrigatorio`) | o `device_id` do firmware (`FLOW_BRIDGE_DEVICE`) não está na lista da conta `bridge1`, ou não foi enviado: recrie a conta com `--device-id <o do firmware>` (ou o `down -v` e as contas de novo). Não conta como falha de senha |
 | Bridge lento: eventos atrasados, pedido de confirmação `EXPIRADO` antes do ack | `FLOW_SERVIDOR` usando `localhost` no Windows (IPv6 primeiro); use `https://127.0.0.1:5000` |
 | Borda ou análise não sobem: "certificado TLS nao encontrado" (ou "certificado da CA") | falta o par do serviço (`certs/borda.*` ou `certs/analise.*`) ou o `certs/ca.crt`; rode `python scripts/gerar_certificado.py` em `SensorServer/` |
 | Bridge, app ou borda recusam a conexão (`certificate verify failed`, `SSLError`, "falha de conexão" no app) | o endereço usado não está no certificado da borda (reemita com `--forcar --ip <IP>`; a CA não muda, então ninguém recompila), ou o cliente confia em outra CA (copie o `ca.crt` atual para o bridge; se a CA foi recriada com `--forcar-ca`, recompile o app) |

@@ -17,8 +17,9 @@ class TestValidas:
         assert auth._verificar_senha("s", c["hash"])
 
     def test_dispositivo(self):
-        auth.criar_conta("d", "dispositivo", [1], ["wokwi"], "s")
-        assert _conta("d")["fontes"] == ["wokwi"]
+        auth.criar_conta("d", "dispositivo", [1], ["wokwi"], "s", device_ids=["esp32-1", "esp32-2"])
+        c = _conta("d")
+        assert c["fontes"] == ["wokwi"] and c["device_ids"] == ["esp32-1", "esp32-2"]
 
     def test_admin_sem_user_id(self):
         auth.criar_conta("a", "admin", [], [], "s")
@@ -47,7 +48,21 @@ class TestInvalidas:
     @pytest.mark.parametrize("user_ids", [[], [1, 2]])
     def test_idoso_e_dispositivo_exigem_exatamente_um_user_id(self, papel, fontes, user_ids):
         with pytest.raises(ValueError, match="exatamente um"):
-            auth.criar_conta("x", papel, user_ids, fontes, "s")
+            auth.criar_conta("x", papel, user_ids, fontes, "s", device_ids=["d1"] if papel == "dispositivo" else None)
+
+    def test_dispositivo_exige_device_ids(self):
+        with pytest.raises(ValueError, match="device-id"):
+            auth.criar_conta("x", "dispositivo", [1], ["wokwi"], "s")
+
+    @pytest.mark.parametrize("papel,user_ids,fontes", [("idoso", [1], ["app"]), ("admin", [], [])])
+    def test_device_ids_so_no_dispositivo(self, papel, user_ids, fontes):
+        with pytest.raises(ValueError, match="device-id"):
+            auth.criar_conta("x", papel, user_ids, fontes, "s", device_ids=["d1"])
+
+    @pytest.mark.parametrize("ruim", ["", "x" * 65, 5])
+    def test_device_id_invalido(self, ruim):
+        with pytest.raises(ValueError, match="device_id"):
+            auth.criar_conta("x", "dispositivo", [1], ["wokwi"], "s", device_ids=[ruim])
 
     def test_idoso_com_fonte_wokwi(self):
         with pytest.raises(ValueError, match="fontes"):
@@ -55,12 +70,12 @@ class TestInvalidas:
 
     def test_dispositivo_com_fonte_app(self):
         with pytest.raises(ValueError, match="fontes"):
-            auth.criar_conta("x", "dispositivo", [1], ["app"], "s")
+            auth.criar_conta("x", "dispositivo", [1], ["app"], "s", device_ids=["d1"])
 
     @pytest.mark.parametrize("papel", ["idoso", "dispositivo"])
     def test_fontes_vazias(self, papel):
         with pytest.raises(ValueError, match="fontes"):
-            auth.criar_conta("x", papel, [1], [], "s")
+            auth.criar_conta("x", papel, [1], [], "s", device_ids=["d1"] if papel == "dispositivo" else None)
 
     def test_idoso_com_as_duas_fontes(self):
         with pytest.raises(ValueError, match="fontes"):

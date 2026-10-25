@@ -39,6 +39,18 @@ class TestLogin:
         corpo = {"identificador": "idoso1", "segredo": "senha-idoso", "fonte": "app", "device_id": "cel1"}
         assert cli.post("/auth/login", corpo).status_code == 200
 
+    @pytest.mark.parametrize("campos,esperado,codigo", [
+        (dict(identificador="bridge1", segredo="senha-bridge", fonte="wokwi", device_id="esp32-de-outro"), 403, "device_nao_permitido"),
+        (dict(identificador="bridge1", segredo="senha-bridge", fonte="wokwi", device_id=None), 400, "device_id_obrigatorio"),
+        (dict(identificador="idoso1", device_id=None), 400, "device_id_obrigatorio"),
+        (dict(identificador="idoso1", device_id=""), 400, "device_id_obrigatorio"),
+    ])
+    def test_device_id_fora_da_lista_ou_ausente_recusa_sem_contar_como_falha_de_senha(self, cli, campos, esperado, codigo):
+        for _ in range(const_borda.MAX_FALHAS + 1):                 # mais vezes que o limite de falhas de senha
+            r = _login(cli, **campos)
+            assert r.status_code == esperado and r.get_json()["codigo"] == codigo
+        assert _login(cli, **{**campos, "device_id": "bridge-dev" if campos["identificador"] == "bridge1" else "cel1"}).status_code == 200
+
     def test_device_id_longo_da_400(self, cli):
         assert _login(cli, device_id="x" * (const_comum.MAX_DEVICE_ID_LEN + 1)).status_code == 400
 

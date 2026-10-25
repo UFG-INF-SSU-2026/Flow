@@ -119,7 +119,10 @@ def contas_e_sessoes(repo):
     conta = {"id": "idoso1", "papel": "idoso", "user_ids": [1], "fontes": ["app"], "hash": "scrypt$aa$bb", "criada_em": T0}
     assert repo.criar_conta(conta) is True
     assert repo.criar_conta({**conta, "hash": "outro"}) is False                      # duplicada: recusada, nada muda
-    assert repo.buscar_conta("idoso1") == conta and repo.buscar_conta("nenhuma") is None
+    assert repo.buscar_conta("idoso1") == {**conta, "device_ids": []} and repo.buscar_conta("nenhuma") is None
+    bridge = {"id": "bridge1", "papel": "dispositivo", "user_ids": [1], "fontes": ["wokwi"], "device_ids": ["esp32-1", "esp32-2"],
+              "hash": "scrypt$cc$dd", "criada_em": T0}
+    assert repo.criar_conta(bridge) is True and repo.buscar_conta("bridge1") == bridge       # device_ids vai e volta
 
     def sessao(token, seg):
         return {"token_hash": token, "conta_id": "idoso1", "fonte": "app", "device_id": "cel1", "expira_em": _t(seg)}

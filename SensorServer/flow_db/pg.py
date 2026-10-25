@@ -102,9 +102,10 @@ class Pg(PgBase, Repo):
     def criar_conta(self, c: dict) -> bool:
         with self._cx() as conn:
             linha = conn.execute(
-                "INSERT INTO contas (id, papel, user_ids, fontes, hash, criada_em) VALUES (%s, %s, %s, %s, %s, %s)"
+                "INSERT INTO contas (id, papel, user_ids, fontes, device_ids, hash, criada_em) VALUES (%s, %s, %s, %s, %s, %s, %s)"
                 " ON CONFLICT (id) DO NOTHING RETURNING id",
-                (c["id"], c["papel"], list(c["user_ids"]), list(c["fontes"]), c["hash"], c["criada_em"])).fetchone()
+                (c["id"], c["papel"], list(c["user_ids"]), list(c["fontes"]), list(c.get("device_ids") or []), c["hash"],
+                 c["criada_em"])).fetchone()
         return linha is not None
 
     def buscar_conta(self, conta_id: str) -> dict | None:

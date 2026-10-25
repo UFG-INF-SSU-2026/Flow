@@ -97,7 +97,7 @@ def mini(contas):
 
     tok = {
         "idoso": auth.login("idoso1", "senha-idoso", "app", "cel1")["access_token"],
-        "bridge": auth.login("bridge1", "senha-bridge", "wokwi", "b1")["access_token"],
+        "bridge": auth.login("bridge1", "senha-bridge", "wokwi", "bridge-dev")["access_token"],
     }
     return app.test_client(), tok
 

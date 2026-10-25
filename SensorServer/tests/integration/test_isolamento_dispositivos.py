@@ -8,7 +8,7 @@ from comum import const as const_comum
 pytestmark = pytest.mark.usefixtures("pipeline")     # a analise roda em memoria apos cada POST
 @pytest.fixture
 def bridge2(contas):
-    auth.criar_conta("bridge2", "dispositivo", [2], ["wokwi"], "senha-bridge2")
+    auth.criar_conta("bridge2", "dispositivo", [2], ["wokwi"], "senha-bridge2", device_ids=["bridge-2", "bridge-dev"])
 
 
 def _wokwi(device, seq, user_id=1, **extra):
@@ -59,9 +59,11 @@ def test_eventos_com_device_alheio_da_403(cli, tokens):
     assert cli.post("/eventos", {**ev, "device_id": "cel1"}, tokens["idoso"]).status_code == 200
 
 
-def test_sem_device_no_payload_nao_e_conferido(cli, tokens):
+def test_sem_device_no_payload_grava_o_device_id_do_token(cli, tokens, banco):
     dado = {"source": "app", "user_id": 1, "acelerometro": {"magnitude": 9.8, "magnitude_max_janela": 9.9}}
     assert cli.post("/dados", dado, tokens["idoso"]).status_code == 200
+    cli.post("/dados", {k: v for k, v in _wokwi("bridge-dev", 1).items() if k != "deviceId"}, tokens["dispositivo"])
+    assert sorted((l["fonte"], l["device_id"]) for l in banco.tabelas["leituras"]) == [("app", "cel1"), ("wokwi", "bridge-dev")]
 
 
 def test_mesmo_device_id_em_dois_usuarios_nao_compartilha_estado(cli, tokens, bridge2):

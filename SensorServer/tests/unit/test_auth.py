@@ -135,7 +135,7 @@ class TestLogin:
 
     def test_bloqueio_e_por_identificador(self, contas, relogio_auth):
         _errar(const_borda.MAX_FALHAS)
-        assert auth.login("bridge1", "senha-bridge", "wokwi", "b")["papel"] == "dispositivo"
+        assert auth.login("bridge1", "senha-bridge", "wokwi", "bridge-dev")["papel"] == "dispositivo"
 
     def test_fonte_nao_permitida_falha(self, contas):
         for fonte in ("wokwi", None, "xyz"):
@@ -186,7 +186,7 @@ class TestRefresh:
     def test_expirado_some_do_banco_na_primeira_tentativa(self, contas, banco, relogio_auth, monkeypatch):
         monkeypatch.setattr(const_borda, "REFRESH_TTL_S", 10)
         t = _login_ok()
-        outro = auth.login("bridge1", "senha-bridge", "wokwi", "b")   # segunda sessao, nao deve ser afetada
+        outro = auth.login("bridge1", "senha-bridge", "wokwi", "bridge-dev")   # segunda sessao, nao deve ser afetada
         assert len(banco.tabelas["sessoes"]) == 2
         relogio_auth.avancar(11)
         with pytest.raises(auth.TokenInvalido):

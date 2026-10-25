@@ -64,8 +64,8 @@ class Repo(ABC):
     # ---- contas e sessoes de login ----
     @abstractmethod
     def criar_conta(self, conta: dict) -> bool:
-        """Chaves: id, papel, user_ids (lista de int), fontes (lista de str), hash, criada_em. Devolve False, sem gravar
-        nada, se ja existe uma conta com esse id."""
+        """Chaves: id, papel, user_ids (lista de int), fontes (lista de str), device_ids (lista de str; opcional, vazia se
+        ausente), hash, criada_em. Devolve False, sem gravar nada, se ja existe uma conta com esse id."""
 
     @abstractmethod
     def buscar_conta(self, conta_id: str) -> dict | None:

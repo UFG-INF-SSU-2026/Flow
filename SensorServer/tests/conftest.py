@@ -100,10 +100,10 @@ def pipeline(request, monkeypatch):
 
 @pytest.fixture
 def contas():
-    """idoso1 (user 1, app), idoso2 (user 2, app), bridge1 (dispositivo do user 1, wokwi) e admin1."""
+    """idoso1 (user 1, app), idoso2 (user 2, app), bridge1 (dispositivo do user 1, wokwi, device_id bridge-dev) e admin1."""
     auth.criar_conta("idoso1", "idoso", [1], ["app"], "senha-idoso")
     auth.criar_conta("idoso2", "idoso", [2], ["app"], "senha-idoso2")
-    auth.criar_conta("bridge1", "dispositivo", [1], ["wokwi"], "senha-bridge")
+    auth.criar_conta("bridge1", "dispositivo", [1], ["wokwi"], "senha-bridge", device_ids=["bridge-dev"])
     auth.criar_conta("admin1", "admin", [], [], "senha-admin")
 
 

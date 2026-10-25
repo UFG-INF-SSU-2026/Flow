@@ -94,6 +94,7 @@ CREATE TABLE contas (
     papel      text NOT NULL,
     user_ids   integer[] NOT NULL,
     fontes     text[] NOT NULL,
+    device_ids text[] NOT NULL DEFAULT '{}',   -- so o papel `dispositivo`: os device_ids que o login dela pode declarar
     hash       text NOT NULL,
     criada_em  timestamptz NOT NULL
 );
