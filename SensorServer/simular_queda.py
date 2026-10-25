@@ -8,6 +8,7 @@ canais conectados (app e/ou bridge). Os DOIS processos precisam estar no ar.
 Uso (na pasta SensorServer, com a borda e a analise rodando):
     pip install requests
     FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python simular_queda.py [URL_BASE]
+URL_BASE e https://127.0.0.1:5000 por padrao; a confianca e o certificado do projeto (comum/tls.py).
 """
 import json
 import os
@@ -17,9 +18,11 @@ import time
 import requests
 
 from comum import const as const_comum
+from comum import tls
 from borda.crypto_utils import decrypt_payload, encrypt_payload
 
-BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5000").rstrip("/")
+BASE = (sys.argv[1] if len(sys.argv) > 1 else "https://127.0.0.1:5000").rstrip("/")
+CERT = tls.certificado()
 CONTA = os.environ.get("FLOW_BRIDGE_ID", "bridge1")
 SENHA = os.environ["FLOW_BRIDGE_SECRET"]
 
@@ -29,7 +32,7 @@ def env(obj):
     return {"nonce": n, "ciphertext": c}
 
 
-r = requests.post(f"{BASE}/auth/login", json=env({"schemaVersion": const_comum.SCHEMA_VERSION_AUTH, "identificador": CONTA, "segredo": SENHA,
+r = requests.post(f"{BASE}/auth/login", verify=CERT, json=env({"schemaVersion": const_comum.SCHEMA_VERSION_AUTH, "identificador": CONTA, "segredo": SENHA,
                                                   "fonte": "wokwi", "device_id": "simulador-queda"}))
 r.raise_for_status()
 j = r.json()
@@ -45,7 +48,7 @@ def enviar(value, value_max):
     ev = {"schemaVersion": const_comum.SCHEMA_VERSION_WOKWI, "eventType": "imobilidade.leitura", "deviceId": "simulador-queda", "entityId": "idoso-simulado",
           "eventTimeMs": seq * 1000, "sequence": seq, "value": value, "valueMax": value_max, "unit": "m/s2",
           "state": "NORMAL", "user_id": user_id, "source": "wokwi"}
-    rr = requests.post(f"{BASE}/dados", json=env(ev), headers=H)
+    rr = requests.post(f"{BASE}/dados", json=env(ev), headers=H, verify=CERT)
     print(f"  value={value:5.1f} valueMax={value_max:5.1f} -> HTTP {rr.status_code}")
 
 

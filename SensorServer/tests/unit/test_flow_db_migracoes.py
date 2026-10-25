@@ -3,6 +3,7 @@ import re
 
 import pytest
 
+from _apoio import ambiente_tls
 from flow_db import config, migracoes, versao
 
 
@@ -44,6 +45,8 @@ class TestConfig:
     def test_dsn_usa_o_usuario_e_a_senha_do_ambiente(self, monkeypatch):
         monkeypatch.setenv("FLOW_DB_PASSWORD", "Senha_ok-123")
         monkeypatch.setenv("FLOW_DB_USER", "alguem")
+        for nome, valor in ambiente_tls().items():
+            monkeypatch.setenv(nome, valor)
         dsn = config.dsn()
         assert "Senha_ok-123" in dsn and "alguem" in dsn
 

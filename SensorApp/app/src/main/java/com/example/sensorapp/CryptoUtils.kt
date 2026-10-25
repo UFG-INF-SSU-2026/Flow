@@ -20,7 +20,7 @@ import javax.crypto.spec.SecretKeySpec
  *
  * Por que este mecanismo: cada lote (a cada 10s) e cifrado e autenticado de
  * forma independente, sem necessidade de handshake ou sessao continua -
- * adequado a um protocolo sem estado como o HTTP simples ja usado aqui.
+ * adequado a um protocolo sem estado como o HTTP ja usado aqui (o TLS vai por baixo, em todo o trafego).
  *
  * Limitacao assumida (mesma do servidor): a chave e fixa e embutida no
  * codigo, sem negociacao de chaves. Aceitavel apenas nesta fase de

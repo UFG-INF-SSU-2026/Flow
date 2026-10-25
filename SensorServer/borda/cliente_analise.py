@@ -10,14 +10,15 @@ desconhecido), o estado em memoria dela foi perdido: antes de seguir, o cliente 
 (`montar_restauracao`) e REPETE a chamada que gerou a resposta duvidosa. Falha de rede, prazo estourado ou erro 5xx levantam
 `AnaliseIndisponivel`: quem chama mantem o lote na fila e tenta de novo depois.
 
-O transporte e uma funcao `(metodo, caminho, corpo, timeout_s) -> dict`: em producao `transporte_http`; nos testes, uma que
-chama `analise.api.Analise.tratar` direto, sem rede.
+O transporte e uma funcao `(metodo, caminho, corpo, timeout_s) -> dict`: em producao `transporte_http` (HTTPS, confiando so
+no certificado do projeto: comum/tls.py); nos testes, uma que chama `analise.api.Analise.tratar` direto, sem rede e sem TLS.
 """
 import threading
 from typing import Callable
 
 from borda import const as const_borda
 from comum import const as const_comum
+from comum import tls
 from comum.contrato_analise import Decisoes
 
 
@@ -29,16 +30,18 @@ class RequisicaoRecusada(ValueError):
     """A analise recusou o corpo (400): reenviar nao adianta."""
 
 
-def transporte_http(url: str | None = None, token: str | None = None) -> Callable:
-    """Transporte real: HTTP para a analise, com o token no cabecalho. Lê URL e token na hora de criar."""
+def transporte_http(url: str | None = None, token: str | None = None, cert: str | None = None) -> Callable:
+    """Transporte real: HTTPS para a analise, com o token no cabecalho. Le URL, token e certificado na hora de criar.
+    Falta de token, URL que nao seja https:// ou certificado ausente levantam RuntimeError (a borda nao sobe)."""
     import requests
-    url = (url or const_comum.url_analise()).rstrip("/")
     token = token or const_comum.token_analise()
+    url = tls.exigir_https(url or const_comum.url_analise(), "FLOW_ANALISE_URL").rstrip("/")
+    cert = cert or tls.certificado()       # confianca: so o certificado do projeto (nao as autoridades do sistema)
     sessao = requests.Session()
 
     def chamar(metodo: str, caminho: str, corpo: dict | None, timeout_s: float) -> dict:
         try:
-            resp = sessao.request(metodo, url + caminho, json=corpo, timeout=timeout_s,
+            resp = sessao.request(metodo, url + caminho, json=corpo, timeout=timeout_s, verify=cert,
                                   headers={const_comum.ANALISE_CABECALHO_TOKEN: token})
         except requests.RequestException as e:
             raise AnaliseIndisponivel(f"{type(e).__name__}") from None

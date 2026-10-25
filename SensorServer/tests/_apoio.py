@@ -2,10 +2,13 @@
 Apoio dos testes (sem fixtures): clientes que montam envelopes cifrados como o app e o bridge fazem,
 e um leitor de SSE para o servidor real.
 """
+import importlib.util
 import json
 import queue
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import requests
 
@@ -13,6 +16,33 @@ from borda.crypto_utils import decrypt_payload, encrypt_payload
 from comum import const as const_comum
 ROTAS_QUE_ALIMENTAM_A_ANALISE = ("/dados", "/eventos")
 SEGREDO = "t" * 48   # FLOW_JWT_SECRET dos testes (>= 32 bytes)
+
+
+_RAIZ = Path(__file__).resolve().parents[1]     # SensorServer/
+_tls_da_sessao: dict = {}
+
+
+def gerador_de_certificado():
+    """O proprio scripts/gerar_certificado.py, carregado pelo caminho (scripts/ nao e um pacote)."""
+    spec = importlib.util.spec_from_file_location("gerar_certificado", _RAIZ / "scripts" / "gerar_certificado.py")
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    return modulo
+
+
+def gerar_par_tls(pasta: Path, prefixo: str = "flow") -> tuple[str, str]:
+    """Gera um certificado autoassinado de teste (localhost e 127.0.0.1) em `pasta`. Devolve (certificado, chave)."""
+    cert, chave = pasta / f"{prefixo}.crt", pasta / f"{prefixo}.key"
+    gerador_de_certificado().gerar(cert, chave, ["localhost"], ["127.0.0.1"], dias=2)
+    return str(cert), str(chave)
+
+
+def ambiente_tls() -> dict:
+    """FLOW_TLS_CERT e FLOW_TLS_KEY de um par de teste gerado uma vez por sessao: para os testes que sobem `python -m borda`,
+    `python -m analise` ou abrem o banco, que exigem TLS (os demais usam a analise em memoria, sem TLS)."""
+    if not _tls_da_sessao:
+        _tls_da_sessao["cert"], _tls_da_sessao["chave"] = gerar_par_tls(Path(tempfile.mkdtemp(prefix="flow_tls_")))
+    return {"FLOW_TLS_CERT": _tls_da_sessao["cert"], "FLOW_TLS_KEY": _tls_da_sessao["chave"]}
 
 
 def aguardar(condicao, timeout: float = 3.0, passo: float = 0.02) -> bool:

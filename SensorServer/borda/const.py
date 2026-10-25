@@ -14,7 +14,7 @@ from comum import const as _comum  # noqa: F401  (efeito colateral: o .env e car
 # 1. SERVIDOR E AGREGACAO
 # ===========================================================================
 
-# Porta HTTP do servidor. O firewall do computador precisa liberar ENTRADA
+# Porta HTTPS do servidor. O firewall do computador precisa liberar ENTRADA
 # nesta porta (celular e bridge conectam no servidor).
 PORT = 5000
 

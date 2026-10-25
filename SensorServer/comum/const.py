@@ -11,7 +11,8 @@ Regras de uso:
     este, e so para que o .env ja esteja carregado quando elas leem o ambiente.
   - Ao ser importado, carrega SensorServer/.env para o ambiente do processo; variavel de ambiente ja definida no
     terminal VENCE o arquivo. Ver .env.example e _carregar_dotenv(). Ha UM so .env. A analise
-    (FLOW_SERVICO=analise) copia dele SO as variaveis FLOW_ANALISE_*: o segredo JWT e a senha do banco nunca entram no ambiente dela.
+    (FLOW_SERVICO=analise) copia dele SO as variaveis FLOW_ANALISE_* e FLOW_TLS_* (caminhos do certificado e da chave): o segredo
+    JWT e a senha do banco nunca entram no ambiente dela.
   - Os demais modulos importam o modulo (`from comum import const as const_comum`) e leem `const_comum.X` NA HORA DO
     USO (nunca `from comum.const import X`), para que um unico ajuste valha para todos os pontos de uso, inclusive
     em testes. Cada constante tem UM dono: ajuste-a no modulo do dono.
@@ -26,11 +27,12 @@ from pathlib import Path
 from dotenv import dotenv_values, load_dotenv
 
 
-def _carregar_dotenv(caminho: Path, prefixo: str | None = None) -> bool:
+def _carregar_dotenv(caminho: Path, prefixo: str | tuple[str, ...] | None = None) -> bool:
     """Carrega `caminho` (um .env) para os.environ SEM sobrescrever o que ja esta definido: variavel de ambiente do
     terminal vence o arquivo. Retorna True se o arquivo foi lido; arquivo ausente nao e erro (o ambiente pode bastar).
 
-    - `prefixo`: carrega SO as variaveis cujo nome comeca com ele (a analise usa "FLOW_ANALISE_");
+    - `prefixo`: carrega SO as variaveis cujo nome comeca com ele (ou com um dos itens, se for uma tupla); a analise usa
+      "FLOW_ANALISE_" e "FLOW_TLS_";
     - utf-8-sig: um .env salvo com BOM (Bloco de Notas do Windows) nao estraga o nome da primeira chave;
     - interpolate=False: `$` e `${...}` num segredo ou senha ficam literais;
     - FLOW_SEM_DOTENV=1 desliga a leitura (usado pela suite de testes, para nao ler o .env real).
@@ -54,7 +56,7 @@ if SERVICO not in ("", "borda", "analise"):
 
 # O arquivo fica em SensorServer/ (a pasta acima de comum/).
 DOTENV_ARQUIVO = Path(__file__).resolve().parent.parent / ".env"
-DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO, "FLOW_ANALISE_" if SERVICO == "analise" else None)
+DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO, ("FLOW_ANALISE_", "FLOW_TLS_") if SERVICO == "analise" else None)
 
 # ===========================================================================
 # 1. FONTES
@@ -117,10 +119,10 @@ MARGEM_SERVIDOR_S = 2
 TTL_ENCERRAMENTO_S = 10
 
 # ===========================================================================
-# 4. ANALISE (Servidor 2): API HTTP local, so na maquina
+# 4. ANALISE (Servidor 2): API HTTPS local, so na maquina
 # ===========================================================================
 
-# A analise escuta so em ANALISE_HOST (loopback); a borda a chama em FLOW_ANALISE_URL (padrao: este endereco e porta).
+# A analise escuta so em ANALISE_HOST (loopback), em HTTPS; a borda a chama em FLOW_ANALISE_URL (padrao: este endereco e porta).
 ANALISE_HOST = "127.0.0.1"
 ANALISE_PORT = int(os.environ.get("FLOW_ANALISE_PORT", "5100"))
 ANALISE_CABECALHO_TOKEN = "X-Flow-Analise-Token"
@@ -136,4 +138,16 @@ def token_analise() -> str:
 
 
 def url_analise() -> str:
-    return os.environ.get("FLOW_ANALISE_URL") or f"http://{ANALISE_HOST}:{ANALISE_PORT}"
+    return os.environ.get("FLOW_ANALISE_URL") or f"https://{ANALISE_HOST}:{ANALISE_PORT}"
+
+
+# ===========================================================================
+# 5. TLS (um certificado unico, em todas as pontas)
+# ===========================================================================
+
+# Um unico certificado autoassinado (scripts/gerar_certificado.py) e a chave dele: a borda, a analise e o container do banco
+# o apresentam, e ele e a confianca de todos os clientes (borda -> analise, borda -> banco, app, bridge). Os caminhos podem
+# ser trocados por FLOW_TLS_CERT e FLOW_TLS_KEY; caminho relativo vale a partir de SensorServer/ (nao de onde o processo foi
+# iniciado). O docker-compose.yml monta sempre a pasta certs/.
+TLS_CERT_PADRAO = "certs/flow.crt"
+TLS_CHAVE_PADRAO = "certs/flow.key"

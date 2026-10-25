@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Necessario para enviar dados via HTTP para o servidor -->
+    <!-- Necessario para enviar dados via HTTPS para o servidor -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
@@ -10,11 +10,11 @@
         android:label="Sensor App"
         android:icon="@android:drawable/ic_menu_compass"
         android:theme="@style/Theme.SensorApp"
-        android:usesCleartextTraffic="true">
+        android:networkSecurityConfig="@xml/network_security_config">
 
         <!--
-            usesCleartextTraffic="true" e necessario porque o servidor Flask
-            roda em HTTP simples (sem HTTPS) na rede local.
+            Sem trafego em texto claro: o servidor fala HTTPS com o certificado do projeto, e a unica confianca
+            do app e esse certificado (ver res/xml/network_security_config.xml).
         -->
 
         <activity

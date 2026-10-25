@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from _apoio import SEGREDO
+from _apoio import SEGREDO, ambiente_tls
 from analise import api
 from borda import server
 from borda.sse_hub import HUB
@@ -22,7 +22,7 @@ TOKEN = "t" * 24
 
 def _rodar(args, tmp_path, **extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith("FLOW_")}
-    env.update({"FLOW_SEM_DOTENV": "1", "PYTHONPATH": RAIZ})
+    env.update({"FLOW_SEM_DOTENV": "1", "PYTHONPATH": RAIZ, **ambiente_tls()})   # TLS: certificado de teste do projeto
     env.update(extra)
     return subprocess.run([sys.executable, *args], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
 

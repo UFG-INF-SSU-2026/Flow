@@ -1,5 +1,5 @@
 """
-API da ANALISE (Servidor 2): uma API HTTP local que a borda chama. A analise so decide: nao tem banco, nao tem credencial de
+API da ANALISE (Servidor 2): uma API HTTPS local que a borda chama (o TLS e ligado em analise/servico.py). A analise so decide: nao tem banco, nao tem credencial de
 dispositivo e nao entrega nada. Quem grava as decisoes e entrega o push e a borda.
 
 Rotas (todas exigem o cabecalho X-Flow-Analise-Token; corpo e resposta em JSON):

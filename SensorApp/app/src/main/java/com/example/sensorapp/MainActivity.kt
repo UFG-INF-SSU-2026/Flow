@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     // URL base do servidor. O user_id NAO e mais configurado a mao: vem do login (auth.userId).
     private val baseUrl: String
-        get() = "http://$serverIp:$serverPort"
+        get() = "https://$serverIp:$serverPort"   // so HTTPS (res/xml/network_security_config.xml)
 
     // Janela do acelerometro desde o ultimo envio (Marco 3): alimenta o bloco "acelerometro" do payload.
     private var accMagUltima = 0f

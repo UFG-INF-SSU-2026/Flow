@@ -10,6 +10,10 @@
 # As variaveis FLOW_DB_* vem do arquivo ".env" desta pasta (o mesmo da borda; ver .env.example).
 # ATENCAO: usuario, senha e nome do banco so valem na PRIMEIRA subida (volume vazio). Mudar o .env depois
 # nao altera o banco ja criado; para recomecar do zero, use "down -v".
+#
+# TLS: o banco apresenta o certificado unico do projeto (pasta certs/, gerada por "python scripts/gerar_certificado.py";
+# scripts/preparar.* a geram antes de subir) e a borda conecta com sslmode=verify-full. Subir sem certs/flow.crt e
+# certs/flow.key faz o container falhar. Certificado recriado (--forcar): "docker compose restart db". Nao exige recriar o volume.
 
 name: flow
 
@@ -32,6 +36,28 @@ services:
 
     volumes:
       - flow_db_data:/var/lib/postgresql/data
+      - ./certs:/certs:ro
+
+    # O PostgreSQL so aceita uma chave que seja do usuario "postgres" com permissao 0600, o que um arquivo montado do host
+    # raramente e. Por isso o entrypoint copia o par para dentro do container (com dono e permissao certos) e entrega ao
+    # entrypoint oficial, que continua igual. O "command" e explicito porque trocar o entrypoint descarta o padrao da imagem.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        mkdir -p /etc/flow-tls &&
+        install -m 0644 -o postgres -g postgres /certs/flow.crt /etc/flow-tls/flow.crt &&
+        install -m 0600 -o postgres -g postgres /certs/flow.key /etc/flow-tls/flow.key &&
+        exec docker-entrypoint.sh "$$@"
+      - --
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/etc/flow-tls/flow.crt
+      - -c
+      - ssl_key_file=/etc/flow-tls/flow.key
 
     # O servidor deve esperar este estado antes de conectar (o container "sobe" antes de aceitar conexoes).
     healthcheck:

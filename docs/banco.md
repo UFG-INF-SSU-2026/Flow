@@ -1,13 +1,14 @@
 # Banco de dados (PostgreSQL)
 
-Só a **borda** (Servidor 1) fala com o banco, por uma única interface (`flow_db/repo.py`, implementada em `flow_db/pg.py`; o `BancoFalso` em memória a imita para testes e para `FLOW_DB_FAKE=1`). A análise (Servidor 2) não tem banco nem credencial dele. Um único usuário de banco, o mesmo que o `docker-compose.yml` cria. Tabelas comuns do PostgreSQL: sem particionamento, sem compressão e sem retenção automática.
+Só a **borda** (Servidor 1) fala com o banco, por uma única interface (`flow_db/repo.py`, implementada em `flow_db/pg.py`; o `BancoFalso` em memória a imita para testes e para `FLOW_DB_FAKE=1`). A análise (Servidor 2) não tem banco nem credencial dele. Um único usuário de banco, o mesmo que o `docker-compose.yml` cria. **A conexão é sempre TLS:** o PostgreSQL sobe com o certificado único do projeto (`certs/`) e a borda conecta com `sslmode=verify-full` (ou `verify-ca`, em `FLOW_DB_SSLMODE`), confiando só nesse certificado; o IP ou nome de `FLOW_DB_HOST` precisa estar nele. Tabelas comuns do PostgreSQL: sem particionamento, sem compressão e sem retenção automática.
 
 ## Subir do zero (a partir de `SensorServer/`)
 
 ```
 cp .env.example .env     # preencha FLOW_JWT_SECRET, FLOW_ANALISE_TOKEN, FLOW_DB_PASSWORD
-docker compose up -d --wait
 pip install -r requirements.txt
+python scripts/gerar_certificado.py    # certificado TLS (o container o carrega ao subir)
+docker compose up -d --wait
 python -m flow_db migrar        # aplica as migrações pendentes (idempotente, com trava)
 python -m flow_db status        # versão aplicada x disponível
 python -m borda                 # a borda; recusa subir se o banco faltar ou estiver defasado
@@ -16,6 +17,8 @@ python -m analise               # a análise, em outro terminal
 ```
 
 Sem Docker, para desenvolver: `FLOW_DB_FAKE=1 python -m borda.server` (banco em memória; os dados somem ao parar).
+
+**Certificado recriado** (`python scripts/gerar_certificado.py --forcar`): `docker compose restart db`. O TLS não exige recriar o volume. Sem `certs/flow.crt` e `certs/flow.key` o container não sobe, e sem o certificado a borda não conecta.
 
 **Banco antigo:** o esquema foi reduzido a uma única migração (`0001_base.sql`). Um volume criado antes (com TimescaleDB e papéis separados) não serve: recrie com `docker compose down -v` e suba de novo. Os dados de teste não são migrados.
 
@@ -35,7 +38,7 @@ Quem grava é sempre a borda: as leituras em lote (uma só thread) e, numa trans
 ## Testes
 
 - `pytest` — padrão. Usa o banco falso em memória; não precisa de Docker. O contrato do `Repo` (`tests/_contrato_repo.py`) roda aqui.
-- `pytest -m banco` — o mesmo contrato contra o PostgreSQL real, num banco descartável `flow_teste` (recriado a cada sessão). Exige o container no ar e `FLOW_DB_PASSWORD` no `.env`.
+- `pytest -m banco` — o mesmo contrato contra o PostgreSQL real, num banco descartável `flow_teste` (recriado a cada sessão), por TLS. Exige o container no ar, `FLOW_DB_PASSWORD` no `.env` e o certificado gerado (`certs/`).
 
 ## Backup e restauração (a partir de `SensorServer/`, com o container `flow-db` no ar)
 
@@ -64,6 +67,9 @@ SELECT application_name, state, count(*) FROM pg_stat_activity WHERE datname = '
 SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) FROM pg_class
  WHERE relname IN ('leituras', 'alertas', 'confirmacoes', 'episodios', 'comandos_push', 'estado_dispositivo');
 SELECT pg_size_pretty(pg_database_size(current_database()));
+
+-- conexões da aplicação cifradas (ssl = t)
+SELECT a.application_name, s.ssl, s.version FROM pg_stat_ssl s JOIN pg_stat_activity a USING (pid) WHERE a.application_name = 'flow';
 
 -- leituras mais recentes
 SELECT id, instante_ingestao, user_id, fonte FROM leituras ORDER BY id DESC LIMIT 10;

@@ -46,7 +46,7 @@ Há **dois dispositivos** concretos, cada um com a sua conta e falando diretamen
 | `WokwiBridge/` | Dispositivo Wokwi: ponte (`bridge.py`) | Parte do dispositivo que o liga à rede: autentica-se, repassa a telemetria da serial ao servidor e traduz as mensagens de push em comandos de texto para o firmware. |
 | `SensorServer/` | Servidor (Flask) | Módulos abaixo. |
 
-O sistema tem **três partes**: os **dispositivos** (app e Wokwi), o **Servidor 1 — a borda** (`python -m borda`) e o **Servidor 2 — a análise** (`python -m analise`). Só a borda fala com o mundo: autentica, valida, grava no banco, entrega o push e responde às consultas. A análise **só decide** (queda, imobilidade, luz): não tem banco, não tem credencial de dispositivo, não entrega nada e escuta só em `127.0.0.1`. **A borda é o único cliente da análise** (HTTP local com token compartilhado). Um só `.env`; a análise copia dele apenas as variáveis `FLOW_ANALISE_*`. `python -m borda.server` sobe a mesma borda, sem desligamento ordenado, para desenvolvimento (com `FLOW_DB_FAKE=1`, sem Docker).
+O sistema tem **três partes**: os **dispositivos** (app e Wokwi), o **Servidor 1 — a borda** (`python -m borda`) e o **Servidor 2 — a análise** (`python -m analise`). Só a borda fala com o mundo: autentica, valida, grava no banco, entrega o push e responde às consultas. A análise **só decide** (queda, imobilidade, luz): não tem banco, não tem credencial de dispositivo, não entrega nada e escuta só em `127.0.0.1`. **A borda é o único cliente da análise** (HTTPS local com token compartilhado). **Toda comunicação é cifrada com TLS, em todas as pontas** (dispositivos ↔ borda, borda ↔ análise, borda ↔ banco), com um único certificado (seção 5); nenhuma ponta fala em texto claro, nem em `127.0.0.1`. Um só `.env`; a análise copia dele apenas as variáveis `FLOW_ANALISE_*` e `FLOW_TLS_*` (caminhos do certificado e da chave). `python -m borda.server` sobe a mesma borda, sem desligamento ordenado, para desenvolvimento (com `FLOW_DB_FAKE=1`, sem Docker).
 
 Módulos do servidor (pacotes em `SensorServer/`):
 
@@ -54,9 +54,9 @@ Módulos do servidor (pacotes em `SensorServer/`):
 | --- | --- |
 | **`borda/`** | Servidor 1: único com porta de rede, banco, segredos de transporte e contas. |
 | `borda/server.py` | Rotas; ingestão (aceita e põe a leitura numa fila limitada); thread de descarga (grava `leituras` em lote, manda o lote à análise e aplica as decisões); thread do vigia; `/estado`, `/dados` (debug) e `/health`. Executa com `python -m borda`. |
-| `borda/cliente_analise.py` | Cliente da API da análise (`/analisar`, `/vigiar`, `/restaurar`): prazo curto, detecta análise fora do ar e `boot_id` novo (análise reiniciada) e manda o estado de volta antes de seguir. |
+| `borda/cliente_analise.py` | Cliente da API da análise (`/analisar`, `/vigiar`, `/restaurar`), por HTTPS e confiando só no certificado do projeto: prazo curto, detecta análise fora do ar e `boot_id` novo (análise reiniciada) e manda o estado de volta antes de seguir. |
 | `borda/efeitos.py` | Aplicar as decisões: grava confirmações, alertas, estado e, por fim, episódio + comando numa transação; só depois do commit entrega o push (SSE, app e wokwi). Se o banco falha, guarda as decisões e tenta de novo. |
-| `borda/servico.py` | Ponto de entrada da borda (`python -m borda`): subida e desligamento ordenado. |
+| `borda/servico.py` | Ponto de entrada da borda (`python -m borda`): serve HTTPS (sem certificado não sobe), subida e desligamento ordenado. |
 | `borda/const.py` | Constantes da borda (porta, tokens, bloqueio de login, limite de corpo, SSE, filas, chamada à análise). Ver 14. |
 | `borda/auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens (contas e sessões em JSON, `FLOW_CONTAS_PATH`/`FLOW_SESSOES_PATH`). Não conhece Flask. CLI: `python -m borda.auth criar-conta`. |
 | `borda/authz.py` | **Autorização:** papel → permissões e escopo por pessoa; a negação vai para o log (rota, motivo, conta, IP; nunca o conteúdo). |
@@ -68,13 +68,14 @@ Módulos do servidor (pacotes em `SensorServer/`):
 | `borda/crypto_utils.py` | Envelope AES-256-GCM. |
 | **`analise/`** | Servidor 2: decide. Sem banco, sem segredo de transporte; não importa a borda nem `flow_db`. |
 | `analise/api.py` | A API HTTP e o estado em memória: `POST /analisar`, `POST /vigiar`, `POST /restaurar`, `GET /saude`, todas com o cabeçalho `X-Flow-Analise-Token`. Cada resposta traz o `boot_id` da subida. Item mais velho que `IDADE_MAX_ACAO_S` só reconstrói estado, sem push. |
-| `analise/servico.py` | Ponto de entrada da análise (`python -m analise`), escutando em `127.0.0.1:FLOW_ANALISE_PORT` (5100). |
+| `analise/servico.py` | Ponto de entrada da análise (`python -m analise`), servindo HTTPS em `127.0.0.1:FLOW_ANALISE_PORT` (5100). |
 | `analise/nucleo.py` | **Núcleo das regras:** `Leitura`/`Resposta` entram, `Decisoes` saem. Sem relógio global, sem I/O, sem thread; o estado é um `EstadoRegras` explícito (`PADRAO` = tabelas dos módulos de regra; `novo_estado()` = mundo limpo). O vigia é um passo à parte (`nucleo.vigiar`). |
 | `analise/regra_queda.py` | Fusão das fontes por usuário, episódios de confirmação, timeout, mapa `messageId` → episódio, registro da resposta. |
 | `analise/regra_luz.py`, `analise/regra_imobilidade.py` | Regras de negócio (luz inadequada à noite; imobilidade prolongada). |
 | `analise/const.py` | Constantes da análise (limiares, janelas, cooldown, retenções, idade máxima para agir). Ver 14. |
-| **`comum/`** | O que os dois lados partilham: constantes comuns e carregador do `.env` (`const.py`), contratos (`schemas.py`, `contratos.py`), mensagem de push (`mensagens.py`) e **o contrato da análise** (`contrato_analise.py`: `Leitura`, `Resposta`, `Decisoes` e o seu JSON, com ida e volta). |
-| **`flow_db/`** | Só a borda a usa: `Repo` (interface única), `Pg` (PostgreSQL), `BancoFalso` (memória, para testes e `FLOW_DB_FAKE=1`), uma migração (`0001_base.sql`), CLI `python -m flow_db migrar|status`. |
+| **`comum/`** | O que os dois lados partilham: constantes comuns e carregador do `.env` (`const.py`), contratos (`schemas.py`, `contratos.py`), mensagem de push (`mensagens.py`) o **contrato da análise** (`contrato_analise.py`: `Leitura`, `Resposta`, `Decisoes` e o seu JSON, com ida e volta) e o **TLS** (`tls.py`: caminhos do certificado e da chave, contexto HTTPS do servidor, recusa de URL que não seja `https://`). |
+| **`flow_db/`** | Só a borda a usa (conexão sempre com TLS, `verify-full`): `Repo` (interface única), `Pg` (PostgreSQL), `BancoFalso` (memória, para testes e `FLOW_DB_FAKE=1`), uma migração (`0001_base.sql`), CLI `python -m flow_db migrar|status`. |
+| `scripts/gerar_certificado.py` | Gera o certificado TLS único (autoassinado) e a chave em `certs/` (fora do Git) e copia o certificado para o app. Idempotente; `--forcar` recria, `--ip` acrescenta um endereço. |
 | `simular_queda.py` | Utilitário (exige borda e análise rodando): simula um wokwi que sofre impacto e fica imóvel. |
 | `tests/` | Suíte pytest (`unit/`, `integration/` e `banco/`); ver 14.1. |
 
@@ -121,12 +122,12 @@ flowchart LR
         CW --> HUB
     end
 
-    APP -->|"POST /auth/login, /dados, /eventos"| AUTH
-    BR  -->|"POST /auth/login, /dados, /eventos"| AUTH
+    APP -->|"HTTPS: POST /auth/login, /dados, /eventos"| AUTH
+    BR  -->|"HTTPS: POST /auth/login, /dados, /eventos"| AUTH
     AUTH --> AUTHZ --> SRVP
-    SRVP -->|"HTTP local (127.0.0.1)"| RQ["Servidor 2 (análise): nucleo + regras"]
+    SRVP -->|"HTTPS (127.0.0.1)"| RQ["Servidor 2 (análise): nucleo + regras"]
     RQ -->|"decisões"| EF
-    SRVP --> DB
+    SRVP -->|"SQL sobre TLS"| DB
     EF --> DB
     EF --> MSG
     MSG --> CA
@@ -135,9 +136,9 @@ flowchart LR
     CW -.->|"SSE GET /push/wokwi"| BR
 ```
 
-- **Ida (dispositivo → servidor):** `POST` HTTP. Telemetria em `/dados`; eventos discretos (ack e resposta do idoso) em `/eventos`.
+- **Ida (dispositivo → servidor):** `POST` HTTPS. Telemetria em `/dados`; eventos discretos (ack e resposta do idoso) em `/eventos`.
 - **Volta (servidor → dispositivo):** push por **SSE** (por que não WebSocket: seção 10.5). O **dispositivo abre** a conexão (`GET`) e o servidor empurra mensagens por ela. Nenhum dispositivo expõe porta; o servidor nunca precisa conhecer o endereço de um dispositivo.
-- **Borda e análise:** o Servidor 1 chama o Servidor 2 por HTTP local (`/analisar`, `/vigiar`, `/restaurar`); o Servidor 2 nunca chama ninguém e nunca vê o banco. O banco é só do Servidor 1.
+- **Borda e análise:** o Servidor 1 chama o Servidor 2 por HTTPS local (`/analisar`, `/vigiar`, `/restaurar`); o Servidor 2 nunca chama ninguém e nunca vê o banco. O banco é só do Servidor 1, e a conexão com ele é TLS.
 - **Estrela:** cada dispositivo fala diretamente com o servidor (a borda); não há nível intermediário entre dispositivos e servidor. O dispositivo Wokwi é um só: firmware e ponte compartilham uma conta e uma conexão com o servidor, e a ponte existe porque o ESP32 simulado só fala serial.
 
 ### 3.1 Sistema completo (concreto e abstrato)
@@ -212,12 +213,16 @@ Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do 
 
 ## 5. Transporte e criptografia
 
-- **HTTP** na rede local, com **envelope AES-256-GCM** em todo corpo: `{"nonce": "<base64>", "ciphertext": "<base64>"}` (nonce de 12 bytes aleatório por mensagem, tag de 128 bits ao final do ciphertext).
+- **HTTPS (TLS 1.2 ou superior) em todas as pontas:** dispositivos ↔ Servidor 1, Servidor 1 ↔ Servidor 2 e Servidor 1 ↔ Banco. Nenhuma ponta fala em texto claro, nem em `127.0.0.1`.
+- **Um certificado só**, autoassinado, gerado por `python scripts/gerar_certificado.py` (`SensorServer/certs/flow.crt` e `flow.key`, fora do Git). A borda, a análise e o container do banco o apresentam; o mesmo arquivo é a confiança dos clientes: a borda (para a análise e para o banco, `sslmode=verify-full`, ou `verify-ca` em `FLOW_DB_SSLMODE`), a ponte (`FLOW_TLS_CERT`) e o app (embutido como única âncora de confiança, `res/raw/flow_cert.pem`, com HTTP em texto claro proibido pela configuração de segurança de rede). Os clientes **não** confiam nas autoridades do sistema.
+- O certificado vale para os nomes e IPs listados nele: `localhost`, `127.0.0.1`, `::1`, o IP do computador na rede (detectado) e os de `--ip`/`--dns`. Cliente que acessa por outro endereço recusa a conexão; a correção é recriar o par com `--forcar` e o endereço novo (e recompilar o app).
+- Escopo mínimo, de projeto acadêmico: sem autoridade certificadora própria, sem rotação automática e sem mTLS (o servidor não pede certificado ao cliente; quem se autentica é a conta, por token).
+- **Envelope AES-256-GCM** em todo corpo, por cima do TLS: `{"nonce": "<base64>", "ciphertext": "<base64>"}` (nonce de 12 bytes aleatório por mensagem, tag de 128 bits ao final do ciphertext).
 - O mesmo envelope cifra o **push**: o `data:` de cada evento SSE é um envelope.
 - Implementações equivalentes em Python (`borda/crypto_utils.py` no servidor e `crypto_utils.py` no bridge) e Kotlin (`CryptoUtils.kt`, `javax.crypto`); ambas oferecem `encrypt` e `decrypt`.
 - O firmware **não** faz rede nem criptografia: a cifragem do Wokwi começa no bridge. A serial entre ESP32 e bridge é local e em texto.
 
-Por que HTTP+AES-GCM e não MQTT, gRPC ou Kafka: o sistema tem um único consumidor lógico, eventos pequenos e periódicos e nenhuma necessidade de replay ou fan-out; HTTP é o menor mecanismo que atende. O volume e o número de consumidores são a premissa que, se mudar, reabre essa decisão; a topologia, mesmo assim, continua em estrela.
+Por que HTTP (agora sobre TLS) e não MQTT, gRPC ou Kafka: o sistema tem um único consumidor lógico, eventos pequenos e periódicos e nenhuma necessidade de replay ou fan-out; HTTP é o menor mecanismo que atende. O volume e o número de consumidores são a premissa que, se mudar, reabre essa decisão; a topologia, mesmo assim, continua em estrela.
 
 ---
 
@@ -271,7 +276,7 @@ Detalhe campo a campo em `docs/schemas.md`.
 | `/estado/<device_id>` | GET | `estado:ler` (admin) | Resumo do estado da imobilidade por dispositivo, **lido de `estado_dispositivo`** (gravado pela borda a partir das decisões da análise); reflete a última decisão, não a leitura que acabou de chegar. |
 | `/`, `/health` | GET | pública | Disponibilidade da borda e saúde da análise: `analise.estado` é `ok` ou `degradado` (a última chamada a ela falhou), com o tamanho da fila de espera. Sempre `200`. |
 
-O servidor escuta em `0.0.0.0:5000` e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`. **Corpo acima de `MAX_CONTENT_LENGTH` (64 KiB) é `413`** em qualquer rota com corpo (`/dados`, `/eventos`, `/auth/*`): o servidor não processa o conteúdo e a negação vai para o log sem ele. O maior corpo legítimo é um envelope de telemetria, de poucos KB. Sem token, a resposta continua `401`, antes de o corpo ser lido. conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
+O servidor escuta em `0.0.0.0:5000`, em HTTPS, e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`. **Corpo acima de `MAX_CONTENT_LENGTH` (64 KiB) é `413`** em qualquer rota com corpo (`/dados`, `/eventos`, `/auth/*`): o servidor não processa o conteúdo e a negação vai para o log sem ele. O maior corpo legítimo é um envelope de telemetria, de poucos KB. Sem token, a resposta continua `401`, antes de o corpo ser lido. conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
 
 Entrada malformada **antes** de haver conteúdo interpretável é `400`: corpo decifrado que não é um objeto JSON, `source` ausente ou inválido, `user_id` inválido, `device_id` inválido no login (não string ou acima de 64 caracteres). `Last-Event-ID` inválido nunca é erro: vale `0`. `schemaVersion` não suportado em `/dados` e `/eventos` responde `200` com `descartado: true` e `motivo: "schemaVersion_nao_suportado"`, e o conteúdo não é gravado nem chega às regras; em `/auth/login` e `/auth/refresh`, a versão maior que a atual ou inválida é `400` (a ausência é aceita).
 
@@ -584,18 +589,18 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 
 ### 13.1 Mecanismos
 
-- **Confidencialidade e integridade** por mensagem: AES-256-GCM em todo corpo e no push.
+- **Confidencialidade e integridade** no transporte: TLS em todas as pontas (seção 5) e, por cima, AES-256-GCM em todo corpo e no push.
 - **Autenticação** por conta (senha com scrypt, tokens de curta duração, refresh rotativo, bloqueio por tentativas).
 - **Autorização** negando por padrão, em dois estágios, com a identidade vinda do token e nunca do que o cliente declara.
 - **Auditoria** de negações.
-- **Segredos fora do repositório:** `FLOW_JWT_SECRET` em `SensorServer/.env` (fora do Git) ou variável de ambiente; `contas.json` e `sessoes.json` ignorados pelo Git; sem o segredo o servidor não sobe.
+- **Segredos fora do repositório:** `FLOW_JWT_SECRET` em `SensorServer/.env` (fora do Git) ou variável de ambiente; `contas.json`, `sessoes.json` e a pasta `certs/` (a chave privada do TLS) ignorados pelo Git; sem o segredo, ou sem o certificado, o servidor não sobe.
 
 ### 13.2 Limitações assumidas (projeto acadêmico)
 
 São escolhas de escopo; cada uma traz o caminho para produção.
 
 - **Chave AES fixa e compartilhada**, embutida no código dos dois lados. Produção: chave por dispositivo, negociada no pareamento (ECDH) ou guardada no Android Keystore.
-- **HTTP sem TLS:** o token trafega em claro no cabeçalho; quem captura tráfego na rede local e possui a chave lê e forja envelopes. Mitigações desta fase: token de curta duração, `jti`, conferência de escopo contra o payload. Produção: TLS.
+- **Certificado autoassinado, único e de longa validade:** quem tem a chave privada (`certs/flow.key`) se passa pelo servidor, e não há rotação nem revogação. O app embute o certificado, então trocá-lo exige recompilar. Produção: certificado de uma autoridade, rotação e, se for o caso, mTLS.
 - **Criptografia do Wokwi começa no bridge;** a serial local ESP32 ↔ bridge é texto claro.
 - **App só em primeiro plano:** o pedido de confirmação não chega com a tela bloqueada ou o app em segundo plano. Produção: Foreground Service e/ou FCM no `canal_app.py`, sem mudar o contrato.
 - **Tokens no aparelho** em `SharedPreferences` privado; produção: Android Keystore.
@@ -609,21 +614,23 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | --- | --- | --- |
 | `FLOW_JWT_SECRET` | `SensorServer/.env` ou ambiente | Obrigatório; ≥ 32 bytes. |
 | `FLOW_CONTAS_PATH`, `FLOW_SESSOES_PATH` | `SensorServer/.env` ou ambiente | Opcionais; padrão `contas.json`, `sessoes.json`. |
-| `FLOW_ANALISE_TOKEN`, `FLOW_ANALISE_PORT`, `FLOW_ANALISE_URL` | `SensorServer/.env` ou ambiente | Token compartilhado entre borda e análise (obrigatório, ≥ 16 caracteres); porta da análise (padrão 5100, só em `127.0.0.1`); endereço que a borda usa (padrão `http://127.0.0.1:5100`). Um só `.env`: a análise lê dele apenas o que começa com `FLOW_ANALISE_`. |
+| `FLOW_ANALISE_TOKEN`, `FLOW_ANALISE_PORT`, `FLOW_ANALISE_URL` | `SensorServer/.env` ou ambiente | Token compartilhado entre borda e análise (obrigatório, ≥ 16 caracteres); porta da análise (padrão 5100, só em `127.0.0.1`); endereço que a borda usa (padrão `https://127.0.0.1:5100`; precisa ser `https://`). Um só `.env`: a análise lê dele apenas o que começa com `FLOW_ANALISE_` ou `FLOW_TLS_`. |
+| `FLOW_TLS_CERT`, `FLOW_TLS_KEY` | `SensorServer/.env` ou ambiente | Opcionais; padrão `certs/flow.crt` e `certs/flow.key` (relativo a `SensorServer/`), gerados por `scripts/gerar_certificado.py`. A borda e a análise não sobem sem o par; a borda também o usa para conferir a análise e o banco. |
+| `FLOW_DB_SSLMODE` | `SensorServer/.env` ou ambiente | `verify-full` (padrão) ou `verify-ca`; não há modo sem TLS. |
 | `FLOW_DB_PASSWORD`, `FLOW_DB_USER`, `FLOW_DB_NAME`, `FLOW_DB_HOST`, `FLOW_DB_PORT` | `SensorServer/.env` ou ambiente | Um único usuário de banco, o mesmo do `docker-compose.yml`; só a senha é obrigatória. |
 | `FLOW_DB_FAKE` | ambiente (dev/testes) | `1` usa o banco falso em memória, sem Docker (os dados somem ao parar a borda). |
 | `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de fundo da borda (descarga e vigia) e a exigência do segredo e da análise na subida; usado pela suíte de testes. |
 | `FLOW_SENHA` | ambiente da CLI `borda/auth.py` | Opcional; senha sem prompt ao criar contas. |
 | `FLOW_SEM_DOTENV` | ambiente (testes) | `1` impede a leitura dos `.env` reais; a suíte do servidor e a do bridge o definem. Variável de ambiente já definida sempre vence o `.env`. |
-| `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_BRIDGE_DEVICE` | `WokwiBridge/.env` ou ambiente | Os dois primeiros são obrigatórios. `FLOW_BRIDGE_DEVICE` (padrão: o `DEVICE_ID` de `sketch.ino`) é registrado no login e deve ser igual ao `deviceId` dos eventos do firmware (`403` se diferir, 4.3). |
-| Usuário e senha, IP e porta | tela "Configurações" do app | |
+| `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_TLS_CERT`, `FLOW_BRIDGE_DEVICE` | `WokwiBridge/.env` ou ambiente | Os dois primeiros são obrigatórios. `FLOW_SERVIDOR` precisa ser `https://` (padrão `https://127.0.0.1:5000`); `FLOW_TLS_CERT` é o certificado em que a ponte confia (padrão `../SensorServer/certs/flow.crt`). `FLOW_BRIDGE_DEVICE` (padrão: o `DEVICE_ID` de `sketch.ino`) é registrado no login e deve ser igual ao `deviceId` dos eventos do firmware (`403` se diferir, 4.3). |
+| Usuário e senha, IP e porta | tela "Configurações" do app | O app usa sempre `https://`; o IP precisa estar no certificado. |
 | Timeout do botão | `SensorServer/comum/const.py` | Sem recompilar app nem firmware. |
 | Limiares, cooldown, fusão de fontes, retenções | `SensorServer/analise/const.py` | Idem. |
 | Porta, limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, fila do SSE, filas e prazos da chamada à análise | `SensorServer/borda/const.py` | Idem. |
 | Versão atual de cada contrato | `SensorServer/comum/const.py` | Cada constante tem comentário com unidade e efeito. Os caminhos de contas e sessões podem ser sobrescritos por variável de ambiente (acima). |
 | Versão do core ESP32 | `arduino-cli core list` | 3.x (usa `tone`/`noTone`). |
 
-Ordem de subida: banco (`scripts/preparar.*`) → contas criadas → borda e análise (a ordem entre as duas é indiferente) → simulação Wokwi (aba visível, `rfc2217ServerPort = 4000`) → bridge → app. O firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
+Ordem de subida: certificado TLS e banco (`scripts/preparar.*` fazem os dois) → contas criadas → borda e análise (a ordem entre as duas é indiferente) → simulação Wokwi (aba visível, `rfc2217ServerPort = 4000`) → bridge → app. Compilar o app exige o certificado já gerado (`res/raw/flow_cert.pem`). O firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
 
 
 
@@ -631,7 +638,7 @@ Ordem de subida: banco (`scripts/preparar.*`) → contas criadas → borda e an�
 
 | Alvo | Como | Observação |
 | --- | --- | --- |
-| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, contrato e API da análise, contrato do repositório no banco falso, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização, banco e análise fora do ar, e queda ponta a ponta). Nos testes de integração a análise roda em memória, no lugar do processo, chamada pelo mesmo cliente da produção (`tests/_pipeline.py`; a descarga, a análise e a entrega rodam de forma síncrona depois de cada POST), sobre o banco falso. `pytest -m banco` roda o mesmo contrato do repositório no PostgreSQL real (banco descartável `flow_teste`). Usa segredo próprio, sem threads de fundo, e grava contas e sessões em pasta temporária: não toca nos dados reais. |
+| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, contrato e API da análise, contrato do repositório no banco falso, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização, banco e análise fora do ar, e queda ponta a ponta). O TLS tem um teste só de configuração (`tests/unit/test_tls.py`: o certificado serve a análise, o cliente da borda o confere e o banco recebe `verify-full`); os de integração seguem sem TLS. Nos testes de integração a análise roda em memória, no lugar do processo, chamada pelo mesmo cliente da produção (`tests/_pipeline.py`; a descarga, a análise e a entrega rodam de forma síncrona depois de cada POST), sobre o banco falso. `pytest -m banco` roda o mesmo contrato do repositório no PostgreSQL real (banco descartável `flow_teste`). Usa segredo próprio, sem threads de fundo, e grava contas e sessões em pasta temporária: não toca nos dados reais. |
 | Ponte | `cd WokwiBridge && python -m pytest` (`pytest.ini`) | `tests/test_bridge.py`: tradução e validação das mensagens de push, roteamento das linhas da serial, parser SSE e renovação de sessão. Sem rede e sem serial. |
 | Ponte, ponta a ponta | `WokwiBridge/tests/fake_firmware.py` | Substitui a serial por um firmware falso (impacto, `push.ack`, `ESTOU_BEM`). Exige servidor no ar e `FLOW_BRIDGE_DEVICE=esp32-falso`. Não é pytest. |
 | Firmware | `sketch/host_test/` | Lógica do firmware no PC, com um Arduino falso; opcional. |
@@ -649,13 +656,12 @@ Itens abstratos que **não** são elementos novos do sistema (esses estão em 2.
 - **Login único com tipos de conta:** o modelo já separa papéis e escopos; falta o papel `cuidador` na política e o app correspondente (2.3).
 - **Destino da confirmação:** definir o que fazer com a resposta do idoso (escalar ao cuidador, silenciar regras). Hoje o servidor só armazena.
 - **Dispositivo silencioso:** rotina que dispare o alerta de "sem comunicação"; os dados para calculá-la já existem.
-- **Segurança de transporte:** TLS e chave por dispositivo (13.2).
+- **Segurança de transporte:** chave AES por dispositivo, e certificado de uma autoridade com rotação (13.2).
 - **Calibração da detecção de queda** com dados reais (9.4).
 
 ### 15.1 Pendências registradas
 
 - **Serviço de notificação aos cuidadores:** consumiria `alertas` e `confirmacoes` do banco como terceiro serviço; a separação entre borda e análise deixou o contrato pronto, sem o serviço.
-- **HTTPS:** a borda continua em HTTP; TLS fica para a fase de produção (13.2).
 - **Chave AES por dispositivo:** hoje fixa e compartilhada (13.2).
 - **Contas e sessões em tabelas:** ficam em JSON (`contas.json`, `sessoes.json`) por serem poucas e só da borda; migrar para o banco só se o número de contas ou de réplicas da borda crescer.
 - **Retenção e compressão de dados** (leituras antigas): hoje o PostgreSQL guarda tudo em tabelas comuns; ver `docs/banco.md`.

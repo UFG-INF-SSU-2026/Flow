@@ -23,7 +23,8 @@ def criar_pool():
         pool.close()
         raise BancoIndisponivel(
             f"Nao foi possivel conectar ao banco em {config.host()}:{config.porta()}/{config.nome_banco()}. "
-            f"O container esta de pe? A FLOW_DB_PASSWORD do .env confere com a do banco?") from None
+            f"O container esta de pe? A FLOW_DB_PASSWORD do .env confere com a do banco? O container usa o mesmo "
+            f"certificado TLS (certs/)? Se o certificado foi recriado: docker compose restart db.") from None
     return pool
 
 

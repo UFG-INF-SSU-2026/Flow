@@ -14,15 +14,18 @@ Configuracao (nada de editar este arquivo): WokwiBridge/.env (modelo: .env.examp
 Variavel de ambiente ja definida no terminal VENCE o arquivo. Chaves:
   FLOW_BRIDGE_ID      conta do bridge (papel 'dispositivo')          [obrigatoria]
   FLOW_BRIDGE_SECRET  senha da conta                                   [obrigatoria]
-  FLOW_SERVIDOR       URL base do servidor (padrao http://127.0.0.1:5000; evite 'localhost' no Windows: tenta IPv6
-                      primeiro e cada conexao nova espera ~1-2 s)
+  FLOW_SERVIDOR       URL base do servidor, https:// (padrao https://127.0.0.1:5000; evite 'localhost' no Windows:
+                      tenta IPv6 primeiro e cada conexao nova espera ~1-2 s)
+  FLOW_TLS_CERT       certificado em que o bridge confia (padrao ../SensorServer/certs/flow.crt, gerado por
+                      scripts/gerar_certificado.py; relativo, vale a partir de WokwiBridge/)
   FLOW_BRIDGE_DEVICE  deviceId do firmware que este bridge repassa (padrao esp32-decisao-imobilidade-01,
                       o DEVICE_ID de sketch.ino). O servidor exige que seja igual ao deviceId dos eventos.
 
 Pre-requisitos:
   - Simulacao rodando no VS Code (F1 -> Wokwi: Start Simulator), com a aba do simulador VISIVEL
     (rfc2217ServerPort = 4000 em sketch/wokwi.toml).
-  - Servidor (SensorServer/server.py) no ar e conta de papel 'dispositivo' (fonte 'wokwi') criada.
+  - Servidor (python -m borda, em SensorServer/) no ar, conta de papel 'dispositivo' (fonte 'wokwi') criada e o
+    certificado TLS gerado (o IP do servidor precisa estar nele).
 
 Uso:
   pip install -r requirements.txt
@@ -62,7 +65,10 @@ DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO)   # antes de ler as variavei
 # --- Configuracoes ----------------------------------------------------------
 RFC2217_URL = "rfc2217://localhost:4000"
 BAUDRATE = 115200
-SERVIDOR = os.environ.get("FLOW_SERVIDOR", "http://127.0.0.1:5000").rstrip("/")
+SERVIDOR = os.environ.get("FLOW_SERVIDOR", "https://127.0.0.1:5000").rstrip("/")
+# Confianca TLS: so o certificado do projeto (nao as autoridades do sistema). Relativo vale a partir desta pasta.
+_CERT_PADRAO = Path(__file__).resolve().parent.parent / "SensorServer" / "certs" / "flow.crt"
+TLS_CERT = str(Path(__file__).resolve().parent / (os.environ.get("FLOW_TLS_CERT") or _CERT_PADRAO))
 BRIDGE_ID = os.environ.get("FLOW_BRIDGE_ID", "")
 BRIDGE_SECRET = os.environ.get("FLOW_BRIDGE_SECRET", "")
 # O login registra este device_id no token e o servidor confere com o deviceId de cada evento (403 se diferir):
@@ -110,7 +116,7 @@ class Sessao:
         self.user_id = tokens["user_ids"][0]       # o user_id vem do login, nao de configuracao manual
 
     def login(self) -> None:
-        r = requests.post(f"{SERVIDOR}/auth/login", timeout=5, json=_cifrar({
+        r = requests.post(f"{SERVIDOR}/auth/login", timeout=5, verify=TLS_CERT, json=_cifrar({
             "schemaVersion": 3, "identificador": BRIDGE_ID, "segredo": BRIDGE_SECRET,
             "fonte": "wokwi", "device_id": BRIDGE_DEVICE}))
         if r.status_code != 200:
@@ -127,7 +133,7 @@ class Sessao:
             if token_recusado is not None and self.access != token_recusado:
                 return
             try:
-                r = requests.post(f"{SERVIDOR}/auth/refresh", timeout=5,
+                r = requests.post(f"{SERVIDOR}/auth/refresh", timeout=5, verify=TLS_CERT,
                                   json=_cifrar({"schemaVersion": 3, "refresh_token": self.refresh_token}))
                 if r.status_code == 200:
                     self._aplicar(_decifrar(r.json()))
@@ -176,7 +182,8 @@ def enviar(sessao: Sessao, rota: str, evento: dict) -> None:
     for tentativa in (1, 2):
         usado = sessao.access
         try:
-            r = requests.post(f"{SERVIDOR}{rota}", json=_cifrar(evento), headers=sessao.headers(), timeout=5)
+            r = requests.post(f"{SERVIDOR}{rota}", json=_cifrar(evento), headers=sessao.headers(), timeout=5,
+                              verify=TLS_CERT)
         except requests.RequestException as e:
             log(f"Falha ao enviar para {rota}: {e}")     # sem fila de retransmissao (decisao de arquitetura)
             return
@@ -332,7 +339,7 @@ def laco_push(sessao: Sessao, holder: SerialHolder) -> None:
             if last_id:
                 h["Last-Event-ID"] = str(last_id)
             with requests.get(f"{SERVIDOR}/push/wokwi", headers=h, stream=True,
-                              timeout=(5, READ_TIMEOUT_SSE_S)) as r:
+                              timeout=(5, READ_TIMEOUT_SSE_S), verify=TLS_CERT) as r:
                 if r.status_code == 401:
                     log("401 em /push/wokwi: renovando token")
                     sessao.renovar(usado)
@@ -374,6 +381,11 @@ def main(abrir_serial=conectar_serial) -> None:
     if not BRIDGE_ID or not BRIDGE_SECRET:
         sys.exit("Defina FLOW_BRIDGE_ID e FLOW_BRIDGE_SECRET em WokwiBridge/.env (modelo: .env.example) "
                  "ou no ambiente (ver INSTRUCOES.md).")
+    if not SERVIDOR.lower().startswith("https://"):
+        sys.exit(f"FLOW_SERVIDOR precisa comecar com https:// (toda ponta fala TLS); recebido: {SERVIDOR}")
+    if not Path(TLS_CERT).is_file():
+        sys.exit(f"Certificado TLS nao encontrado: {TLS_CERT}. Gere-o em SensorServer/ com "
+                 f"'python scripts/gerar_certificado.py' ou aponte FLOW_TLS_CERT para o flow.crt.")
     log(f"Configuracao (.env): {DOTENV_ARQUIVO} "
         + ("carregado" if DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente"))
     log(f"Servidor: {SERVIDOR} | conta: {BRIDGE_ID} | deviceId: {BRIDGE_DEVICE}")

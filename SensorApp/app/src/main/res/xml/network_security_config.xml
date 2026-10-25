@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    TLS: o app so fala HTTPS e so confia no certificado do projeto (res/raw/flow_cert.pem, copia do SensorServer/certs/flow.crt
+    gerada por "python scripts/gerar_certificado.py" ANTES de compilar). Nao confia nas autoridades do sistema nem aceita
+    HTTP em texto claro. O IP do servidor precisa estar no certificado; se mudar, gere de novo com --forcar --ip e recompile.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="@raw/flow_cert" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

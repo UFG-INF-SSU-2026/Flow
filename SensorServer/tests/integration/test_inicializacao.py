@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from _apoio import SEGREDO
+from _apoio import SEGREDO, ambiente_tls
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # SensorServer/
 
@@ -24,6 +24,7 @@ def _rodar(args, tmp_path, **extra):
         "PYTHONPATH": RAIZ,
         "FLOW_DB_FAKE": "1",      # sem Docker: banco falso (o teste abaixo, de banco ausente, sobrescreve)
         "FLOW_ANALISE_TOKEN": "t" * 24,
+        **ambiente_tls(),         # a borda e o banco exigem o certificado TLS do projeto
     })
     env.update(extra)
     return subprocess.run([sys.executable, *args], cwd=tmp_path, env=env,
