@@ -30,18 +30,18 @@ class RequisicaoRecusada(ValueError):
     """A analise recusou o corpo (400): reenviar nao adianta."""
 
 
-def transporte_http(url: str | None = None, token: str | None = None, cert: str | None = None) -> Callable:
-    """Transporte real: HTTPS para a analise, com o token no cabecalho. Le URL, token e certificado na hora de criar.
-    Falta de token, URL que nao seja https:// ou certificado ausente levantam RuntimeError (a borda nao sobe)."""
+def transporte_http(url: str | None = None, token: str | None = None, ca: str | None = None) -> Callable:
+    """Transporte real: HTTPS para a analise, com o token no cabecalho. Le URL, token e CA na hora de criar.
+    Falta de token, URL que nao seja https:// ou CA ausente levantam RuntimeError (a borda nao sobe)."""
     import requests
     token = token or const_comum.token_analise()
     url = tls.exigir_https(url or const_comum.url_analise(), "FLOW_ANALISE_URL").rstrip("/")
-    cert = cert or tls.certificado()       # confianca: so o certificado do projeto (nao as autoridades do sistema)
+    ca = ca or tls.ca()                    # confianca: so a CA do projeto (nao as autoridades do sistema)
     sessao = requests.Session()
 
     def chamar(metodo: str, caminho: str, corpo: dict | None, timeout_s: float) -> dict:
         try:
-            resp = sessao.request(metodo, url + caminho, json=corpo, timeout=timeout_s, verify=cert,
+            resp = sessao.request(metodo, url + caminho, json=corpo, timeout=timeout_s, verify=ca,
                                   headers={const_comum.ANALISE_CABECALHO_TOKEN: token})
         except requests.RequestException as e:
             raise AnaliseIndisponivel(f"{type(e).__name__}") from None

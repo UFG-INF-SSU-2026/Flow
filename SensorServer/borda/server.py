@@ -33,7 +33,7 @@ limitada e nenhuma decisao e aplicada nem push enviado ate o banco voltar.
 Como rodar (a partir de SensorServer/; scripts/ faz tudo na ordem certa):
     python -m borda      sobe a borda (contas se criam com "python -m borda.auth criar-conta")
     python -m analise    sobe a analise (so escuta em 127.0.0.1)
-    "python -m borda.server" (ou "flask --app borda.server run --cert certs/flow.crt --key certs/flow.key", ou WSGI com TLS
+    "python -m borda.server" (ou "flask --app borda.server run --cert certs/borda.crt --key certs/borda.key", ou WSGI com TLS
     na frente) sobe a MESMA borda sem desligamento ordenado: serve ao desenvolvimento. Sem a analise rodando ninguem decide
     queda, imobilidade nem luz. Toda ponta fala TLS: o modo de desenvolvimento tambem serve HTTPS.
     Sem FLOW_JWT_SECRET o servidor nao sobe. O segredo, o banco e as threads de fundo sao tratados no import
@@ -589,13 +589,13 @@ if __name__ == "__main__":
         _contexto_tls = tls.contexto_servidor()
     except tls.ConfigTls as e:
         raise SystemExit(f"erro: {e}") from None
-    print(f"Borda iniciando em https://0.0.0.0:{const_borda.PORT} (modo de desenvolvimento; use 'python -m borda' para o desligamento ordenado)...")
+    print(f"Borda iniciando em https://{const_borda.HOST}:{const_borda.PORT} (modo de desenvolvimento; use 'python -m borda' para o desligamento ordenado)...")
     print(f"Configuracao (.env): {const_comum.DOTENV_ARQUIVO} " + ("carregado" if const_comum.DOTENV_CARREGADO
           else "nao encontrado; usando so as variaveis de ambiente"))
     print(f"Banco: {'banco falso em memoria (FLOW_DB_FAKE=1)' if os.environ.get('FLOW_DB_FAKE') == '1' else 'PostgreSQL'}"
           f" | analise: {const_comum.url_analise()}")
-    print("Transporte: TLS (certificado do projeto) + AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")
+    print("Transporte: TLS (CA do projeto) + AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")
 
-    # host="0.0.0.0" para aceitar conexoes de outros dispositivos na mesma rede
-    app.run(host="0.0.0.0", port=const_borda.PORT, threaded=True,   # threaded: uma thread por stream SSE
+    # FLOW_BORDA_HOST (padrao 127.0.0.1): para aceitar outros dispositivos da rede, o IP do computador no .env
+    app.run(host=const_borda.HOST, port=const_borda.PORT, threaded=True,   # threaded: uma thread por stream SSE
             ssl_context=_contexto_tls)

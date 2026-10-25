@@ -11,7 +11,7 @@ Regras de uso:
     este, e so para que o .env ja esteja carregado quando elas leem o ambiente.
   - Ao ser importado, carrega SensorServer/.env para o ambiente do processo; variavel de ambiente ja definida no
     terminal VENCE o arquivo. Ver .env.example e _carregar_dotenv(). Ha UM so .env. A analise
-    (FLOW_SERVICO=analise) copia dele SO as variaveis FLOW_ANALISE_* e FLOW_TLS_* (caminhos do certificado e da chave): o segredo
+    (FLOW_SERVICO=analise) copia dele SO as variaveis FLOW_ANALISE_* e FLOW_TLS_* (caminhos da CA, do certificado e da chave): o segredo
     JWT e a senha do banco nunca entram no ambiente dela.
   - Os demais modulos importam o modulo (`from comum import const as const_comum`) e leem `const_comum.X` NA HORA DO
     USO (nunca `from comum.const import X`), para que um unico ajuste valha para todos os pontos de uso, inclusive
@@ -142,12 +142,14 @@ def url_analise() -> str:
 
 
 # ===========================================================================
-# 5. TLS (um certificado unico, em todas as pontas)
+# 5. TLS (CA propria do projeto, em todas as pontas)
 # ===========================================================================
 
-# Um unico certificado autoassinado (scripts/gerar_certificado.py) e a chave dele: a borda, a analise e o container do banco
-# o apresentam, e ele e a confianca de todos os clientes (borda -> analise, borda -> banco, app, bridge). Os caminhos podem
-# ser trocados por FLOW_TLS_CERT e FLOW_TLS_KEY; caminho relativo vale a partir de SensorServer/ (nao de onde o processo foi
-# iniciado). O docker-compose.yml monta sempre a pasta certs/.
-TLS_CERT_PADRAO = "certs/flow.crt"
-TLS_CHAVE_PADRAO = "certs/flow.key"
+# A CA do projeto (scripts/gerar_certificado.py) assina um certificado por servico: a borda, a analise e o banco apresentam
+# o seu, e a CA (certs/ca.crt) e a UNICA confianca dos clientes (borda -> analise, borda -> banco, bridge, app). Os caminhos
+# podem ser trocados por FLOW_TLS_CA (confianca) e FLOW_TLS_CERT/FLOW_TLS_KEY (o par de quem serve); caminho relativo vale a
+# partir de SensorServer/ (nao de onde o processo foi iniciado). `{servico}` e a borda ou a analise, conforme FLOW_SERVICO
+# (vazio, o modo de desenvolvimento, e a borda). A chave da CA (ca.key) so o script de geracao le.
+TLS_CA_PADRAO = "certs/ca.crt"
+TLS_CERT_PADRAO = "certs/{servico}.crt"
+TLS_CHAVE_PADRAO = "certs/{servico}.key"

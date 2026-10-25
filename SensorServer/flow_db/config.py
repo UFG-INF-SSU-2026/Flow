@@ -8,7 +8,8 @@ Variaveis:
 Um unico usuario: o mesmo que o docker compose cria. Nenhuma senha aparece em log ou em mensagem de erro.
 
 A conexao e SEMPRE cifrada e o certificado do banco e conferido: sslmode `verify-full` (padrao: confere a cadeia e o nome ou
-IP do host contra o certificado) ou `verify-ca` (so a cadeia). A confianca e o certificado unico do projeto (comum/tls.py).
+IP do host contra o certificado) ou `verify-ca` (so a cadeia). A confianca e a CA do projeto (`sslrootcert` = FLOW_TLS_CA,
+comum/tls.py).
 Nao ha modo sem TLS.
 """
 import os
@@ -64,7 +65,7 @@ def dsn() -> str:
     if senha is None:
         raise ConfigBanco("FLOW_DB_PASSWORD nao definida. Veja .env.example.")
     try:
-        raiz_de_confianca = tls.certificado()
+        raiz_de_confianca = tls.ca()
     except tls.ConfigTls as e:
         raise ConfigBanco(str(e)) from None
     return make_conninfo(host=host(), port=porta(), dbname=nome_banco(), user=usuario(), password=senha,

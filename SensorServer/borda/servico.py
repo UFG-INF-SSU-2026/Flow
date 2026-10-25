@@ -2,7 +2,8 @@
 A BORDA como processo proprio: `python -m borda` (a partir de SensorServer/).
 
 Unico processo com porta de rede, com a chave AES, o segredo JWT, as contas e o banco; nao importa a analise (conferido
-por tests/unit/test_fronteiras.py). Serve HTTPS (certificado e chave de comum/tls.py; sem eles nao sobe). Quem decide queda,
+por tests/unit/test_fronteiras.py). Serve so HTTPS, em FLOW_BORDA_HOST:FLOW_BORDA_PORT (padrao 127.0.0.1:5000), com o certificado e a chave da borda
+(comum/tls.py; sem eles nao sobe). Quem decide queda,
 imobilidade e luz e o processo `python -m analise`, que a borda chama por HTTPS local (FLOW_ANALISE_URL, FLOW_ANALISE_TOKEN);
 a borda grava as leituras e as decisoes, entrega o push e responde as consultas. A ordem de subida entre os dois processos e
 indiferente.
@@ -49,10 +50,10 @@ def main() -> int:
 
     from werkzeug.serving import make_server
     try:
-        srv = make_server("0.0.0.0", const_borda.PORT, server.app, threaded=True,   # threaded: uma thread por stream SSE
+        srv = make_server(const_borda.HOST, const_borda.PORT, server.app, threaded=True,   # threaded: uma thread por stream SSE
                           ssl_context=contexto)
     except OSError as e:
-        print(f"erro: nao foi possivel abrir a porta {const_borda.PORT}: {e}", file=sys.stderr)
+        print(f"erro: nao foi possivel abrir {const_borda.HOST}:{const_borda.PORT}: {e}", file=sys.stderr)
         server.encerrar()
         return CODIGO_ERRO
 
@@ -67,7 +68,7 @@ def main() -> int:
         threading.Thread(target=srv.shutdown, name="flow-parada", daemon=True).start()
 
     _instalar_sinais(pedir_parada)
-    print(f"Borda iniciando em https://0.0.0.0:{const_borda.PORT} (a analise e outro processo: 'python -m analise').")
+    print(f"Borda iniciando em https://{const_borda.HOST}:{const_borda.PORT} (a analise e outro processo: 'python -m analise').")
     print(f"Configuracao: {const_comum.DOTENV_ARQUIVO} "
           + ("carregado" if const_comum.DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente"))
     try:

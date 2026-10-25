@@ -14,9 +14,11 @@ from comum import const as _comum  # noqa: F401  (efeito colateral: o .env e car
 # 1. SERVIDOR E AGREGACAO
 # ===========================================================================
 
-# Porta HTTPS do servidor. O firewall do computador precisa liberar ENTRADA
-# nesta porta (celular e bridge conectam no servidor).
-PORT = 5000
+# Onde a borda escuta (so HTTPS). Padrao: 127.0.0.1, ou seja, so este computador. Para o app e o bridge em outra maquina,
+# defina FLOW_BORDA_HOST com o IP do computador na rede (o mesmo que esta no certificado da borda; ver .env.example) e
+# libere a ENTRADA na porta no firewall. FLOW_BORDA_PORT troca a porta (padrao 5000).
+HOST = os.environ.get("FLOW_BORDA_HOST") or "127.0.0.1"
+PORT = int(os.environ.get("FLOW_BORDA_PORT") or 5000)
 
 # Quantidade de leituras recentes mantidas em memoria para o GET /dados
 # (rota de depuracao, restrita a admin).

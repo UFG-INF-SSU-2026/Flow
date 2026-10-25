@@ -11,9 +11,11 @@
 # ATENCAO: usuario, senha e nome do banco so valem na PRIMEIRA subida (volume vazio). Mudar o .env depois
 # nao altera o banco ja criado; para recomecar do zero, use "down -v".
 #
-# TLS: o banco apresenta o certificado unico do projeto (pasta certs/, gerada por "python scripts/gerar_certificado.py";
-# scripts/preparar.* a geram antes de subir) e a borda conecta com sslmode=verify-full. Subir sem certs/flow.crt e
-# certs/flow.key faz o container falhar. Certificado recriado (--forcar): "docker compose restart db". Nao exige recriar o volume.
+# TLS: o banco apresenta o certificado emitido para ele pela CA do projeto (certs/banco.crt e certs/banco.key, gerados por
+# "python scripts/gerar_certificado.py"; scripts/preparar.* os geram antes de subir) e a borda conecta com sslmode=verify-full,
+# confiando so em certs/ca.crt. O container recebe SO esses dois arquivos: a chave da CA (certs/ca.key) nunca e montada.
+# Subir sem certs/banco.crt e certs/banco.key faz o container falhar. Certificado reemitido (--forcar): "docker compose
+# restart db". Nao exige recriar o volume.
 
 name: flow
 
@@ -38,7 +40,8 @@ services:
 
     volumes:
       - flow_db_data:/var/lib/postgresql/data
-      - ./certs:/certs:ro
+      - ./certs/banco.crt:/certs/banco.crt:ro
+      - ./certs/banco.key:/certs/banco.key:ro
 
     # O PostgreSQL so aceita uma chave que seja do usuario "postgres" com permissao 0600, o que um arquivo montado do host
     # raramente e. Por isso o entrypoint copia o par para dentro do container (com dono e permissao certos) e entrega ao
@@ -48,8 +51,8 @@ services:
       - -c
       - >-
         mkdir -p /etc/flow-tls &&
-        install -m 0644 -o postgres -g postgres /certs/flow.crt /etc/flow-tls/flow.crt &&
-        install -m 0600 -o postgres -g postgres /certs/flow.key /etc/flow-tls/flow.key &&
+        install -m 0644 -o postgres -g postgres /certs/banco.crt /etc/flow-tls/banco.crt &&
+        install -m 0600 -o postgres -g postgres /certs/banco.key /etc/flow-tls/banco.key &&
         exec docker-entrypoint.sh "$$@"
       - --
     command:
@@ -57,9 +60,9 @@ services:
       - -c
       - ssl=on
       - -c
-      - ssl_cert_file=/etc/flow-tls/flow.crt
+      - ssl_cert_file=/etc/flow-tls/banco.crt
       - -c
-      - ssl_key_file=/etc/flow-tls/flow.key
+      - ssl_key_file=/etc/flow-tls/banco.key
 
     # O servidor deve esperar este estado antes de conectar (o container "sobe" antes de aceitar conexoes).
     healthcheck:

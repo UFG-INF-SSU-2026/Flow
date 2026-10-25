@@ -7,7 +7,7 @@ Só a **borda** (Servidor 1) fala com o banco, por uma única interface (`flow_d
 ```
 cp .env.example .env     # preencha FLOW_JWT_SECRET, FLOW_ANALISE_TOKEN, FLOW_DB_PASSWORD
 pip install -r requirements.txt
-python scripts/gerar_certificado.py    # certificado TLS (o container o carrega ao subir)
+python scripts/gerar_certificado.py    # CA e certificados TLS (o container carrega o do banco ao subir)
 docker compose up -d --wait
 python -m flow_db migrar        # aplica as migrações pendentes (idempotente, com trava)
 python -m flow_db status        # versão aplicada x disponível
@@ -18,7 +18,7 @@ python -m analise               # a análise, em outro terminal
 
 Sem Docker, para desenvolver: `FLOW_DB_FAKE=1 python -m borda.server` (banco em memória; os dados somem ao parar).
 
-**Certificado recriado** (`python scripts/gerar_certificado.py --forcar`): `docker compose restart db`. O TLS não exige recriar o volume. Sem `certs/flow.crt` e `certs/flow.key` o container não sobe, e sem o certificado a borda não conecta.
+**Certificado reemitido** (`python scripts/gerar_certificado.py --forcar`): `docker compose restart db`. O TLS não exige recriar o volume. O banco apresenta o certificado que a CA do projeto emitiu para ele (`certs/banco.crt` e `certs/banco.key`, os únicos arquivos de `certs/` que o container recebe; a chave da CA nunca é montada), e a borda o confere com `sslmode=verify-full`, confiando só em `certs/ca.crt`. Sem `banco.crt` e `banco.key` o container não sobe, e sem `ca.crt` a borda não conecta.
 
 **Banco antigo:** a migração `0001_base.sql` cria a extensão `timescaledb` e converte `leituras` em hypertable, e isso exige a imagem do TimescaleDB. Um volume criado antes, com a imagem `postgres:17` simples (ou com o esquema anterior), não serve: recrie com `docker compose down -v` e suba de novo (`scripts/preparar.sh`). Os dados de teste não são migrados, **inclusive as contas**: depois do `down -v`, recrie-as (`python -m borda.auth criar-conta`, ver `INSTRUCOES.md`).
 
@@ -40,7 +40,7 @@ Quem grava é sempre a borda: as leituras em lote (uma só thread) e, numa trans
 ## Testes
 
 - `pytest` — padrão. Usa o banco falso em memória; não precisa de Docker. O contrato do `Repo` (`tests/_contrato_repo.py`) roda aqui.
-- `pytest -m banco` — o mesmo contrato contra o PostgreSQL real, num banco descartável `flow_teste` (recriado a cada sessão), por TLS. Exige o container no ar, `FLOW_DB_PASSWORD` no `.env` e o certificado gerado (`certs/`).
+- `pytest -m banco` — o mesmo contrato contra o PostgreSQL real, num banco descartável `flow_teste` (recriado a cada sessão), por TLS. Exige o container no ar, `FLOW_DB_PASSWORD` no `.env` e a CA e os certificados gerados (`certs/`).
 
 ## Backup e restauração (a partir de `SensorServer/`, com o container `flow-db` no ar)
 

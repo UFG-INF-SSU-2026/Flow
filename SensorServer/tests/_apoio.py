@@ -30,19 +30,28 @@ def gerador_de_certificado():
     return modulo
 
 
-def gerar_par_tls(pasta: Path, prefixo: str = "flow") -> tuple[str, str]:
-    """Gera um certificado autoassinado de teste (localhost e 127.0.0.1) em `pasta`. Devolve (certificado, chave)."""
+def gerar_par_tls(pasta: Path, prefixo: str = "flow") -> tuple[str, str, str]:
+    """Emite um certificado de servico de teste (localhost e 127.0.0.1) em `pasta`, assinado pela CA de teste que mora na
+    mesma pasta (criada na primeira chamada; chamadas seguintes com a mesma pasta reusam a CA). Devolve (ca, certificado,
+    chave)."""
+    gerador = gerador_de_certificado()
+    ca, ca_chave = pasta / "ca.crt", pasta / "ca.key"
+    if not ca.is_file():
+        gerador.criar_ca(ca, ca_chave, dias=2)
     cert, chave = pasta / f"{prefixo}.crt", pasta / f"{prefixo}.key"
-    gerador_de_certificado().gerar(cert, chave, ["localhost"], ["127.0.0.1"], dias=2)
-    return str(cert), str(chave)
+    gerador.emitir(ca, ca_chave, cert, chave, prefixo, ["localhost"], ["127.0.0.1"], dias=2)
+    return str(ca), str(cert), str(chave)
 
 
 def ambiente_tls() -> dict:
-    """FLOW_TLS_CERT e FLOW_TLS_KEY de um par de teste gerado uma vez por sessao: para os testes que sobem `python -m borda`,
-    `python -m analise` ou abrem o banco, que exigem TLS (os demais usam a analise em memoria, sem TLS)."""
+    """FLOW_TLS_CA, FLOW_TLS_CERT e FLOW_TLS_KEY de uma CA e um par de teste gerados uma vez por sessao: para os testes que
+    sobem `python -m borda`, `python -m analise` ou abrem o banco, que exigem TLS (os demais usam a analise em memoria,
+    sem TLS)."""
     if not _tls_da_sessao:
-        _tls_da_sessao["cert"], _tls_da_sessao["chave"] = gerar_par_tls(Path(tempfile.mkdtemp(prefix="flow_tls_")))
-    return {"FLOW_TLS_CERT": _tls_da_sessao["cert"], "FLOW_TLS_KEY": _tls_da_sessao["chave"]}
+        (_tls_da_sessao["ca"], _tls_da_sessao["cert"],
+         _tls_da_sessao["chave"]) = gerar_par_tls(Path(tempfile.mkdtemp(prefix="flow_tls_")))
+    return {"FLOW_TLS_CA": _tls_da_sessao["ca"], "FLOW_TLS_CERT": _tls_da_sessao["cert"],
+            "FLOW_TLS_KEY": _tls_da_sessao["chave"]}
 
 
 def aguardar(condicao, timeout: float = 3.0, passo: float = 0.02) -> bool:

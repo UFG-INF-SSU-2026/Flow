@@ -1,15 +1,16 @@
 """
-TLS em todas as pontas: um certificado so, autoassinado, gerado por `python scripts/gerar_certificado.py`.
+TLS em todas as pontas, com a CA propria do projeto, gerada por `python scripts/gerar_certificado.py`.
 
-    certificado()         caminho do certificado (FLOW_TLS_CERT): o que o servidor apresenta e o que os clientes aceitam como
-                          confianca (borda -> analise, borda -> banco, app, bridge)
-    chave()               caminho da chave privada (FLOW_TLS_KEY): so quem serve HTTPS (borda, analise) e o container do banco
-    contexto_servidor()   SSLContext para a borda e a analise servirem HTTPS
+    ca()                  caminho do certificado da CA (FLOW_TLS_CA): a UNICA confianca dos clientes (borda -> analise,
+                          borda -> banco, app, bridge); a verificacao de certificado e de nome nunca e desligada
+    certificado()         caminho do certificado de quem serve (FLOW_TLS_CERT): o da borda ou o da analise, assinado pela CA
+    chave()               caminho da chave privada de quem serve (FLOW_TLS_KEY); a chave da CA nunca e lida por servico
+    contexto_servidor()   SSLContext para a borda e a analise servirem HTTPS (TLS 1.2 ou superior)
     exigir_https(url, v)  recusa uma URL que nao comece com https:// (nenhuma ponta fala em texto claro, nem em 127.0.0.1)
 
-Caminho relativo vale a partir de SensorServer/, e nao de onde o processo foi iniciado. Os padroes (certs/flow.crt e
-certs/flow.key) estao em comum/const.py. Escopo minimo: sem autoridade certificadora propria, sem rotacao automatica e sem
-mTLS (o servidor nao pede certificado ao cliente; quem se autentica e a conta, por token).
+Caminho relativo vale a partir de SensorServer/, e nao de onde o processo foi iniciado. Os padroes (certs/ca.crt,
+certs/<servico>.crt e certs/<servico>.key, com <servico> = borda ou analise) estao em comum/const.py. Escopo minimo: sem
+rotacao automatica e sem mTLS (o servidor nao pede certificado ao cliente; quem se autentica e a conta, por token).
 
 Este modulo so le o ambiente na hora do uso e nao importa nada do projeto alem de `comum.const`.
 """
@@ -21,10 +22,10 @@ from comum import const as const_comum
 
 
 class ConfigTls(RuntimeError):
-    """Certificado ou chave ausente ou ilegivel. A mensagem diz o que fazer e nunca traz o conteudo de um arquivo."""
+    """CA, certificado ou chave ausente ou ilegivel. A mensagem diz o que fazer e nunca traz o conteudo de um arquivo."""
 
 
-_COMO_GERAR = "Gere o par com: python scripts/gerar_certificado.py (a partir de SensorServer/)."
+_COMO_GERAR = "Gere a CA e os certificados com: python scripts/gerar_certificado.py (a partir de SensorServer/)."
 
 
 def _caminho(variavel: str, padrao: str) -> Path:
@@ -40,16 +41,24 @@ def _existente(variavel: str, padrao: str, o_que: str) -> str:
     return str(caminho)
 
 
+def _servico() -> str:
+    return const_comum.SERVICO or "borda"       # o modo de desenvolvimento (FLOW_SERVICO vazio) serve a borda
+
+
+def ca() -> str:
+    return _existente("FLOW_TLS_CA", const_comum.TLS_CA_PADRAO, "certificado da CA")
+
+
 def certificado() -> str:
-    return _existente("FLOW_TLS_CERT", const_comum.TLS_CERT_PADRAO, "certificado TLS")
+    return _existente("FLOW_TLS_CERT", const_comum.TLS_CERT_PADRAO.format(servico=_servico()), "certificado TLS")
 
 
 def chave() -> str:
-    return _existente("FLOW_TLS_KEY", const_comum.TLS_CHAVE_PADRAO, "chave TLS")
+    return _existente("FLOW_TLS_KEY", const_comum.TLS_CHAVE_PADRAO.format(servico=_servico()), "chave TLS")
 
 
 def contexto_servidor() -> ssl.SSLContext:
-    """Contexto para servir HTTPS (TLS 1.2 ou superior) com o certificado e a chave do projeto."""
+    """Contexto para servir HTTPS (TLS 1.2 ou superior) com o certificado e a chave do servico."""
     contexto = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     contexto.minimum_version = ssl.TLSVersion.TLSv1_2
     cert, chv = certificado(), chave()
@@ -57,7 +66,7 @@ def contexto_servidor() -> ssl.SSLContext:
         contexto.load_cert_chain(cert, chv)
     except (ssl.SSLError, OSError) as e:
         raise ConfigTls(f"nao foi possivel carregar o certificado e a chave TLS ({type(e).__name__}): o par nao confere "
-                        f"ou o arquivo esta ilegivel. Recrie com: python scripts/gerar_certificado.py --forcar") from None
+                        f"ou o arquivo esta ilegivel. Reemita com: python scripts/gerar_certificado.py --forcar") from None
     return contexto
 
 

@@ -10,7 +10,7 @@ uu.md
 *.patch
 *.diff
 
-# certificado TLS do projeto: a chave e o certificado ficam fora do Git; o app embute uma copia do certificado
+# CA e certificados TLS do projeto: chaves e certificados ficam fora do Git; o app embute uma copia do certificado da CA
 SensorServer/certs/
 SensorApp/app/src/main/res/raw/flow_cert.pem
 *.key

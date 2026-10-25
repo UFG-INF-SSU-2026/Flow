@@ -11,7 +11,7 @@ Flow/
 │   ├── borda/          # Servidor 1: rotas, auth, SSE, banco; chama a análise por HTTP local
 │   ├── analise/        # Servidor 2: núcleo e regras (queda, imobilidade, luz); sem banco
 │   ├── comum/          # constantes, schemas, mensagem de push, contrato borda↔análise e TLS
-│   ├── certs/          # certificado TLS e chave (gerados por scripts/gerar_certificado.py; fora do Git)
+│   ├── certs/          # CA do projeto e certificados TLS (gerados por scripts/gerar_certificado.py; fora do Git)
 │   ├── flow_db/        # banco (uma migração, interface única de acesso)
 │   ├── tests/          # suíte pytest do servidor (unit/ e integration/)
 │   └── simular_queda.py  # simula uma queda sem Wokwi nem celular
@@ -33,7 +33,7 @@ Flow/
 - **Dispositivo → servidor:** `POST` HTTPS (telemetria em `/dados`, ack e resposta do idoso em `/eventos`), sempre com token.
 - **Servidor → dispositivo:** o **dispositivo abre** uma conexão SSE com o servidor e o servidor empurra mensagens por ela. Nenhum dispositivo escuta porta; por isso o único requisito de rede é que o celular e o bridge **alcancem o servidor**.
 - **Servidor 1 ↔ Servidor 2:** a borda (porta 5000) é a única que fala com os dispositivos e com o banco; a análise só escuta em `127.0.0.1:5100` e só a borda a chama.
-- **TLS em todas as pontas:** dispositivos ↔ borda, borda ↔ análise e borda ↔ banco falam HTTPS/TLS (o banco, SQL sobre TLS), com **um certificado só** (autoassinado), que é também a confiança de cada cliente. Ver a seção "Certificado TLS" abaixo.
+- **TLS em todas as pontas:** dispositivos ↔ borda, borda ↔ análise e borda ↔ banco falam HTTPS/TLS (o banco, SQL sobre TLS), com a **CA própria do projeto**: ela assina o certificado de cada serviço e é a única confiança de cada cliente. Ver a seção "Certificado TLS" abaixo.
 - **Wokwi:** o ESP32 simulado só fala serial. O bridge lê e escreve nessa serial (RFC2217, `localhost:4000`) e faz a ponte com o servidor.
 
 ## Pré-requisitos
@@ -82,7 +82,7 @@ FLOW_ANALISE_TOKEN=<valor gerado>
 FLOW_DB_PASSWORD=<valor gerado>
 ```
 
-A análise lê desse arquivo **só** as variáveis `FLOW_ANALISE_*` e `FLOW_TLS_*` (caminhos do certificado): o segredo dos tokens e a senha do banco nunca entram no ambiente dela. (Sem `.env`, é possível exportar as variáveis no terminal.)
+A análise lê desse arquivo **só** as variáveis `FLOW_ANALISE_*` e `FLOW_TLS_*` (caminhos da CA, do certificado e da chave): o segredo dos tokens e a senha do banco nunca entram no ambiente dela. (Sem `.env`, é possível exportar as variáveis no terminal.)
 
 Crie as duas contas do protótipo (a senha é pedida no terminal). As contas ficam no banco, então ele precisa estar no ar (`scripts/preparar.sh` o sobe) e o `.env` preenchido: Ambas apontam para a **mesma pessoa** (`--user-id 1`), e é isso que faz o servidor juntar app e wokwi:
 
@@ -101,16 +101,16 @@ Contas e sessões ficam nas tabelas `contas` e `sessoes` do banco; não há arqu
 
 ### Certificado TLS (uma vez)
 
-Toda comunicação é cifrada com TLS, com um único certificado autoassinado. Gere-o em `SensorServer/` (o `scripts/preparar.*` já faz isso se ele faltar):
+Toda comunicação é cifrada com TLS. O projeto tem uma **CA própria**, que assina o certificado de cada serviço (borda, análise e banco). Gere tudo em `SensorServer/` (o `scripts/preparar.*` já faz isso para o que faltar):
 
 ```bash
 cd SensorServer
 python scripts/gerar_certificado.py --ip <IP do computador na rede>   # ex.: --ip 192.168.0.10
 ```
 
-Isso cria `SensorServer/certs/flow.crt` e `flow.key` (a chave é segredo e **não vai para o Git**) e copia o certificado para `SensorApp/app/src/main/res/raw/flow_cert.pem`. O certificado só vale para os endereços listados nele (`localhost`, `127.0.0.1`, o IP de rede detectado e os de `--ip`); quem acessa por outro endereço recusa a conexão. Para trocar ou acrescentar um IP: `python scripts/gerar_certificado.py --forcar --ip <IP>`, depois `docker compose restart db`, reinicie borda e análise e **recompile o app**.
+Isso cria, em `SensorServer/certs/` (**fora do Git**): `ca.crt` e `ca.key` (a chave da CA é segredo; só o script a lê), e `borda.crt`/`borda.key`, `analise.crt`/`analise.key` e `banco.crt`/`banco.key`. Copia ainda o `ca.crt` (público) para `SensorApp/app/src/main/res/raw/flow_cert.pem`. O certificado da borda só vale para os endereços listados nele (`localhost`, `127.0.0.1`, `::1`, o IP de rede detectado e os de `--ip`/`--dns`); quem acessa por outro endereço recusa a conexão. Para acrescentar ou trocar um IP: `python scripts/gerar_certificado.py --forcar --ip <IP>`, depois `docker compose restart db` e reinicie borda e análise. Isso **não troca a CA**: o app e o bridge continuam confiando, **sem recompilar**. Só `--forcar-ca` recria a CA (e então o app precisa ser recompilado). Para a API HTTPS do bridge, `--nome bridge` emite `certs/bridge.crt`.
 
-Quem confia nele: a borda (para a análise e para o banco), o bridge (`FLOW_TLS_CERT`, padrão `../SensorServer/certs/flow.crt`) e o app (embutido na compilação). Se o bridge rodar em outra máquina, copie para lá só o `flow.crt`, nunca a chave. Gere o certificado **antes** de abrir o app no Android Studio.
+Quem confia na CA (e só nela): a borda (para a análise e para o banco), o bridge (`FLOW_TLS_CERT` no `WokwiBridge/.env`, apontando para `../SensorServer/certs/ca.crt`) e o app (embutida na compilação). Se o bridge rodar em outra máquina, copie para lá só o `ca.crt`, nunca uma chave. Gere os certificados **antes** de abrir o app no Android Studio.
 
 ## 1. Servidor (`SensorServer/`)
 
@@ -124,9 +124,9 @@ scripts/tudo.sh          # borda + análise (Windows: scripts\tudo.ps1)
 
 Sem Docker, só para ver as rotas: `FLOW_DB_FAKE=1 python -m borda.server` (banco em memória; sem a análise rodando ninguém decide queda).
 
-A borda escuta em `0.0.0.0:5000`, em HTTPS. Descubra o IP do computador (`ipconfig` no Windows, `ifconfig`/`ip a` no Mac/Linux): o celular vai precisar dele.
+A borda escuta **só em HTTPS** e, por padrão, **só neste computador** (`127.0.0.1:5000`). Para o celular ou o bridge em outra máquina, descubra o IP do computador (`ipconfig` no Windows, `ifconfig`/`ip a` no Mac/Linux), gere o certificado com ele (`--ip`) e ponha no `SensorServer/.env` `FLOW_BORDA_HOST=<IP>` (a porta se troca com `FLOW_BORDA_PORT`). O celular vai precisar desse IP.
 
-**Firewall:** libere a **entrada** na porta TCP 5000 no computador. O celular e o bridge conectam *no servidor*; nada conecta no celular.
+**Firewall:** com `FLOW_BORDA_HOST` no IP da rede, libere a **entrada** na porta TCP 5000 no computador. O celular e o bridge conectam *no servidor*; nada conecta no celular.
 
 ## 2. Simulação Wokwi (`sketch/`)
 
@@ -155,7 +155,7 @@ O bridge lê a configuração do `WokwiBridge/.env` (nada de editar o `bridge.py
 | `FLOW_BRIDGE_ID` | `bridge1` | — (obrigatória) |
 | `FLOW_BRIDGE_SECRET` | senha da conta `bridge1` | — (obrigatória) |
 | `FLOW_SERVIDOR` | URL base do servidor (precisa ser `https://`) | `https://127.0.0.1:5000` |
-| `FLOW_TLS_CERT` | certificado em que o bridge confia | `../SensorServer/certs/flow.crt` |
+| `FLOW_TLS_CERT` | arquivo em que o bridge confia: o `ca.crt` da CA do projeto | defina `../SensorServer/certs/ca.crt` (o padrão do código ainda é o nome do certificado antigo) |
 | `FLOW_BRIDGE_DEVICE` | `deviceId` do firmware que o bridge repassa | `esp32-decisao-imobilidade-01` (o `DEVICE_ID` de `sketch.ino`) |
 
 O servidor exige que o `deviceId` dos eventos seja o mesmo informado no login do bridge (`403` se diferir). Só é preciso definir `FLOW_BRIDGE_DEVICE` se você mudar o `DEVICE_ID` do firmware.
@@ -182,7 +182,7 @@ O bridge faz login, abre o canal de push do servidor, repassa a telemetria da si
 
 ## 4. App Android (`SensorApp/`)
 
-Gere o certificado TLS antes (seção "Certificado TLS"): o app embute `res/raw/flow_cert.pem` e só fala HTTPS com o servidor que apresentar esse certificado. Abra no Android Studio e gere o APK (o das releases só serve se o certificado for o mesmo). Depois de instalado:
+Gere a CA e os certificados antes (seção "Certificado TLS"): o app embute `res/raw/flow_cert.pem` (o `ca.crt`) e só fala HTTPS com um servidor cujo certificado tenha sido emitido por essa CA. Abra no Android Studio e gere o APK (o das releases só serve se a CA for a mesma). Depois de instalado:
 
 1. Toque em **Configurações**.
 2. Preencha **IP** (o mesmo que foi para o certificado) e **porta** do servidor, e o **usuário** (`idoso1`) e a **senha** da conta criada no passo 0. Salve.
@@ -236,7 +236,7 @@ O servidor mantém um **cooldown de 60 s** entre episódios do mesmo usuário (`
 Sem token, o servidor recusa:
 
 ```bash
-curl -i --cacert SensorServer/certs/flow.crt -X POST https://localhost:5000/dados -H "Content-Type: application/json" -d "{}"
+curl -i --cacert SensorServer/certs/ca.crt -X POST https://localhost:5000/dados -H "Content-Type: application/json" -d "{}"
 ```
 
 Esperado: `401`. Tentativas negadas (`401`, `403` e `413`) aparecem no log da borda (`[authz] negado ...`), sem o conteúdo da requisição.
@@ -249,7 +249,7 @@ Com servidor, app e bridge rodando, confira:
 docker compose exec -T db psql -U flow -d flow -c "SELECT instante_ingestao, user_id, fonte FROM leituras ORDER BY id DESC LIMIT 5"
 ```
 
-Cada leitura aceita é uma linha, de `app` ou de `wokwi`, ligada ao usuário da conta. E `curl --cacert SensorServer/certs/flow.crt https://localhost:5000/health` mostra se a análise está respondendo (`analise.estado`: `ok` ou `degradado`).
+Cada leitura aceita é uma linha, de `app` ou de `wokwi`, ligada ao usuário da conta. E `curl --cacert SensorServer/certs/ca.crt https://localhost:5000/health` mostra se a análise está respondendo (`analise.estado`: `ok` ou `degradado`).
 
 ### Queda e confirmação — Wokwi
 
@@ -292,10 +292,10 @@ Se app e wokwi estiverem ligados à mesma pessoa, o pedido toca nos dois ao mesm
 | Servidor não sobe e reclama de segredo | `FLOW_JWT_SECRET` ausente (ou com menos de 32 bytes) em `SensorServer/.env`, e não definido no terminal em que o servidor foi iniciado. Ao subir, o servidor mostra se leu o `.env` |
 | App ou bridge recebem `401` no login | usuário ou senha errados (no bridge: `FLOW_BRIDGE_SECRET` do `.env`, ou uma variável do terminal que sobrepõe o arquivo); após várias falhas há bloqueio temporário (`429`) |
 | Bridge lento: eventos atrasados, pedido de confirmação `EXPIRADO` antes do ack | `FLOW_SERVIDOR` usando `localhost` no Windows (IPv6 primeiro); use `https://127.0.0.1:5000` |
-| Borda ou análise não sobem: "certificado TLS nao encontrado" | o par `certs/flow.crt` e `certs/flow.key` não existe; rode `python scripts/gerar_certificado.py` em `SensorServer/` |
-| Bridge, app ou borda recusam a conexão (`certificate verify failed`, `SSLError`, "falha de conexão" no app) | o endereço usado não está no certificado (gere de novo com `--forcar --ip <IP>`), ou o cliente tem outro certificado (copie o `flow.crt` novo para o bridge e recompile o app) |
-| Container do banco não sobe, ou a borda não conecta depois de recriar o certificado | faltam `certs/flow.crt`/`flow.key` na hora do `docker compose up`, ou o container ainda tem o par antigo: `docker compose restart db` |
-| Compilação do app falha por `@raw/flow_cert` | o certificado ainda não foi gerado: rode `python scripts/gerar_certificado.py` antes (ele copia o certificado para `SensorApp/app/src/main/res/raw/`) |
+| Borda ou análise não sobem: "certificado TLS nao encontrado" (ou "certificado da CA") | falta o par do serviço (`certs/borda.*` ou `certs/analise.*`) ou o `certs/ca.crt`; rode `python scripts/gerar_certificado.py` em `SensorServer/` |
+| Bridge, app ou borda recusam a conexão (`certificate verify failed`, `SSLError`, "falha de conexão" no app) | o endereço usado não está no certificado da borda (reemita com `--forcar --ip <IP>`; a CA não muda, então ninguém recompila), ou o cliente confia em outra CA (copie o `ca.crt` atual para o bridge; se a CA foi recriada com `--forcar-ca`, recompile o app) |
+| Container do banco não sobe, ou a borda não conecta depois de reemitir o certificado | faltam `certs/banco.crt`/`banco.key` na hora do `docker compose up`, ou o container ainda tem o par antigo: `docker compose restart db` |
+| Compilação do app falha por `@raw/flow_cert` | a CA ainda não foi gerada: rode `python scripts/gerar_certificado.py` antes (ele copia o `ca.crt` para `SensorApp/app/src/main/res/raw/`) |
 | `403` em `/dados` ou `/eventos` | a conta não tem a permissão ou a fonte da rota (app usa conta `idoso`, bridge usa conta `dispositivo`); ou o `deviceId` dos eventos difere do `FLOW_BRIDGE_DEVICE` usado no login do bridge |
 | `413` | corpo da requisição acima de `MAX_CONTENT_LENGTH` (64 KiB); o servidor não processa o conteúdo |
 | Pedido de confirmação não abre de novo logo após um teste | cooldown de 60 s entre episódios; reinicie o servidor ou aguarde |

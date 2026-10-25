@@ -103,13 +103,13 @@ O risco escolhido pelo grupo para ser priorizado é a **segurança dos dados**. 
 
 O projeto combina quatro mecanismos de segurança:
 
-- **TLS em todas as pontas** (dispositivos ↔ servidor, borda ↔ análise, borda ↔ banco), com um único certificado autoassinado, em que cada cliente confia explicitamente.
+- **TLS em todas as pontas** (dispositivos ↔ servidor, borda ↔ análise, borda ↔ banco), com uma CA própria do projeto que assina o certificado de cada serviço, e em que cada cliente confia só nela.
 - **Criptografia** (AES-256-GCM) de cada mensagem trocada com o servidor, nos dois sentidos, inclusive o push, por cima do TLS.
 - **Autenticação (Marco 3):** todo dispositivo entra com uma conta (login com senha, token de curta duração e renovação), em vez de apenas conhecer a chave de criptografia.
 - **Autorização (Marco 3):** cada conta tem um papel (hoje `idoso` e `dispositivo`; `cuidador` já reservado) e só envia ou recebe dados da **pessoa monitorada a que está vinculada**. O servidor confere a identidade pelo token, não pelo que o dispositivo declara. Rotas de depuração que expunham dados de todos exigem conta administrativa.
 - **Proteções do servidor (Marco 3):** negações (`401`/`403`) e corpos acima de 64 KiB (`413`) são registrados no log, sem o conteúdo da requisição; tentativas repetidas de login levam a bloqueio temporário.
 
-Limitações assumidas: a chave de criptografia continua **compartilhada e fixa**, e o certificado TLS é autoassinado, único e sem rotação (quem tem a chave privada se passa pelo servidor). Chave por dispositivo e certificado de uma autoridade ficam como evolução (`docs/arquitetura.md`, seção 13.2).
+Limitações assumidas: a chave de criptografia continua **compartilhada e fixa**, e a CA do projeto não tem rotação automática nem revogação (quem tem a chave de um serviço se passa por ele). Chave por dispositivo, autoridade gerenciada e rotação ficam como evolução (`docs/arquitetura.md`, seção 13.2).
 
 Vale notar que, mesmo com a comunicação restrita à rede local (sem exposição à internet nesta fase), dados de movimento e uso do dispositivo, ainda que indiretos, revelam rotina e hábitos do idoso — o que reforça a necessidade de cuidado com o armazenamento e o acesso a esses dados.
 
