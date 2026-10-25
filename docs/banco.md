@@ -1,6 +1,6 @@
-# Banco de dados (PostgreSQL)
+# Banco de dados (PostgreSQL + TimescaleDB)
 
-Só a **borda** (Servidor 1) fala com o banco, por uma única interface (`flow_db/repo.py`, implementada em `flow_db/pg.py`; o `BancoFalso` em memória a imita para testes e para `FLOW_DB_FAKE=1`). A análise (Servidor 2) não tem banco nem credencial dele. Um único usuário de banco, o mesmo que o `docker-compose.yml` cria. **A conexão é sempre TLS:** o PostgreSQL sobe com o certificado único do projeto (`certs/`) e a borda conecta com `sslmode=verify-full` (ou `verify-ca`, em `FLOW_DB_SSLMODE`), confiando só nesse certificado; o IP ou nome de `FLOW_DB_HOST` precisa estar nele. Tabelas comuns do PostgreSQL: sem particionamento, sem compressão e sem retenção automática.
+Só a **borda** (Servidor 1) fala com o banco, por uma única interface (`flow_db/repo.py`, implementada em `flow_db/pg.py`; o `BancoFalso` em memória a imita para testes e para `FLOW_DB_FAKE=1`). A análise (Servidor 2) não tem banco nem credencial dele. Um único usuário de banco, o mesmo que o `docker-compose.yml` cria. **A conexão é sempre TLS:** o PostgreSQL sobe com o certificado único do projeto (`certs/`) e a borda conecta com `sslmode=verify-full` (ou `verify-ca`, em `FLOW_DB_SSLMODE`), confiando só nesse certificado; o IP ou nome de `FLOW_DB_HOST` precisa estar nele. O banco é o PostgreSQL 17 na imagem `timescale/timescaledb`, e **só a tabela `leituras` é uma hypertable do TimescaleDB** (particionada pelo tempo, em `instante_ingestao`); todas as outras são tabelas comuns do PostgreSQL. Não há compressão, política de retenção nem agregados contínuos.
 
 ## Subir do zero (a partir de `SensorServer/`)
 
@@ -20,13 +20,13 @@ Sem Docker, para desenvolver: `FLOW_DB_FAKE=1 python -m borda.server` (banco em 
 
 **Certificado recriado** (`python scripts/gerar_certificado.py --forcar`): `docker compose restart db`. O TLS não exige recriar o volume. Sem `certs/flow.crt` e `certs/flow.key` o container não sobe, e sem o certificado a borda não conecta.
 
-**Banco antigo:** o esquema foi reduzido a uma única migração (`0001_base.sql`). Um volume criado antes (com TimescaleDB e papéis separados) não serve: recrie com `docker compose down -v` e suba de novo. Os dados de teste não são migrados.
+**Banco antigo:** a migração `0001_base.sql` cria a extensão `timescaledb` e converte `leituras` em hypertable, e isso exige a imagem do TimescaleDB. Um volume criado antes, com a imagem `postgres:17` simples (ou com o esquema anterior), não serve: recrie com `docker compose down -v` e suba de novo (`scripts/preparar.sh`). Os dados de teste não são migrados.
 
 ## Tabelas
 
 | Tabela | Conteúdo |
 |---|---|
-| `leituras` | Uma linha por leitura aceita (`instante_ingestao`, fonte, `conta_id` do token, `payload` em jsonb). |
+| `leituras` | **Hypertable** (por `instante_ingestao`). Uma linha por leitura aceita (fonte, `conta_id` do token, `payload` em jsonb). A chave primária é `(id, instante_ingestao)`: o TimescaleDB exige a coluna de tempo em toda chave única. |
 | `alertas` | Alertas das regras (luz inadequada, imobilidade). |
 | `confirmacoes` | Registros do ciclo de confirmação (`episodio.aberto`, `push.ack`, `confirmacao.resposta`, `episodio.encerrado`). |
 | `episodios` | Um episódio de queda por linha, com o estado e o motivo do encerramento. |
@@ -48,11 +48,13 @@ Backup (formato customizado, só o banco `flow`):
 docker compose exec -T db pg_dump -U flow -Fc flow > backup_flow.dump
 ```
 
-Restauração em um banco **novo** (serve também de teste: não toca no `flow`):
+Restauração em um banco **novo** (serve também de teste: não toca no `flow`). Com TimescaleDB, a restauração fica entre `timescaledb_pre_restore()` e `timescaledb_post_restore()`:
 
 ```bash
 docker compose exec -T db psql -U flow -d postgres -c "CREATE DATABASE flow_restaurado"
+docker compose exec -T db psql -U flow -d flow_restaurado -c "SELECT timescaledb_pre_restore()"
 docker compose exec -T db pg_restore -U flow -d flow_restaurado --no-owner < backup_flow.dump
+docker compose exec -T db psql -U flow -d flow_restaurado -c "SELECT timescaledb_post_restore()"
 ```
 
 Conferência: as contagens de `leituras`, `alertas`, `episodios` e a última linha de `schema_migrations` em `flow_restaurado` devem ser iguais às de `flow` na hora do backup. Para descartar: `DROP DATABASE flow_restaurado WITH (FORCE)`. Estes comandos ainda não foram executados neste repositório: o primeiro teste confirma o procedimento; registre a data.
@@ -63,9 +65,14 @@ Conferência: as contagens de `leituras`, `alertas`, `episodios` e a última lin
 -- conexões da aplicação
 SELECT application_name, state, count(*) FROM pg_stat_activity WHERE datname = 'flow' GROUP BY 1, 2;
 
--- tamanho em disco
+-- hypertables (deve listar só `leituras`) e seus pedaços (chunks)
+SELECT hypertable_name, num_chunks, compression_enabled FROM timescaledb_information.hypertables;
+SELECT chunk_name, range_start, range_end FROM timescaledb_information.chunks WHERE hypertable_name = 'leituras' ORDER BY range_start;
+
+-- tamanho em disco (para `leituras`, hypertable_size soma todos os chunks; pg_total_relation_size só veria a tabela-mãe)
+SELECT pg_size_pretty(hypertable_size('leituras')) AS leituras;
 SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) FROM pg_class
- WHERE relname IN ('leituras', 'alertas', 'confirmacoes', 'episodios', 'comandos_push', 'estado_dispositivo');
+ WHERE relname IN ('alertas', 'confirmacoes', 'episodios', 'comandos_push', 'estado_dispositivo');
 SELECT pg_size_pretty(pg_database_size(current_database()));
 
 -- conexões da aplicação cifradas (ssl = t)
@@ -77,4 +84,4 @@ SELECT id, instante_ingestao, user_id, fonte FROM leituras ORDER BY id DESC LIMI
 
 ## Pendências
 
-- **Retenção e compressão:** `leituras` cresce sem limite; apagar as antigas (`DELETE ... WHERE instante_ingestao < ...`) ou particionar fica para quando o volume pedir. Backup automático também não existe (o procedimento manual está acima).
+- **Retenção e compressão:** `leituras` cresce sem limite; compressão, política de retenção (`drop_chunks`) e agregados contínuos do TimescaleDB não estão configurados e ficam para quando o volume pedir. Backup automático também não existe (o procedimento manual está acima).

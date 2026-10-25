@@ -321,7 +321,7 @@ Sem a análise rodando, a borda continua aceitando e gravando dados, mas nada é
 
 O banco é só da borda. `python -m borda.server` continua importável (Flask/WSGI, testes e desenvolvimento), mas é só a borda: o ponto de entrada oficial é `python -m borda`.
 
-**1. `.env` (uma vez).** `cp SensorServer/.env.example SensorServer/.env` (PowerShell: `Copy-Item`) e preencha `FLOW_JWT_SECRET`, `FLOW_ANALISE_TOKEN` e `FLOW_DB_PASSWORD` (seção 0). **Banco antigo:** o esquema agora é uma só migração; se você já tinha um volume criado antes, rode `docker compose down -v` (apaga os dados de teste) e suba de novo.
+**1. `.env` (uma vez).** `cp SensorServer/.env.example SensorServer/.env` (PowerShell: `Copy-Item`) e preencha `FLOW_JWT_SECRET`, `FLOW_ANALISE_TOKEN` e `FLOW_DB_PASSWORD` (seção 0). **Banco antigo:** o banco agora usa a imagem do TimescaleDB (`leituras` é uma hypertable); se você já tinha um volume criado antes, com a imagem `postgres:17` simples, rode `docker compose down -v` (apaga os dados de teste) e suba de novo.
 
 **2. Subir.** Os scripts de `SensorServer/scripts/` fazem tudo na ordem certa (a ordem entre borda e análise é indiferente):
 

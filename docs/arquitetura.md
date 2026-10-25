@@ -74,7 +74,7 @@ Módulos do servidor (pacotes em `SensorServer/`):
 | `analise/regra_luz.py`, `analise/regra_imobilidade.py` | Regras de negócio (luz inadequada à noite; imobilidade prolongada). |
 | `analise/const.py` | Constantes da análise (limiares, janelas, cooldown, retenções, idade máxima para agir). Ver 14. |
 | **`comum/`** | O que os dois lados partilham: constantes comuns e carregador do `.env` (`const.py`), contratos (`schemas.py`, `contratos.py`), mensagem de push (`mensagens.py`) o **contrato da análise** (`contrato_analise.py`: `Leitura`, `Resposta`, `Decisoes` e o seu JSON, com ida e volta) e o **TLS** (`tls.py`: caminhos do certificado e da chave, contexto HTTPS do servidor, recusa de URL que não seja `https://`). |
-| **`flow_db/`** | Só a borda a usa (conexão sempre com TLS, `verify-full`): `Repo` (interface única), `Pg` (PostgreSQL), `BancoFalso` (memória, para testes e `FLOW_DB_FAKE=1`), uma migração (`0001_base.sql`), CLI `python -m flow_db migrar|status`. |
+| **`flow_db/`** | Só a borda a usa (conexão sempre com TLS, `verify-full`): `Repo` (interface única), `Pg` (PostgreSQL; `leituras` é hypertable do TimescaleDB), `BancoFalso` (memória, para testes e `FLOW_DB_FAKE=1`), uma migração (`0001_base.sql`), CLI `python -m flow_db migrar|status`. |
 | `scripts/gerar_certificado.py` | Gera o certificado TLS único (autoassinado) e a chave em `certs/` (fora do Git) e copia o certificado para o app. Idempotente; `--forcar` recria, `--ip` acrescenta um endereço. |
 | `simular_queda.py` | Utilitário (exige borda e análise rodando): simula um wokwi que sofre impacto e fica imóvel. |
 | `tests/` | Suíte pytest (`unit/`, `integration/` e `banco/`); ver 14.1. |
@@ -113,7 +113,7 @@ flowchart LR
         AUTHZ["borda/authz.py"]
         SRVP["borda/server.py (orquestra)"]
         EF["borda/efeitos.py"]
-        DB[("PostgreSQL")]
+        DB[("PostgreSQL + TimescaleDB")]
         MSG["comum/mensagens.py"]
         CA["borda/canal_app.py"]
         CW["borda/canal_wokwi.py"]
@@ -287,7 +287,7 @@ Entrada malformada **antes** de haver conteúdo interpretável é `400`: corpo d
 ```markdown
 DISPOSITIVO        SERVIDOR 1 (borda)                                   SERVIDOR 2 (análise)
 envelope cifrado → authn/authz → decifra → authz (escopo) → valida (schema)
-                   ↓ fila em memória → grava em lote ──→ PostgreSQL: leituras
+                   ↓ fila em memória → grava em lote ──→ banco: leituras
                    ↓ manda o lote ── POST /analisar ──────────────────→ núcleo (deduplicação, estado, regras)
                    ↓ ←──────────────── decisões ───────────────────────┘
                    ↓ uma transação: confirmacoes, alertas, estado_dispositivo, episodios + comandos_push
@@ -664,6 +664,6 @@ Itens abstratos que **não** são elementos novos do sistema (esses estão em 2.
 - **Serviço de notificação aos cuidadores:** consumiria `alertas` e `confirmacoes` do banco como terceiro serviço; a separação entre borda e análise deixou o contrato pronto, sem o serviço.
 - **Chave AES por dispositivo:** hoje fixa e compartilhada (13.2).
 - **Contas e sessões em tabelas:** ficam em JSON (`contas.json`, `sessoes.json`) por serem poucas e só da borda; migrar para o banco só se o número de contas ou de réplicas da borda crescer.
-- **Retenção e compressão de dados** (leituras antigas): hoje o PostgreSQL guarda tudo em tabelas comuns; ver `docs/banco.md`.
+- **Retenção e compressão de dados** (leituras antigas): `leituras` é uma hypertable do TimescaleDB, mas sem compressão, retenção nem agregados contínuos; as demais tabelas são comuns. Ver `docs/banco.md`.
 - **Auditoria de negações em banco:** hoje a negação vai só para o log; guardar em tabela fica para quando for necessária.
 - **Fila de espera durável:** as filas de leituras e de itens à espera da análise são em memória; se a borda cair com a fila cheia, o que não foi gravado se perde (a análise se refaz do banco).

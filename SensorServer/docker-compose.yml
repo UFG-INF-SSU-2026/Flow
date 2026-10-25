@@ -1,4 +1,4 @@
-# Banco do SensorServer (PostgreSQL). SO a borda conversa com ele.
+# Banco do SensorServer (PostgreSQL com a extensao TimescaleDB, usada so na tabela "leituras"). SO a borda conversa com ele.
 #
 #   Subir:      docker compose up -d
 #   Ver estado: docker compose ps          (aguarde "healthy")
@@ -19,8 +19,10 @@ name: flow
 
 services:
   db:
-    # Imagem oficial do PostgreSQL. A versao MAIOR (17) fica fixa: trocar exige dump/restore do volume.
-    image: postgres:17
+    # PostgreSQL 17 com o TimescaleDB ja carregado na subida (a tabela "leituras" vira hypertable na migracao 0001).
+    # A versao MAIOR do PostgreSQL (17) fica fixa: trocar exige dump/restore do volume. Esta imagem e baseada em Alpine,
+    # entao um volume criado com a imagem "postgres:17" simples NAO serve: recrie com "docker compose down -v".
+    image: timescale/timescaledb:latest-pg17
     container_name: flow-db
     restart: unless-stopped
 
