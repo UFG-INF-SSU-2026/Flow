@@ -87,6 +87,24 @@ def erros_leitura_ambiente(bloco) -> list[str]:
     return contratos.validar("app-leitura-ambiente", bloco)
 
 
+def erros_localizacao(bloco) -> list[str]:
+    """Estrutura e faixa do bloco localizacao do app (contrato app-localizacao). Vazia = valido. Os erros trazem so o
+    caminho e a regra, nunca latitude nem longitude."""
+    return contratos.validar("app-localizacao", bloco)
+
+
+def campos_com_erro(erros: list[str]) -> list[str]:
+    """Nomes dos campos citados nos erros do validador (`$.latitude: ...` -> `latitude`), sem repeticao e em ordem; `bloco`
+    quando o erro e do bloco inteiro. Serve para o log dizer QUAL campo falhou sem dizer o valor."""
+    nomes: list[str] = []
+    for erro in erros:
+        caminho = erro.split(":", 1)[0].lstrip("$").lstrip(".")
+        nome = caminho.split(".")[0].split("[")[0] or "bloco"
+        if nome not in nomes:
+            nomes.append(nome)
+    return nomes
+
+
 # ---------------------------------------------------------------- eventos de retorno
 def validar_evento_retorno(payload: dict, source: str) -> dict:
     """Valida e normaliza um evento de POST /eventos. Devolve {eventType, state, messageId, device_id, source}.

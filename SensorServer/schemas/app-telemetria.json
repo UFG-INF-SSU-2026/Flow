@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "flow/app-telemetria",
   "title": "App Android -> servidor: telemetria (POST /dados)",
-  "description": "Tolerante: nada e obrigatorio alem do roteamento. O bloco leitura_ambiente tem schema proprio.",
+  "description": "Tolerante: nada e obrigatorio alem do roteamento. Os blocos leitura_ambiente e localizacao tem schema proprio.",
   "x-versao": 3,
   "type": "object",
   "properties": {
@@ -41,6 +41,9 @@
       }
     },
     "leitura_ambiente": {
+      "type": "object"
+    },
+    "localizacao": {
       "type": "object"
     }
   }

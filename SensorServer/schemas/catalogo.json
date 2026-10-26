@@ -30,6 +30,11 @@
       "rota": "POST /dados",
       "secao": "4.2"
     },
+    "app-localizacao": {
+      "versao_const": "SCHEMA_VERSION_APP",
+      "rota": "POST /dados",
+      "secao": "4.3"
+    },
     "app-eventos-retorno": {
       "versao_const": "SCHEMA_VERSION_APP",
       "rota": "POST /eventos",

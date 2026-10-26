@@ -83,6 +83,7 @@ _fila_leituras: list[dict] = []
 _fila_analise: list = []
 _descartes_leituras = 0
 _descartes_analise = 0
+_localizacao_rejeitadas = 0               # blocos `localizacao` recusados desde que a borda subiu (/health)
 _ultimo_log: dict[str, float] = {}        # chave da falha -> instante (monotonic) da ultima linha de log escrita
 _cliente: "cliente_analise.ClienteAnalise | None" = None
 _aplicador = efeitos.Aplicador()
@@ -101,13 +102,13 @@ def _instante_origem(source: str, dados: dict) -> datetime | None:
         return None
 
 
-def _log_falha(chave: str, mensagem: str) -> None:
+def _log_falha(chave: str, mensagem: str, prefixo: str = "pipeline") -> None:
     """Falha que se repete a cada passo (banco ou analise fora do ar, fila cheia, passo que levanta): no maximo uma linha de
     log por INTERVALO_LOG_FALHA_S **para cada `chave`**, assim uma falha nao esconde a outra."""
     agora = time.monotonic()
     if agora - _ultimo_log.get(chave, float("-inf")) >= const_borda.INTERVALO_LOG_FALHA_S:
         _ultimo_log[chave] = agora
-        print(f"  [pipeline] {mensagem}")
+        print(f"  [{prefixo}] {mensagem}")
 
 
 def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, versao: int, conta_id: str | None,
@@ -163,7 +164,12 @@ def _devolver_lote(lote: list[dict]) -> None:
 
 
 def _leitura_de_linha(linha: dict) -> Leitura:
-    return Leitura(linha["instante_ingestao"], linha["user_id"], linha["device_id"], linha["fonte"], linha["payload"],
+    """A linha gravada vira a entrada da analise (e da restauracao). A localizacao fica de fora: nenhuma regra a usa, e
+    dado sensivel nao precisa sair da borda."""
+    payload = linha["payload"]
+    if "localizacao" in payload:
+        payload = {k: v for k, v in payload.items() if k != "localizacao"}
+    return Leitura(linha["instante_ingestao"], linha["user_id"], linha["device_id"], linha["fonte"], payload,
                    linha["schema_version"])
 
 
@@ -289,13 +295,33 @@ def _loop(passo, intervalo_s: float) -> None:
 
 def _estatisticas_borda() -> dict:
     with _fila_lock:
-        return {"fila_leituras": len(_fila_leituras), "leituras_descartadas": _descartes_leituras}
+        return {"fila_leituras": len(_fila_leituras), "leituras_descartadas": _descartes_leituras,
+                "localizacao_rejeitadas": _localizacao_rejeitadas}
 
 
 @app.errorhandler(413)
 def _corpo_grande(_erro):
     """Corpo acima de const_borda.MAX_CONTENT_LENGTH (o Flask levanta ao ler o corpo). Entra na auditoria como as demais negacoes."""
     return negar(413, "corpo_grande")
+
+
+def _filtrar_localizacao(source: str, dados_fonte: dict) -> None:
+    """Valida o bloco `localizacao` (so o app o envia) pelo schema, SEMPRE, sem confiar na filtragem do app. Bloco invalido,
+    ou vindo de outra fonte, e retirado de `dados_fonte` (nao e gravado) e o resto da telemetria segue. O aviso diz so
+    QUAIS campos falharam (nunca latitude ou longitude), com limite de repeticao, e o contador sobe (/health)."""
+    global _localizacao_rejeitadas
+    if "localizacao" not in dados_fonte:
+        return
+    if source != "app":
+        campos = ["fonte"]
+    else:
+        campos = validacao.campos_com_erro(validacao.erros_localizacao(dados_fonte["localizacao"]))
+        if not campos:
+            return
+    del dados_fonte["localizacao"]
+    with _fila_lock:
+        _localizacao_rejeitadas += 1
+    _log_falha("localizacao", f"localizacao rejeitada: {', '.join(campos)}", prefixo="dados")
 
 
 def _decifrar_corpo():
@@ -444,6 +470,9 @@ def receber_dados():
 
     # payload especifico da fonte, sem os campos de roteamento (a coluna user_id e a fonte da leitura os guardam)
     dados_fonte = {k: v for k, v in payload.items() if k not in ("source", "user_id")}
+
+    # localizacao: dado sensivel, validado aqui; o bloco invalido sai de dados_fonte antes de ir a fila (nao e gravado)
+    _filtrar_localizacao(source, dados_fonte)
 
     # versao verificada acompanha o payload (a validacao do contrato a enxerga). Feito DEPOIS de montar
     # dados_fonte, para nao alterar a leitura gravada em `leituras`.

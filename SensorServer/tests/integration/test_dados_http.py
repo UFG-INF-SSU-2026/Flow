@@ -1,4 +1,5 @@
 """POST /dados e GET /dados, /estado/<id> pelo test_client: telemetria do app e do wokwi, versao, descarte e isolamento de falhas."""
+import json
 import time
 
 import pytest
@@ -149,6 +150,35 @@ class TestFluxoLegadoDoApp:
     def test_payload_do_app_malformado_no_fluxo_legado_da_200(self, cli, tokens):
         r = cli.post("/dados", _app(leitura_ambiente={"device_id": "cel1"}), tokens["idoso"])   # faltam campos
         assert r.status_code == 200
+
+
+# ------------------------------ localizacao ----------------------------------
+def _loc(**extra) -> dict:
+    bloco = {"schemaVersion": const_comum.SCHEMA_VERSION_APP, "latitude": -23.55, "longitude": -46.63, "precisao_m": 12.5,
+             "instante_medicao": "2026-10-14T22:00:00.000-03:00"}
+    bloco.update(extra)
+    return bloco
+
+
+CASOS_LOCALIZACAO = [("idoso", _app, _loc(), False)] + [
+    ("idoso", _app, ruim, True) for ruim in (_loc(latitude=200), _loc(longitude=-181), _loc(precisao_m=-1),
+                                             _loc(latitude=float("nan")), {"latitude": 1}, "texto", None)] + [
+    ("dispositivo", _wokwi, _loc(), True)]              # so o app envia
+
+
+@pytest.mark.parametrize("papel,montar,bloco,rejeitado", CASOS_LOCALIZACAO)
+def test_localizacao_valida_e_gravada_sem_ir_a_analise_e_invalida_e_rejeitada(cli, tokens, banco, pipeline, monkeypatch,
+                                                                              capsys, papel, montar, bloco, rejeitado):
+    enviados = []
+    original = pipeline.analise.tratar
+    monkeypatch.setattr(pipeline.analise, "tratar", lambda m, c, corpo: enviados.append(json.dumps(corpo)) or original(m, c, corpo))
+    assert cli.post("/dados", montar(localizacao=bloco), tokens[papel]).status_code == 200      # o resto da telemetria segue
+    (l,) = banco.tabelas["leituras"]
+    assert ("localizacao" in l["payload"]) is (not rejeitado)
+    assert enviados and not any("localizacao" in e or "-23.55" in e for e in enviados)          # nunca vai a analise
+    assert cli.get("/health").get_json()["borda"]["localizacao_rejeitadas"] == (1 if rejeitado else 0)
+    saida = capsys.readouterr().out
+    assert ("[dados] localizacao rejeitada:" in saida) is rejeitado and "-23.55" not in saida   # aviso sem valores
 
 
 # ------------------------------ rotas de leitura -----------------------------

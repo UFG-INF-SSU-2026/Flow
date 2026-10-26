@@ -16,6 +16,7 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 | 3 | Servidor → firmware: comando serial | 3 |
 | 4 | App Android → servidor: telemetria | 3 |
 | 4.2 | App: `leitura_ambiente` (bloco aninhado, versão própria) | 3 |
+| 4.3 | App: `localizacao` (bloco aninhado, versão própria) | 3 |
 | 5 | App Android → servidor: eventos de retorno | 3 |
 | 6 | Servidor → dispositivo: push | 3 |
 | 7 | Autenticação: login | 3 |
@@ -145,6 +146,7 @@ Não é JSON (o ESP32 não usa biblioteca JSON), portanto não carrega `schemaVe
 | `sensores` | objeto | chave = tipo do sensor (string); valor = `{nome: string, valores: número[], timestamp_leitura: inteiro}`; pode ser `{}` |
 | `acelerometro` | objeto | opcional (ausente se não houver leitura válida); ver 4.1 |
 | `leitura_ambiente` | objeto | opcional (ausente se não houver leitura válida); ver 4.2 |
+| `localizacao` | objeto | opcional (ausente se não houver posição aproveitável); ver 4.3 |
 
 ### 4.1 `acelerometro`
 
@@ -185,6 +187,32 @@ Bloco aninhado com **versão própria** · **Versão atual: 3**
 | --- | --- |
 | v1 → v2 | `schemaVersion` adicionado (se ausente, o servidor assume `1`). |
 | v2 → v3 | Versão do bloco passa de `2` para `3`, sem mudança de campos. |
+
+### 4.3 `localizacao`
+
+Bloco aninhado da telemetria do app, com **versão própria** · **Versão atual: 3** · Contrato: `schemas/app-localizacao.json`
+
+**Dado sensível.** Só a fonte `app` o envia e só o `admin` o lê (`GET /dados`). Nenhum log do servidor traz latitude ou longitude.
+
+| Campo | Tipo | Regra |
+| --- | --- | --- |
+| `schemaVersion` | inteiro | versão atual deste bloco (se ausente, o servidor assume `1`) |
+| `latitude` | número | obrigatório; graus, `-90..90`, finito |
+| `longitude` | número | obrigatório; graus, `-180..180`, finito |
+| `precisao_m` | número | obrigatório; metros, `>= 0`, finito |
+| `instante_medicao` | string | obrigatório; ISO 8601 com offset, instante em que a posição foi medida |
+
+**Quem faz o quê:** o app remove só o que é absurdo (fora de faixa, não finito, posição velha demais) e envia. O servidor **não confia nisso**: confere o bloco pelo schema, na borda, antes de enfileirar a leitura.
+
+**Bloco inválido** (campo ausente, tipo errado, fora de faixa, não finito, ou vindo de fonte que não seja `app`): é **rejeitado**, ou seja, retirado da leitura antes de ela ser gravada, e o resto da telemetria segue normalmente (`200`). A rejeição vira uma linha no terminal da borda, só com os **nomes** dos campos (`[dados] localizacao rejeitada: latitude`), com limite de repetição, e soma no contador `borda.localizacao_rejeitadas` do `/health`.
+
+**Bloco válido** é gravado no `payload` de `leituras` (herda a retenção dela) e **não segue à análise**: nenhuma regra o usa.
+
+#### Backlog de mudanças
+
+| Versão | Mudança |
+| --- | --- |
+| v3 (criação) | Bloco criado: `latitude`, `longitude`, `precisao_m` e `instante_medicao`, todos obrigatórios; `schemaVersion` próprio dentro do bloco. |
 
 ---
 

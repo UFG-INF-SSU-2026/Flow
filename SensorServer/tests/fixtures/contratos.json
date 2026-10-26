@@ -373,6 +373,46 @@
         "timestamp_envio": 1760000000000,
         "sensores": {},
         "schemaVersion": 3
+      },
+      "v3_com_localizacao": {
+        "user_id": 1,
+        "source": "app",
+        "device_id": "cel1",
+        "device_model": "Pixel",
+        "timestamp_envio": 1760000000000,
+        "sensores": {
+          "1": {
+            "nome": "Accelerometer",
+            "valores": [
+              0.1,
+              0.2,
+              9.8
+            ],
+            "timestamp_leitura": 1760000000000
+          }
+        },
+        "schemaVersion": 3,
+        "acelerometro": {
+          "magnitude": 9.8,
+          "magnitude_max_janela": 11.2,
+          "amostras": 50,
+          "janela_ms": 1000
+        },
+        "leitura_ambiente": {
+          "device_id": "cel1",
+          "event_time": "2026-10-14T22:00:00.000-03:00",
+          "luminosidade": 12.5,
+          "cct": 6200,
+          "seq_num": 17,
+          "schemaVersion": 3
+        },
+        "localizacao": {
+          "latitude": -23.5505,
+          "longitude": -46.6333,
+          "precisao_m": 12.5,
+          "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+          "schemaVersion": 3
+        }
       }
     },
     "invalidos": {
@@ -556,6 +596,105 @@
         "luminosidade": 12.5,
         "cct": 6200,
         "seq_num": 17
+      }
+    }
+  },
+  "app-localizacao": {
+    "validos": {
+      "v3_completo": {
+        "latitude": -23.5505,
+        "longitude": -46.6333,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "sem_schemaVersion": {
+        "latitude": -23.5505,
+        "longitude": -46.6333,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00"
+      },
+      "limites_extremos": {
+        "latitude": -90,
+        "longitude": 180,
+        "precisao_m": 0,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      }
+    },
+    "invalidos": {
+      "sem_latitude": {
+        "longitude": -46.6333,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "sem_longitude": {
+        "latitude": -23.5505,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "sem_precisao_m": {
+        "latitude": -23.5505,
+        "longitude": -46.6333,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "sem_instante_medicao": {
+        "latitude": -23.5505,
+        "longitude": -46.6333,
+        "precisao_m": 12.5,
+        "schemaVersion": 3
+      },
+      "latitude_acima_de_90": {
+        "latitude": 90.1,
+        "longitude": -46.6333,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "latitude_abaixo_de_menos_90": {
+        "latitude": -91,
+        "longitude": -46.6333,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "longitude_acima_de_180": {
+        "latitude": -23.5505,
+        "longitude": 200,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "longitude_abaixo_de_menos_180": {
+        "latitude": -23.5505,
+        "longitude": -180.5,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "precisao_negativa": {
+        "latitude": -23.5505,
+        "longitude": -46.6333,
+        "precisao_m": -1,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "latitude_texto": {
+        "latitude": "10",
+        "longitude": -46.6333,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
+      },
+      "latitude_booleana": {
+        "latitude": true,
+        "longitude": -46.6333,
+        "precisao_m": 12.5,
+        "instante_medicao": "2026-10-14T22:00:00.000-03:00",
+        "schemaVersion": 3
       }
     }
   },

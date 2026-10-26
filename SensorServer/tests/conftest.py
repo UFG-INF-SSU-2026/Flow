@@ -62,6 +62,8 @@ def _limpar_estado() -> None:
     server._fila_analise.clear()
     server._descartes_leituras = 0
     server._descartes_analise = 0
+    server._localizacao_rejeitadas = 0
+    server._ultimo_log.clear()
     server._cliente = None
     server._aplicador = efeitos.Aplicador()
     repositorios.usar_fake()      # banco falso novo (vazio) a cada teste

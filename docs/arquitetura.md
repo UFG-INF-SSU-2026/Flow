@@ -216,7 +216,7 @@ Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do 
 | `POST /dados`, `POST /eventos` | `idoso` (fonte `app`) e `dispositivo` (fonte `wokwi`) | `user_id` e `source` conferidos com o token; `device_id` gravado é o do token (corpo divergente: `403`) |
 | `GET /push/app` | `idoso` | Só o `user_id` do token |
 | `GET /push/wokwi` | `dispositivo` | Só o `user_id` do token |
-| `GET /dados` | **Só `admin`** | Depuração; inclui localização, quando houver |
+| `GET /dados` | **Só `admin`** | Depuração; inclui localização, quando houver (13.3) |
 | `GET /estado/<device_id>` | **Só `admin`** | Procura em todos os usuários |
 | `GET /health`, `GET /` | Anônimo | Sem dado pessoal (as únicas rotas abertas, além do login) |
 | Análise: `/analisar`, `/vigiar`, `/restaurar`, `/saude` | **Só a borda**, com `X-Flow-Analise-Token` | Comparado em tempo constante; qualquer outro chamador: `401` |
@@ -274,7 +274,7 @@ Fora disso **não há schema de aplicação unificado**: cada produtor define se
 
 | Contrato | Origem | Rota | Conteúdo |
 | --- | --- | --- | --- |
-| Telemetria do app | App | `POST /dados` | `sensores`, `leitura_ambiente` (luz/CCT) e `acelerometro` (`magnitude`, `magnitude_max_janela`, `amostras`, `janela_ms`). |
+| Telemetria do app | App | `POST /dados` | `sensores`, `leitura_ambiente` (luz/CCT), `acelerometro` (`magnitude`, `magnitude_max_janela`, `amostras`, `janela_ms`) e `localizacao` (`latitude`, `longitude`, `precisao_m`, `instante_medicao`; seção 13.3). |
 | Telemetria do Wokwi | Firmware via bridge | `POST /dados` | `imobilidade.leitura` (com `value` e `valueMax`) e `imobilidade.decisao`. |
 | Retorno | App ou firmware | `POST /eventos` | `push.ack` (`ATIVADO`, `REJEITADO`) e `confirmacao.resposta` (`ESTOU_BEM`, `SEM_RESPOSTA`), com o `messageId` a que respondem. |
 | Push | Servidor | SSE | `queda.confirmacao_solicitada` (`timeoutMs`, `motivo`) e `queda.confirmacao_encerrada` (`resultado`). |
@@ -304,7 +304,7 @@ Detalhe campo a campo em `docs/schemas.md`.
 | `/push/wokwi` | GET (SSE) | `push:receber`, fonte `wokwi` | Canal servidor → bridge. |
 | `/dados` | GET | `dados:ler` (admin) | Depuração: as últimas leituras **gravadas em `leituras`**, da mais nova para a mais velha (`?user_id=` filtra por pessoa; `?limite=`, até `LIMITE_GET_DADOS`, 200). Uma leitura só aparece depois de gravada. Banco fora: `503`. |
 | `/estado/<device_id>` | GET | `estado:ler` (admin) | Resumo do estado da imobilidade por dispositivo, **lido de `estado_dispositivo`** (gravado pela borda a partir das decisões da análise); reflete a última decisão, não a leitura que acabou de chegar. |
-| `/`, `/health` | GET | pública | Disponibilidade da borda e saúde da análise: `analise.estado` é `ok` ou `degradado` (a última chamada a ela falhou), `analise.fila` é o que espera por ela e `analise.ultima_resposta_ha_s` são os segundos desde a última resposta boa (`null` se nunca respondeu). Sempre `200`. |
+| `/`, `/health` | GET | pública | Disponibilidade da borda e saúde da análise: `analise.estado` é `ok` ou `degradado` (a última chamada a ela falhou), `analise.fila` é o que espera por ela e `analise.ultima_resposta_ha_s` são os segundos desde a última resposta boa (`null` se nunca respondeu); `borda` traz as filas, os descartes e `localizacao_rejeitadas` (13.3). Sempre `200`. |
 
 O servidor escuta só em HTTPS, em `FLOW_BORDA_HOST:FLOW_BORDA_PORT` (padrão `127.0.0.1:5000`; seção 5), e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`. **Corpo acima de `MAX_CONTENT_LENGTH` (64 KiB) é `413`** em qualquer rota com corpo (`/dados`, `/eventos`, `/auth/*`): o servidor não processa o conteúdo e a negação vai para o log sem ele. O maior corpo legítimo é um envelope de telemetria, de poucos KB. Sem token, a resposta continua `401`, antes de o corpo ser lido. conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
 
@@ -637,6 +637,16 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 - **App só em primeiro plano:** o pedido de confirmação não chega com a tela bloqueada ou o app em segundo plano. Produção: Foreground Service e/ou FCM no `canal_app.py`, sem mudar o contrato.
 - **Tokens no aparelho** em `SharedPreferences` privado; produção: Android Keystore.
 - **Detecção de queda** por limiares iniciais, sem validação com dados reais.
+
+### 13.3 Localização (dado sensível)
+
+A telemetria do app pode trazer o bloco opcional `localizacao` (contrato em `docs/schemas.md`, 4.3).
+
+- **Validação no servidor.** O app só remove absurdos, mas a borda **não confia nele**: confere o bloco pelo schema (faixas e números finitos) antes de enfileirar a leitura. Bloco inválido, ou enviado por uma fonte que não seja `app`, é retirado da leitura e **não é gravado**; o resto da telemetria segue (`200`). O aviso no terminal traz só os nomes dos campos (`[dados] localizacao rejeitada: ...`), com limite de repetição, e o contador `borda.localizacao_rejeitadas` do `/health` sobe. Não há tabela nem canal ao administrador para isso.
+- **Não vai à análise.** O bloco válido é gravado no `payload` de `leituras` (e herda a retenção dela), mas é retirado antes de a leitura seguir à análise e à restauração: nenhuma regra o usa.
+- **Quem envia e quem lê.** Só a conta `idoso` (fonte `app`) envia; só o `admin` lê, por `GET /dados`.
+- **Sem valor em log.** Nem a borda nem a análise escrevem latitude ou longitude; as mensagens de erro do validador trazem só o caminho e a regra.
+- **"Cifrada" vale em trânsito** (TLS e envelope AES-GCM). No banco, o `payload` é `jsonb` em claro, protegido pelo acesso (papel `flow_borda`, credencial administrativa fora dos serviços) e pela retenção.
 
 ---
 

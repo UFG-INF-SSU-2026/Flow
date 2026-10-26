@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/app-localizacao",
+  "title": "App: bloco localizacao (versao propria)",
+  "description": "Estrutura e faixa geografica. Dado sensivel: quem valida nunca poe latitude ou longitude em log. A posicao velha demais e filtrada pelo app; o servidor nao confia nisso e valida sempre.",
+  "x-versao": 3,
+  "type": "object",
+  "required": [
+    "latitude",
+    "longitude",
+    "precisao_m",
+    "instante_medicao"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "latitude": {
+      "type": "number",
+      "minimum": -90,
+      "maximum": 90
+    },
+    "longitude": {
+      "type": "number",
+      "minimum": -180,
+      "maximum": 180
+    },
+    "precisao_m": {
+      "type": "number",
+      "minimum": 0
+    },
+    "instante_medicao": {
+      "type": "string"
+    }
+  }
+}
