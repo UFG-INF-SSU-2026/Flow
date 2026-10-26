@@ -32,6 +32,12 @@ class Pg(PgBase, Repo):
                 "SELECT * FROM (SELECT * FROM leituras WHERE instante_ingestao >= %s" + filtro +
                 " ORDER BY id DESC LIMIT %s) recentes ORDER BY id", params).fetchall()
 
+    def listar_leituras(self, user_id: int | None = None, limite: int = 200) -> list[dict]:
+        filtro, params = ("", []) if user_id is None else (" WHERE user_id = %s", [user_id])
+        with self._cx() as conn:
+            return conn.execute("SELECT * FROM leituras" + filtro + " ORDER BY instante_ingestao DESC, id DESC LIMIT %s",
+                                params + [limite]).fetchall()
+
     def gravar_comando(self, c: dict) -> int | None:
         with self._cx() as conn:
             linha = conn.execute(

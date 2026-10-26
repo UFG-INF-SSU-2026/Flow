@@ -80,6 +80,11 @@ class BancoFalso(Repo):
         linhas = sorted(self._selecionar("leituras", filtro), key=lambda l: l["id"])
         return linhas[-limite:] if limite > 0 else []
 
+    def listar_leituras(self, user_id=None, limite=200):
+        linhas = self._selecionar("leituras", lambda l: user_id is None or l["user_id"] == user_id)
+        linhas.sort(key=lambda l: (l["instante_ingestao"], l["id"]), reverse=True)
+        return linhas[:limite] if limite > 0 else []
+
     # ---- decisoes ----
     def gravar_comando(self, c: dict) -> int | None:
         if c["canal"] not in _CANAIS_COMANDO:

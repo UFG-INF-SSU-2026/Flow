@@ -161,6 +161,15 @@ class TestRotasDeLeitura:
             assert cli.get("/dados", tokens[papel]).status_code == 403
         assert cli.get("/dados", None).status_code == 401
 
+    def test_get_dados_le_a_tabela_leituras(self, cli, tokens, banco):
+        cli.post("/dados", _app(), tokens["idoso"])
+        cli.post("/dados", _wokwi(), tokens["dispositivo"])
+        banco.tabelas["leituras"][0]["user_id"] = 7             # uma linha de outra pessoa, direto no banco
+        lidas = cli.get("/dados", tokens["admin"]).get_json()
+        assert [(l["source"], l["device_id"]) for l in lidas] == [("wokwi", "bridge-dev"), ("app", "cel1")]    # mais novas primeiro
+        assert [l["user_id"] for l in cli.get("/dados?user_id=1", tokens["admin"]).get_json()] == [1]
+        assert len(cli.get("/dados?limite=1", tokens["admin"]).get_json()) == 1
+
     def test_get_estado_so_para_admin(self, cli, tokens):
         cli.post("/dados", _wokwi(), tokens["dispositivo"])
         r = cli.get("/estado/bridge-dev", tokens["admin"])

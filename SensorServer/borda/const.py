@@ -20,9 +20,8 @@ from comum import const as _comum  # noqa: F401  (efeito colateral: o .env e car
 HOST = os.environ.get("FLOW_BORDA_HOST") or "127.0.0.1"
 PORT = int(os.environ.get("FLOW_BORDA_PORT") or 5000)
 
-# Quantidade de leituras recentes mantidas em memoria para o GET /dados
-# (rota de depuracao, restrita a admin).
-MAX_EM_MEMORIA = 200
+# Quantas leituras o GET /dados (rota de depuracao, so admin; le a tabela `leituras`) devolve por padrao e no maximo.
+LIMITE_GET_DADOS = 200
 
 # Tamanho maximo (bytes) do corpo de qualquer requisicao. Acima disso o servidor responde 413 sem ler o
 # resto. O maior corpo legitimo e um envelope cifrado de telemetria (poucos KB); 64 KiB deixa folga.

@@ -3,11 +3,15 @@
 #   Subir:      docker compose up -d
 #   Ver estado: docker compose ps          (aguarde "healthy")
 #   Logs:       docker compose logs -f db
-#   Console:    docker compose exec db psql -U $FLOW_DB_USER -d $FLOW_DB_NAME
+#   Console:    docker compose exec db psql -U $FLOW_DB_ADMIN_USER -d $FLOW_DB_NAME     (papel administrativo)
 #   Parar:      docker compose down        (os dados ficam no volume)
 #   APAGAR TUDO (dados inclusive): docker compose down -v
 #
 # As variaveis FLOW_DB_* vem do arquivo ".env" desta pasta (o mesmo da borda; ver .env.example).
+#
+# Dois papeis: o que este compose cria (FLOW_DB_ADMIN_USER e FLOW_DB_ADMIN_PASSWORD) e o ADMINISTRATIVO (superusuario, dono do
+# esquema; so o compose, "python -m flow_db" e o backup o usam). A borda NAO o usa: ela entra como "flow_borda" (so
+# SELECT/INSERT/UPDATE/DELETE, sem DDL), criado por "python -m flow_db migrar" com a senha de FLOW_DB_PASSWORD.
 # ATENCAO: usuario, senha e nome do banco so valem na PRIMEIRA subida (volume vazio). Mudar o .env depois
 # nao altera o banco ja criado; para recomecar do zero, use "down -v".
 #
@@ -29,8 +33,8 @@ services:
     restart: unless-stopped
 
     environment:
-      POSTGRES_USER: ${FLOW_DB_USER:-flow}
-      POSTGRES_PASSWORD: ${FLOW_DB_PASSWORD:?defina FLOW_DB_PASSWORD no .env}
+      POSTGRES_USER: ${FLOW_DB_ADMIN_USER:-flow}
+      POSTGRES_PASSWORD: ${FLOW_DB_ADMIN_PASSWORD:?defina FLOW_DB_ADMIN_PASSWORD no .env}
       POSTGRES_DB: ${FLOW_DB_NAME:-flow}
 
     # Publicada SO no loopback: o servidor (rodando no host) alcanca em localhost:FLOW_DB_PORT, e nada

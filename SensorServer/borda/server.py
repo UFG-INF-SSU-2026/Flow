@@ -44,7 +44,6 @@ import json
 import os
 import threading
 import time
-from collections import deque
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, g
 
@@ -84,7 +83,6 @@ _fila_leituras: list[dict] = []
 _fila_analise: list = []
 _descartes_leituras = 0
 _descartes_analise = 0
-_recentes: deque = deque(maxlen=const_borda.MAX_EM_MEMORIA)   # so para o GET /dados de debug
 _ultimo_log_falha = float("-inf")
 _cliente: "cliente_analise.ClienteAnalise | None" = None
 _aplicador = efeitos.Aplicador()
@@ -125,8 +123,6 @@ def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, 
     leitura = {"instante_ingestao": instante, "user_id": user_id, "device_id": device_id,
                "fonte": source, "tipo_evento": tipo if isinstance(tipo, str) else None, "schema_version": versao,
                "instante_origem": _instante_origem(source, dados), "conta_id": conta_id, "payload": dados}
-    _recentes.append({"timestamp": instante.isoformat(), "user_id": user_id, "source": source, "device_id": device_id,
-                      "dados": dados})
     with _fila_lock:
         _fila_leituras.append(leitura)
         excesso = len(_fila_leituras) - const_borda.MAX_FILA_LEITURAS
@@ -479,8 +475,20 @@ def receber_dados():
 @app.route("/dados", methods=["GET"])
 @exige("dados:ler")
 def listar_dados():
-    """Debug: lista as ultimas leituras aceitas (so em memoria, ate MAX_EM_MEMORIA)."""
-    return jsonify(list(_recentes))
+    """Debug (so admin): as ultimas leituras gravadas em `leituras`, da mais nova para a mais velha. `?user_id=` filtra por
+    pessoa e `?limite=` (ate LIMITE_GET_DADOS) limita. Inclui o que o payload trouxer, localizacao inclusive. Uma leitura
+    so aparece depois de gravada (a fila de espera leva uma fracao de segundo)."""
+    limite = request.args.get("limite", type=int) or const_borda.LIMITE_GET_DADOS
+    limite = max(1, min(limite, const_borda.LIMITE_GET_DADOS))
+    user_id = request.args.get("user_id", type=int)
+    try:
+        repo = repositorios.repo()
+        linhas = [] if repo is None else repo.listar_leituras(user_id, limite)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [dados] banco indisponivel: {type(e).__name__}")
+        return jsonify({"status": "erro", "mensagem": "banco indisponivel"}), 503
+    return jsonify([{"timestamp": l["instante_ingestao"].isoformat(), "user_id": l["user_id"], "source": l["fonte"],
+                     "device_id": l["device_id"], "dados": l["payload"]} for l in linhas])
 
 
 @app.route("/estado/<device_id>", methods=["GET"])

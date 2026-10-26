@@ -27,36 +27,49 @@ from pathlib import Path
 from dotenv import dotenv_values, load_dotenv
 
 
-def _carregar_dotenv(caminho: Path, prefixo: str | tuple[str, ...] | None = None) -> bool:
+# Credencial administrativa do banco (FLOW_DB_ADMIN_USER, FLOW_DB_ADMIN_PASSWORD): so o docker compose, `python -m flow_db` e o
+# backup a usam. O carregador nunca a poe no ambiente da borda, do modo de desenvolvimento, da CLI de contas nem da analise.
+PREFIXO_ADMIN_BANCO = "FLOW_DB_ADMIN_"
+
+
+def _prefixos_excluidos(servico: str) -> tuple[str, ...]:
+    """Prefixos que o carregador do .env NAO traz para o ambiente: so `python -m flow_db` (servico \"admin\") recebe a admin."""
+    return () if servico == "admin" else (PREFIXO_ADMIN_BANCO,)
+
+
+def _carregar_dotenv(caminho: Path, prefixo: str | tuple[str, ...] | None = None,
+                     excluir: tuple[str, ...] = ()) -> bool:
     """Carrega `caminho` (um .env) para os.environ SEM sobrescrever o que ja esta definido: variavel de ambiente do
     terminal vence o arquivo. Retorna True se o arquivo foi lido; arquivo ausente nao e erro (o ambiente pode bastar).
 
     - `prefixo`: carrega SO as variaveis cujo nome comeca com ele (ou com um dos itens, se for uma tupla); a analise usa
       "FLOW_ANALISE_" e "FLOW_TLS_";
+    - `excluir`: nao carrega as variaveis que comecam com um destes prefixos (ver _prefixos_excluidos);
     - utf-8-sig: um .env salvo com BOM (Bloco de Notas do Windows) nao estraga o nome da primeira chave;
     - interpolate=False: `$` e `${...}` num segredo ou senha ficam literais;
     - FLOW_SEM_DOTENV=1 desliga a leitura (usado pela suite de testes, para nao ler o .env real).
     """
     if os.environ.get("FLOW_SEM_DOTENV") == "1" or not caminho.is_file():
         return False
-    if prefixo is None:
-        return load_dotenv(caminho, override=False, interpolate=False, encoding="utf-8-sig")
     for nome, valor in dotenv_values(caminho, interpolate=False, encoding="utf-8-sig").items():
-        if nome.startswith(prefixo) and valor is not None:
-            os.environ.setdefault(nome, valor)
+        if valor is None or nome.startswith(excluir) or (prefixo is not None and not nome.startswith(prefixo)):
+            continue
+        os.environ.setdefault(nome, valor)
     return True
 
 
 # Servico que este processo e. Os pontos de entrada `python -m borda` e `python -m analise` definem FLOW_SERVICO
 # ANTES de importar qualquer modulo do projeto. Vazio = ferramentas e modo de desenvolvimento (`python -m borda.server`,
-# `python -m flow_db`). A analise le do .env so o que comeca com FLOW_ANALISE_.
+# CLI de contas). "admin" e so o `python -m flow_db`, o unico que recebe FLOW_DB_ADMIN_*. A analise le do .env so o que
+# comeca com FLOW_ANALISE_ e FLOW_TLS_.
 SERVICO = os.environ.get("FLOW_SERVICO", "")
-if SERVICO not in ("", "borda", "analise"):
-    raise RuntimeError(f"FLOW_SERVICO invalido: {SERVICO!r} (use 'borda' ou 'analise', ou deixe vazio)")
+if SERVICO not in ("", "borda", "analise", "admin"):
+    raise RuntimeError(f"FLOW_SERVICO invalido: {SERVICO!r} (use 'borda', 'analise' ou 'admin', ou deixe vazio)")
 
 # O arquivo fica em SensorServer/ (a pasta acima de comum/).
 DOTENV_ARQUIVO = Path(__file__).resolve().parent.parent / ".env"
-DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO, ("FLOW_ANALISE_", "FLOW_TLS_") if SERVICO == "analise" else None)
+DOTENV_CARREGADO = _carregar_dotenv(DOTENV_ARQUIVO, ("FLOW_ANALISE_", "FLOW_TLS_") if SERVICO == "analise" else None,
+                                    _prefixos_excluidos(SERVICO))
 
 # ===========================================================================
 # 1. FONTES

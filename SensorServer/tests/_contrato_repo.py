@@ -42,6 +42,15 @@ def leituras_em_lote_e_recentes(repo):
     assert [l["payload"]["x"] for l in repo.ler_leituras_recentes(T0, limite=2)] == [1, 2]     # as mais recentes
 
 
+def listar_leituras_mais_recentes_primeiro_com_filtro_e_limite(repo):
+    repo.gravar_leituras([leitura(0, user_id=1), leitura(1, user_id=2), leitura(2, user_id=1), leitura(3, user_id=2)])
+    assert [l["payload"]["x"] for l in repo.listar_leituras()] == [3, 2, 1, 0]                 # mais novas primeiro
+    assert [l["payload"]["x"] for l in repo.listar_leituras(user_id=1)] == [2, 0]
+    assert [l["payload"]["x"] for l in repo.listar_leituras(limite=2)] == [3, 2]
+    assert [l["payload"]["x"] for l in repo.listar_leituras(user_id=2, limite=1)] == [3]
+    assert repo.listar_leituras(user_id=9) == []
+
+
 def lote_com_linha_invalida_nao_grava_nenhuma(repo, excecao):
     import pytest
     with pytest.raises(excecao):
@@ -135,6 +144,7 @@ def contas_e_sessoes(repo):
     assert repo.consumir_sessao("b") is None and repo.consumir_sessao("c") == sessao("c", 30)
 
 
-TODOS = [leituras_em_lote_e_recentes, comando_e_idempotente_pelo_message_id, alerta_e_confirmacao_voltam_com_id,
+TODOS = [leituras_em_lote_e_recentes, listar_leituras_mais_recentes_primeiro_com_filtro_e_limite,
+         comando_e_idempotente_pelo_message_id, alerta_e_confirmacao_voltam_com_id,
          episodio_upsert_preserva_encerramento_e_funde_dados, episodios_recentes_incluem_os_abertos_de_qualquer_idade,
          estado_do_dispositivo_upsert_e_leitura_por_device, transacao_e_tudo_ou_nada, contas_e_sessoes]

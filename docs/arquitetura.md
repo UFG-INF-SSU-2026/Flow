@@ -302,7 +302,7 @@ Detalhe campo a campo em `docs/schemas.md`.
 | `/eventos` | POST | `eventos:enviar` | Eventos de retorno; vão à análise pela mesma fila das leituras. |
 | `/push/app` | GET (SSE) | `push:receber`, fonte `app` | Canal servidor → app. |
 | `/push/wokwi` | GET (SSE) | `push:receber`, fonte `wokwi` | Canal servidor → bridge. |
-| `/dados` | GET | `dados:ler` (admin) | Depuração: últimas leituras aceitas (só em memória). |
+| `/dados` | GET | `dados:ler` (admin) | Depuração: as últimas leituras **gravadas em `leituras`**, da mais nova para a mais velha (`?user_id=` filtra por pessoa; `?limite=`, até `LIMITE_GET_DADOS`, 200). Uma leitura só aparece depois de gravada. Banco fora: `503`. |
 | `/estado/<device_id>` | GET | `estado:ler` (admin) | Resumo do estado da imobilidade por dispositivo, **lido de `estado_dispositivo`** (gravado pela borda a partir das decisões da análise); reflete a última decisão, não a leitura que acabou de chegar. |
 | `/`, `/health` | GET | pública | Disponibilidade da borda e saúde da análise: `analise.estado` é `ok` ou `degradado` (a última chamada a ela falhou), com o tamanho da fila de espera. Sempre `200`. |
 
@@ -623,6 +623,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 - **Autenticação** por conta (senha com scrypt, tokens de curta duração, refresh rotativo, bloqueio por tentativas).
 - **Autorização** negando por padrão, em dois estágios, com a identidade vinda do token e nunca do que o cliente declara.
 - **Auditoria** de negações.
+- **Banco com privilégio mínimo:** a borda entra como `flow_borda` (só `SELECT`/`INSERT`/`UPDATE`/`DELETE`, sem DDL); a credencial administrativa fica fora dos serviços (só `docker compose`, `python -m flow_db` e backup).
 - **Segredos fora do repositório:** `FLOW_JWT_SECRET` em `SensorServer/.env` (fora do Git) ou variável de ambiente; a pasta `certs/` (a CA e as chaves privadas do TLS) ignorada pelo Git (contas e sessões ficam no banco, não em arquivo); sem o segredo, ou sem o certificado, o servidor não sobe; a chave da CA (`ca.key`) só o script de geração lê.
 
 ### 13.2 Limitações assumidas (projeto acadêmico)
@@ -647,7 +648,8 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 | `FLOW_TLS_CA`, `FLOW_TLS_CERT`, `FLOW_TLS_KEY` | `SensorServer/.env` ou ambiente | Opcionais (caminho relativo vale a partir de `SensorServer/`). `FLOW_TLS_CA` é a confiança dos clientes (padrão `certs/ca.crt`); `FLOW_TLS_CERT` e `FLOW_TLS_KEY` são o par de quem serve (padrão `certs/borda.*` na borda e `certs/analise.*` na análise). Tudo gerado por `scripts/gerar_certificado.py`. A borda e a análise não sobem sem o par; a borda usa a CA para conferir a análise e o banco. Como há um só `.env`, definir o par ali valeria para os dois serviços: deixe os padrões. |
 | `FLOW_BORDA_HOST`, `FLOW_BORDA_PORT` | `SensorServer/.env` ou ambiente | Onde a borda escuta, só em HTTPS (padrão `127.0.0.1` e `5000`). Para app e ponte em outra máquina, o IP do computador na rede (o do certificado da borda). |
 | `FLOW_DB_SSLMODE` | `SensorServer/.env` ou ambiente | `verify-full` (padrão) ou `verify-ca`; não há modo sem TLS. |
-| `FLOW_DB_PASSWORD`, `FLOW_DB_USER`, `FLOW_DB_NAME`, `FLOW_DB_HOST`, `FLOW_DB_PORT` | `SensorServer/.env` ou ambiente | Um único usuário de banco, o mesmo do `docker-compose.yml`; só a senha é obrigatória. |
+| `FLOW_DB_PASSWORD`, `FLOW_DB_USER`, `FLOW_DB_NAME`, `FLOW_DB_HOST`, `FLOW_DB_PORT` | `SensorServer/.env` ou ambiente | O papel da **borda** no banco (`flow_borda` por padrão, sem DDL); só a senha é obrigatória. |
+| `FLOW_DB_ADMIN_USER`, `FLOW_DB_ADMIN_PASSWORD` | `SensorServer/.env` | O papel **administrativo** (o que o `docker-compose.yml` cria): lido só pelo `docker compose`, por `python -m flow_db` e pelo backup. O carregador do `.env` **não** o põe no ambiente da borda, do modo de desenvolvimento, da CLI de contas nem da análise. |
 | `FLOW_DB_FAKE` | ambiente (dev/testes) | `1` usa o banco falso em memória, sem Docker (os dados somem ao parar a borda). |
 | `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de fundo da borda (descarga e vigia) e a exigência do segredo e da análise na subida; usado pela suíte de testes. |
 | `FLOW_SENHA` | ambiente da CLI `borda/auth.py` | Opcional; senha sem prompt ao criar contas. |

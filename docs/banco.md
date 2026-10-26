@@ -1,15 +1,15 @@
 # Banco de dados (PostgreSQL + TimescaleDB)
 
-Só a **borda** (Servidor 1) fala com o banco, por uma única interface (`flow_db/repo.py`, implementada em `flow_db/pg.py`; o `BancoFalso` em memória a imita para testes e para `FLOW_DB_FAKE=1`). A análise (Servidor 2) não tem banco nem credencial dele. Um único usuário de banco, o mesmo que o `docker-compose.yml` cria. **A conexão é sempre TLS:** o PostgreSQL sobe com o certificado único do projeto (`certs/`) e a borda conecta com `sslmode=verify-full` (ou `verify-ca`, em `FLOW_DB_SSLMODE`), confiando só nesse certificado; o IP ou nome de `FLOW_DB_HOST` precisa estar nele. O banco é o PostgreSQL 17 na imagem `timescale/timescaledb`, e **só a tabela `leituras` é uma hypertable do TimescaleDB** (particionada pelo tempo, em `instante_ingestao`); todas as outras são tabelas comuns do PostgreSQL. Não há compressão, política de retenção nem agregados contínuos.
+Só a **borda** (Servidor 1) fala com o banco, por uma única interface (`flow_db/repo.py`, implementada em `flow_db/pg.py`; o `BancoFalso` em memória a imita para testes e para `FLOW_DB_FAKE=1`). A análise (Servidor 2) não tem banco nem credencial dele. **Dois papéis de banco:** o **administrativo** (`FLOW_DB_ADMIN_USER`/`FLOW_DB_ADMIN_PASSWORD`, o superusuário que o `docker-compose.yml` cria e dono do esquema), usado só pelo `docker compose`, por `python -m flow_db` (migração e status) e pelo backup; e o da **borda**, `flow_borda` (`FLOW_DB_USER`/`FLOW_DB_PASSWORD`), que só faz `SELECT`, `INSERT`, `UPDATE` e `DELETE` nas tabelas do app, sem DDL (em `schema_migrations` só lê, para conferir a versão na subida). `python -m flow_db migrar` aplica as migrações com o papel administrativo e **cria `flow_borda`** (ou atualiza a senha, se já existe) com os `GRANT` e o `ALTER DEFAULT PRIVILEGES` das tabelas futuras; a senha vem de `FLOW_DB_PASSWORD` e nunca é escrita em SQL versionado. As variáveis `FLOW_DB_ADMIN_*` do `.env` só entram no ambiente de `python -m flow_db`: a borda, o modo de desenvolvimento e a CLI de contas nunca as recebem. **A conexão é sempre TLS:** o PostgreSQL sobe com o certificado único do projeto (`certs/`) e a borda conecta com `sslmode=verify-full` (ou `verify-ca`, em `FLOW_DB_SSLMODE`), confiando só nesse certificado; o IP ou nome de `FLOW_DB_HOST` precisa estar nele. O banco é o PostgreSQL 17 na imagem `timescale/timescaledb`, e **só a tabela `leituras` é uma hypertable do TimescaleDB** (particionada pelo tempo, em `instante_ingestao`); todas as outras são tabelas comuns do PostgreSQL. Não há compressão, política de retenção nem agregados contínuos.
 
 ## Subir do zero (a partir de `SensorServer/`)
 
 ```
-cp .env.example .env     # preencha FLOW_JWT_SECRET, FLOW_ANALISE_TOKEN, FLOW_DB_PASSWORD
+cp .env.example .env     # preencha FLOW_JWT_SECRET, FLOW_ANALISE_TOKEN, FLOW_DB_ADMIN_PASSWORD, FLOW_DB_PASSWORD
 pip install -r requirements.txt
 python scripts/gerar_certificado.py    # CA e certificados TLS (o container carrega o do banco ao subir)
 docker compose up -d --wait
-python -m flow_db migrar        # aplica as migrações pendentes (idempotente, com trava)
+python -m flow_db migrar        # aplica as migrações pendentes e garante o papel flow_borda (idempotente, com trava)
 python -m flow_db status        # versão aplicada x disponível
 python -m borda                 # a borda; recusa subir se o banco faltar ou estiver defasado
 python -m analise               # a análise, em outro terminal
@@ -30,7 +30,7 @@ Sem Docker, para desenvolver: `FLOW_DB_FAKE=1 python -m borda.server` (banco em 
 | `alertas` | Alertas das regras (luz inadequada, imobilidade). |
 | `confirmacoes` | Registros do ciclo de confirmação (`episodio.aberto`, `push.ack`, `confirmacao.resposta`, `episodio.encerrado`). |
 | `episodios` | Um episódio de queda por linha, com o estado e o motivo do encerramento. |
-| `comandos_push` | Histórico das mensagens de push (`message_id` único). É daqui que a restauração tira os `messageId` de cada episódio. |
+| `comandos_push` | **Histórico** das mensagens de push (`message_id` único) e o **elo** entre a resposta do dispositivo e o episódio: é daqui que a restauração tira os `messageId` de cada episódio ao reiniciar. Não há tabela de entregas: o rastro da entrega é um log estruturado, e o `push.ack` do idoso já fica em `confirmacoes`. |
 | `estado_dispositivo` | Resumo da imobilidade por dispositivo (`GET /estado/<device_id>`), gravado só quando muda. |
 | `contas` | Contas de login (`id`, `papel`, `user_ids`, `fontes`, hash scrypt da senha, `criada_em`). Criadas pela CLI `python -m borda.auth criar-conta`, que exige o banco no ar. |
 | `sessoes` | Refresh tokens em uso (só o hash do token, a conta, a fonte, o `device_id` e `expira_em`). Uso único: `DELETE ... RETURNING`. Sem chave estrangeira para `contas`: remover a conta faz o refresh recusar. As vencidas são podadas a cada login ou refresh. |
@@ -40,9 +40,11 @@ Quem grava é sempre a borda: as leituras em lote (uma só thread) e, numa trans
 ## Testes
 
 - `pytest` — padrão. Usa o banco falso em memória; não precisa de Docker. O contrato do `Repo` (`tests/_contrato_repo.py`) roda aqui.
-- `pytest -m banco` — o mesmo contrato contra o PostgreSQL real, num banco descartável `flow_teste` (recriado a cada sessão), por TLS. Exige o container no ar, `FLOW_DB_PASSWORD` no `.env` e a CA e os certificados gerados (`certs/`).
+- `pytest -m banco` — o mesmo contrato contra o PostgreSQL real, num banco descartável `flow_teste` (recriado a cada sessão), por TLS. Exige o container no ar, `FLOW_DB_ADMIN_PASSWORD` e `FLOW_DB_PASSWORD` no `.env` (o administrativo cria o banco, migra e limpa as tabelas; o `Repo` roda como `flow_borda`, sem DDL) e a CA e os certificados gerados (`certs/`).
 
 ## Backup e restauração (a partir de `SensorServer/`, com o container `flow-db` no ar)
+
+Os comandos abaixo usam o papel **administrativo** (`-U flow` é o padrão de `FLOW_DB_ADMIN_USER`; troque se você o mudou).
 
 Backup (formato customizado, só o banco `flow`):
 

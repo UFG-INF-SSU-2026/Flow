@@ -1,4 +1,4 @@
-# Gera a CA e os certificados TLS (o que faltar), sobe o banco (Docker) e aplica as migracoes. Idempotente. Usa o .env (SensorServer\.env). Rode de qualquer pasta.
+# Gera a CA e os certificados TLS (o que faltar), sobe o banco (Docker), aplica as migracoes e garante o papel da borda. Idempotente. Usa o .env (SensorServer\.env). Rode de qualquer pasta.
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 python scripts/gerar_certificado.py;    if ($LASTEXITCODE) { exit $LASTEXITCODE }   # CA e certificados TLS (so cria o que faltar)

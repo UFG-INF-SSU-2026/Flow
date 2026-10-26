@@ -73,14 +73,17 @@ Regras:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"   # FLOW_JWT_SECRET (assinatura dos tokens)
-python -c "import secrets; print(secrets.token_urlsafe(24))"   # FLOW_ANALISE_TOKEN (borda <-> análise) e FLOW_DB_PASSWORD
+python -c "import secrets; print(secrets.token_urlsafe(24))"   # FLOW_ANALISE_TOKEN (borda <-> análise); repita para FLOW_DB_PASSWORD (papel da borda) e FLOW_DB_ADMIN_PASSWORD (administrativo)
 ```
 
 ```ini
 FLOW_JWT_SECRET=<valor gerado>
 FLOW_ANALISE_TOKEN=<valor gerado>
-FLOW_DB_PASSWORD=<valor gerado>
+FLOW_DB_PASSWORD=<valor gerado>          # papel flow_borda (a borda; sem DDL)
+FLOW_DB_ADMIN_PASSWORD=<valor gerado>    # papel administrativo (docker compose, python -m flow_db, backup)
 ```
+
+O papel `flow_borda` é criado por `python -m flow_db migrar` (o `scripts/preparar.*` o executa). As variáveis `FLOW_DB_ADMIN_*` só são lidas pelo `docker compose` e por `python -m flow_db`; a borda nunca as recebe.
 
 A análise lê desse arquivo **só** as variáveis `FLOW_ANALISE_*` e `FLOW_TLS_*` (caminhos da CA, do certificado e da chave): o segredo dos tokens e a senha do banco nunca entram no ambiente dela. (Sem `.env`, é possível exportar as variáveis no terminal.)
 
@@ -324,7 +327,7 @@ Sem a análise rodando, a borda continua aceitando e gravando dados, mas nada é
 
 O banco é só da borda. `python -m borda.server` continua importável (Flask/WSGI, testes e desenvolvimento), mas é só a borda: o ponto de entrada oficial é `python -m borda`.
 
-**1. `.env` (uma vez).** `cp SensorServer/.env.example SensorServer/.env` (PowerShell: `Copy-Item`) e preencha `FLOW_JWT_SECRET`, `FLOW_ANALISE_TOKEN` e `FLOW_DB_PASSWORD` (seção 0). **Banco antigo:** o banco agora usa a imagem do TimescaleDB (`leituras` é uma hypertable); se você já tinha um volume criado antes, com a imagem `postgres:17` simples, rode `docker compose down -v` (apaga os dados de teste) e suba de novo.
+**1. `.env` (uma vez).** `cp SensorServer/.env.example SensorServer/.env` (PowerShell: `Copy-Item`) e preencha `FLOW_JWT_SECRET`, `FLOW_ANALISE_TOKEN`, `FLOW_DB_PASSWORD` e `FLOW_DB_ADMIN_PASSWORD` (seção 0). **Banco antigo:** o banco agora usa a imagem do TimescaleDB (`leituras` é uma hypertable); se você já tinha um volume criado antes, com a imagem `postgres:17` simples, rode `docker compose down -v` (apaga os dados de teste) e suba de novo.
 
 **2. Subir.** Os scripts de `SensorServer/scripts/` fazem tudo na ordem certa (a ordem entre borda e análise é indiferente):
 

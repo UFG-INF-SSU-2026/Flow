@@ -58,7 +58,6 @@ def _limpar_estado() -> None:
               regra_queda._mensagens, regra_queda._ultimo_ts_app, regra_imobilidade._estados,
               regra_luz._estados):
         d.clear()
-    server._recentes.clear()
     server._fila_leituras.clear()
     server._fila_analise.clear()
     server._descartes_leituras = 0

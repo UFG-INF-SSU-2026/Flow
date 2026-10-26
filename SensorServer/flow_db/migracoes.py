@@ -4,6 +4,8 @@ transacao propria junto com o registro em schema_migrations.
 
 - Trava de aviso (pg_advisory_lock): duas execucoes simultaneas nao se atropelam; a segunda espera e nao acha nada a fazer.
 - Nunca edite uma migracao ja aplicada: crie uma nova. Nao ha "desfazer".
+- Roda com o papel ADMINISTRATIVO (config.dsn_admin). `garantir_papel_borda` cria (ou atualiza) o papel `flow_borda`, que so
+  le e escreve nas tabelas do app (sem DDL); a senha vem de FLOW_DB_PASSWORD e nunca aparece em SQL versionado.
 """
 import re
 from dataclasses import dataclass
@@ -51,7 +53,7 @@ def aplicar(conn=None, diretorio: Path = DIRETORIO) -> list[int]:
     import psycopg
     proprio = conn is None
     if proprio:
-        conn = psycopg.connect(config.dsn(), autocommit=True)
+        conn = psycopg.connect(config.dsn_admin(), autocommit=True)
     try:
         conn.execute("SELECT pg_advisory_lock(%s)", (CHAVE_TRAVA,))
         try:
@@ -71,6 +73,38 @@ def aplicar(conn=None, diretorio: Path = DIRETORIO) -> list[int]:
             return aplicadas
         finally:
             conn.execute("SELECT pg_advisory_unlock(%s)", (CHAVE_TRAVA,))
+    finally:
+        if proprio:
+            conn.close()
+
+
+def garantir_papel_borda(conn=None) -> None:
+    """Cria o papel da borda (ou so atualiza a senha, se ja existe) e concede o minimo: conectar, usar o esquema `public`,
+    SELECT/INSERT/UPDATE/DELETE nas tabelas (as de hoje e as futuras, `ALTER DEFAULT PRIVILEGES`) e usar as sequencias.
+    Sem DDL; em `schema_migrations` so le (a subida confere a versao). Idempotente. Usa a conexao administrativa."""
+    import psycopg
+    from psycopg import sql
+    senha = config.senha_borda()
+    papel = sql.Identifier(config.usuario())
+    proprio = conn is None
+    if proprio:
+        conn = psycopg.connect(config.dsn_admin(), autocommit=True)
+    try:
+        existe = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (config.usuario(),)).fetchone() is not None
+        verbo = "ALTER ROLE {} WITH LOGIN PASSWORD {}" if existe else "CREATE ROLE {} LOGIN PASSWORD {}"
+        conn.execute(sql.SQL(verbo).format(papel, sql.Literal(senha)))
+        banco = conn.execute("SELECT current_database()").fetchone()[0]
+        for comando in (
+            "GRANT CONNECT ON DATABASE {banco} TO {p}",
+            "GRANT USAGE ON SCHEMA public TO {p}",
+            "REVOKE CREATE ON SCHEMA public FROM {p}",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {p}",
+            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {p}",
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {p}",
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {p}",
+            "REVOKE INSERT, UPDATE, DELETE ON schema_migrations FROM {p}",
+        ):
+            conn.execute(sql.SQL(comando).format(banco=sql.Identifier(banco), p=papel))
     finally:
         if proprio:
             conn.close()

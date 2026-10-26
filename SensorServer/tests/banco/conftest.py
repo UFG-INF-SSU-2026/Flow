@@ -2,7 +2,9 @@
 Contrato contra PostgreSQL REAL. Fora da execucao padrao: `pytest -m banco`.
 
 Usa um banco DESCARTAVEL (FLOW_DB_TESTE_NOME, padrao flow_teste; o nome precisa conter "teste"), recriado a cada sessao.
-Nunca toca no banco "flow". Pre-requisitos: container de pe (docker compose up -d) e FLOW_DB_PASSWORD no .env ou no ambiente.
+Nunca toca no banco "flow". Pre-requisitos: container de pe (docker compose up -d) e FLOW_DB_PASSWORD, FLOW_DB_ADMIN_PASSWORD no
+.env ou no ambiente. A criacao do banco, a migracao e a limpeza das tabelas usam o papel administrativo; o resto (o Repo) usa o
+papel da borda, sem DDL, como em producao.
 """
 import os
 from pathlib import Path
@@ -34,25 +36,27 @@ def banco_pg():
 
     if "teste" not in NOME_TESTE:
         pytest.fail(f"FLOW_DB_TESTE_NOME={NOME_TESTE!r} precisa conter 'teste' (protege o banco real).")
-    if not os.environ.get("FLOW_DB_PASSWORD"):
-        pytest.skip("variavel ausente: FLOW_DB_PASSWORD")
+    for variavel in ("FLOW_DB_PASSWORD", "FLOW_DB_ADMIN_PASSWORD"):
+        if not os.environ.get(variavel):
+            pytest.skip(f"variavel ausente: {variavel}")
 
     mp = pytest.MonkeyPatch()
     mp.setenv("FLOW_DB_NAME", "postgres")
     try:
         try:
-            with psycopg.connect(config.dsn(), autocommit=True) as conn:
+            with psycopg.connect(config.dsn_admin(), autocommit=True) as conn:
                 conn.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(NOME_TESTE)))
                 conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(NOME_TESTE)))
         except psycopg.OperationalError as e:
             pytest.skip(f"banco indisponivel: {str(e)[:150]}")
         mp.setenv("FLOW_DB_NAME", NOME_TESTE)
         migracoes.aplicar()
+        migracoes.garantir_papel_borda()
         yield NOME_TESTE
     finally:
         mp.setenv("FLOW_DB_NAME", "postgres")
         try:
-            with psycopg.connect(config.dsn(), autocommit=True) as conn:
+            with psycopg.connect(config.dsn_admin(), autocommit=True) as conn:
                 conn.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(NOME_TESTE)))
         except Exception:  # noqa: BLE001
             pass
@@ -70,7 +74,9 @@ def pool(banco_pg):
 @pytest.fixture
 def repo(pool):
     """O Repo sobre o banco real, com as tabelas vazias."""
+    import psycopg
+    from flow_db import config
     from flow_db.pg import Pg
-    with pool.connection() as conn:
+    with psycopg.connect(config.dsn_admin(), autocommit=True) as conn:      # TRUNCATE e DDL: so o papel administrativo
         conn.execute("TRUNCATE leituras, comandos_push, alertas, confirmacoes, episodios, estado_dispositivo, contas, sessoes RESTART IDENTITY")
     return Pg(pool)

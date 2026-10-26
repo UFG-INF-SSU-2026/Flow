@@ -70,3 +70,21 @@ def test_com_prefixo_carrega_so_as_variaveis_dele(tmp_path, monkeypatch):
         assert "FLOW_JWT_SECRET_TESTE" not in os.environ and "FLOW_DB_PASSWORD_TESTE" not in os.environ
     finally:
         os.environ.pop("FLOW_ANALISE_TESTE", None)
+
+
+@pytest.mark.parametrize("servico,recebe_admin", [("", False), ("borda", False), ("analise", False), ("admin", True)])
+def test_so_o_flow_db_recebe_a_credencial_administrativa_do_banco(tmp_path, monkeypatch, servico, recebe_admin):
+    """Borda, modo de desenvolvimento (FLOW_SERVICO vazio, que e tambem o da CLI de contas) e analise nunca recebem
+    FLOW_DB_ADMIN_* do .env; so `python -m flow_db` (servico \"admin\")."""
+    import os
+    for nome in ("FLOW_DB_ADMIN_USER", "FLOW_DB_ADMIN_PASSWORD", "FLOW_DB_PASSWORD", "FLOW_ANALISE_TOKEN"):
+        monkeypatch.delenv(nome, raising=False)
+    arquivo = _env(tmp_path, "FLOW_DB_ADMIN_USER=flow\nFLOW_DB_ADMIN_PASSWORD=adm\nFLOW_DB_PASSWORD=borda\nFLOW_ANALISE_TOKEN=t\n")
+    prefixo = ("FLOW_ANALISE_", "FLOW_TLS_") if servico == "analise" else None
+    try:
+        const_comum._carregar_dotenv(arquivo, prefixo, const_comum._prefixos_excluidos(servico))
+        assert ("FLOW_DB_ADMIN_PASSWORD" in os.environ and "FLOW_DB_ADMIN_USER" in os.environ) is recebe_admin
+        assert (os.environ.get("FLOW_DB_PASSWORD") == "borda") is (servico != "analise")   # a senha da borda segue como antes
+    finally:
+        for nome in ("FLOW_DB_ADMIN_USER", "FLOW_DB_ADMIN_PASSWORD", "FLOW_DB_PASSWORD", "FLOW_ANALISE_TOKEN"):
+            os.environ.pop(nome, None)

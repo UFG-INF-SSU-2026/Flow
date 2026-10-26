@@ -22,6 +22,11 @@ class Repo(ABC):
         """As leituras mais recentes com instante_ingestao >= desde (e < antes_de, se dado), ate `limite` (as MAIS
         RECENTES, se houver mais), em ordem crescente de id. Serve a reconstruir o estado da analise."""
 
+    @abstractmethod
+    def listar_leituras(self, user_id: int | None = None, limite: int = 200) -> list[dict]:
+        """As `limite` leituras mais recentes (instante_ingestao e id, do mais novo para o mais velho), so do `user_id` se
+        dado. Serve a rota de depuracao GET /dados; nao reconstrui estado (para isso, ler_leituras_recentes)."""
+
     # ---- decisoes ----
     @abstractmethod
     def gravar_comando(self, comando: dict) -> int | None:
