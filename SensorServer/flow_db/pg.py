@@ -132,6 +132,13 @@ class Pg(PgBase, Repo):
         with self._cx() as conn:
             return conn.execute("DELETE FROM sessoes WHERE expira_em <= %s", (agora,)).rowcount
 
+    def podar_historico(self, corte: datetime) -> dict[str, int]:
+        apagar = (("alertas", "instante < %s"), ("confirmacoes", "instante < %s"), ("comandos_push", "criado_em < %s"),
+                  ("episodios", "estado = 'encerrado' AND atualizado_em < %s"))
+        with self._cx() as conn:        # uma transacao: tudo ou nada
+            return {tabela: conn.execute(f"DELETE FROM {tabela} WHERE {filtro}", (corte,)).rowcount
+                    for tabela, filtro in apagar}
+
     @contextmanager
     def transacao(self):
         if self._conn is not None:      # ja dentro de uma transacao: reaproveita

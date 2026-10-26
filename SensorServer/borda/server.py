@@ -79,6 +79,7 @@ _fila_lock = threading.Lock()
 _parar_flush = threading.Event()          # pede o fim das threads de fundo (encerrar())
 _thread_flush: threading.Thread | None = None
 _thread_vigia: threading.Thread | None = None
+_thread_retencao: threading.Thread | None = None
 _fila_leituras: list[dict] = []
 _fila_analise: list = []
 _descartes_leituras = 0
@@ -284,11 +285,31 @@ def passo_vigia() -> None:
     _aplicador.aplicar(decisoes)
 
 
+def passo_retencao() -> None:
+    """Retencao das tabelas comuns (alertas, confirmacoes, episodios encerrados, comandos_push): apaga o que passou de
+    RETENCAO_HISTORICO_DIAS, com o papel da borda (que ja tem DELETE). `leituras` fica por conta da politica do TimescaleDB.
+    Uma vez por hora (e ao subir). Nao levanta: banco fora do ar so vira uma linha de log e tenta de novo na proxima."""
+    try:
+        repo = repositorios.repo()
+        if repo is None:
+            return
+        apagadas = repo.podar_historico(tempo.agora_utc() - timedelta(days=const_borda.RETENCAO_HISTORICO_DIAS))
+    except Exception as e:  # noqa: BLE001  (o banco nunca derruba a borda)
+        _log_falha("retencao", f"retencao nao executada (tenta de novo na proxima hora): {type(e).__name__}: {str(e)[:200]}",
+                   prefixo="retencao")
+        return
+    if any(apagadas.values()):
+        print(f"  [retencao] apagadas (mais de {const_borda.RETENCAO_HISTORICO_DIAS} dias): "
+              + ", ".join(f"{t}={n}" for t, n in apagadas.items() if n))
+
+
 def _agora_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _loop(passo, intervalo_s: float) -> None:
+def _loop(passo, intervalo_s: float, ao_iniciar: bool = False) -> None:
+    if ao_iniciar and not _parar_flush.is_set():
+        passo()
     while not _parar_flush.wait(intervalo_s):      # o desligamento acorda e encerra a thread
         passo()
 
@@ -571,8 +592,8 @@ _threads_iniciadas = False
 
 
 def iniciar_threads() -> None:
-    """Sobe as threads de fundo uma unica vez: descarga das leituras + analise, e o vigia dos episodios."""
-    global _threads_iniciadas, _thread_flush, _thread_vigia
+    """Sobe as threads de fundo uma unica vez: descarga das leituras + analise, o vigia dos episodios e a retencao."""
+    global _threads_iniciadas, _thread_flush, _thread_vigia, _thread_retencao
     with _threads_lock:
         if _threads_iniciadas:
             return
@@ -581,8 +602,11 @@ def iniciar_threads() -> None:
                                          name="flow-flush", daemon=True)
         _thread_vigia = threading.Thread(target=_loop, args=(passo_vigia, const_borda.INTERVALO_VIGIA_S),
                                          name="flow-vigia", daemon=True)
+        _thread_retencao = threading.Thread(target=_loop, args=(passo_retencao, const_borda.INTERVALO_RETENCAO_S, True),
+                                            name="flow-retencao", daemon=True)
         _thread_flush.start()
         _thread_vigia.start()
+        _thread_retencao.start()
         _threads_iniciadas = True
 
 
@@ -608,14 +632,14 @@ def encerrar(prazo_s: float | None = None) -> None:
     3. descarrega o que restou da fila de leituras;
     4. fecha o pool do banco.
     Idempotente. Leitura que nao coube no prazo ou no banco fora do ar e contada no log."""
-    global _threads_iniciadas, _thread_flush, _thread_vigia
+    global _threads_iniciadas, _thread_flush, _thread_vigia, _thread_retencao
     prazo = const_borda.PRAZO_ENCERRAMENTO_S if prazo_s is None else prazo_s
     with _threads_lock:
         _parar_flush.set()
-        for t in (_thread_flush, _thread_vigia):
+        for t in (_thread_flush, _thread_vigia, _thread_retencao):
             if t is not None:
                 t.join(prazo)
-        _thread_flush = _thread_vigia = None
+        _thread_flush = _thread_vigia = _thread_retencao = None
         print(f"  [borda] encerrando: {HUB.fechar_todas()} stream(s) SSE fechado(s)")
         perdidas = _descarga_final(prazo)
         if perdidas:

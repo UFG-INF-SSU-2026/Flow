@@ -53,7 +53,7 @@ Módulos do servidor (pacotes em `SensorServer/`):
 | Arquivo | Responsabilidade |
 | --- | --- |
 | **`borda/`** | Servidor 1: único com porta de rede, banco, segredos de transporte e contas. |
-| `borda/server.py` | Rotas; ingestão (aceita e põe a leitura numa fila limitada); thread de descarga (grava `leituras` em lote, manda o lote à análise e aplica as decisões); thread do vigia; `/estado`, `/dados` (debug) e `/health`. Executa com `python -m borda`. |
+| `borda/server.py` | Rotas; ingestão (aceita e põe a leitura numa fila limitada); thread de descarga (grava `leituras` em lote, manda o lote à análise e aplica as decisões); thread do vigia; thread da retenção (apaga o histórico antigo das tabelas comuns, de hora em hora); `/estado`, `/dados` (debug) e `/health`. Executa com `python -m borda`. |
 | `borda/cliente_analise.py` | Cliente da API da análise (`/analisar`, `/vigiar`, `/restaurar`), por HTTPS e confiando só na CA do projeto: prazo curto, detecta análise fora do ar e `boot_id` novo (análise reiniciada) e manda o estado de volta antes de seguir. |
 | `borda/efeitos.py` | Aplicar as decisões: grava confirmações, alertas, estado e, por fim, episódio + comando numa transação; só depois do commit entrega o push (SSE, app e wokwi). Se o banco falha, guarda as decisões e tenta de novo. |
 | `borda/servico.py` | Ponto de entrada da borda (`python -m borda`): serve só HTTPS em `FLOW_BORDA_HOST:FLOW_BORDA_PORT` (padrão `127.0.0.1:5000`; sem certificado não sobe), subida e desligamento ordenado. |
@@ -609,6 +609,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | Credencial errada repetida | Bloqueio temporário; negação no log. |
 | Corpo de requisição acima de 64 KiB | `413` sem processar o conteúdo; negação no log (sem o corpo). |
 | Falha que se repete a cada passo (log) | Cada tipo de falha do pipeline (banco fora, análise fora, lote recusado pela análise, fila de leituras ou de espera cheia com descarte, passo da thread de fundo que levanta, vigia que falha, decisões que o banco não aceitou) escreve **no máximo uma linha por `INTERVALO_LOG_FALHA_S`** (10 s), com limite **próprio por tipo**: uma falha não esconde a outra. As linhas dos descartes trazem o total acumulado, também visível em `/health` (`borda.leituras_descartadas`). |
+| Retenção das tabelas que crescem | `leituras`: política do TimescaleDB, 14 dias. `alertas`, `confirmacoes`, `episodios` encerrados e `comandos_push`: `DELETE` horário da borda (`passo_retencao`, com `flow_borda`), 90 dias; episódio aberto nunca é apagado. Banco fora do ar: uma linha de log (limite de repetição) e nova tentativa na hora seguinte. Os prazos superam de longe o que a restauração da análise usa (30 s de leituras, 1 h de episódios). |
 | Tabelas em memória com chave vinda do cliente | Limitadas (`MAX_IDENTIFICADORES_LOGIN`, `MAX_ESTADOS_LEGADOS`, `MAX_REFERENCIAS_DEDUP`): ao estourar, saem as mais antigas, para o consumo de memória não crescer sem limite. |
 | Dispositivo silencioso *(abstrato)* | Política registrada (alerta de "sem comunicação"), ainda sem rotina que a dispare; os dados para calculá-la existem (`ultima_atualizacao` na tabela de estado). |
 | Entrada inválida ou repetida | Descartada e logada; resposta `200`. |
@@ -704,9 +705,9 @@ Itens abstratos que **não** são elementos novos do sistema (esses estão em 2.
 
 ### 15.1 Pendências registradas
 
-- **Serviço de notificação aos cuidadores:** consumiria `alertas` e `confirmacoes` do banco como terceiro serviço; a separação entre borda e análise deixou o contrato pronto, sem o serviço.
+- **Serviço de notificação aos cuidadores:** seria um terceiro serviço, **cliente da borda** (conta com papel `cuidador`, HTTPS e token), nunca do banco nem da análise; precisaria de uma rota de leitura de `alertas` e `confirmacoes` na borda, restrita aos `user_id` do token. Receita em `docs/notificacao-cuidador.md`; o serviço e a rota não existem.
 - **Chave AES por dispositivo:** hoje fixa e compartilhada (13.2).
-- **Retenção e compressão de dados** (leituras antigas): `leituras` é uma hypertable do TimescaleDB, mas sem compressão, retenção nem agregados contínuos; as demais tabelas são comuns. Ver `docs/banco.md`.
+- **Compressão e resumos contínuos** (hora/dia): não feitos, de propósito, porque nenhuma regra os usa. A retenção existe (`leituras` 14 dias pela política do TimescaleDB; `alertas`, `confirmacoes`, `episodios` encerrados e `comandos_push`, 90 dias, por um passo horário da borda). Ver `docs/banco.md`.
 - **Refresh com o banco fora, no app:** a borda responde `503` ao refresh quando o banco está indisponível (a sessão não é consumida), mas `AuthClient.renovar` do app trata qualquer resposta sem corpo como refresh recusado e apaga a sessão local, deslogando o idoso. Correção prevista: em `renovar`, com código HTTP 500 ou mais, devolver `false` sem chamar `sair()`. O bridge não sofre disso: refaz o login e tenta de novo.
 - **Auditoria de negações em banco:** hoje a negação vai só para o log; guardar em tabela fica para quando for necessária.
 - **Fila de espera durável:** as filas de leituras e de itens à espera da análise são em memória; se a borda cair com a fila cheia, o que não foi gravado se perde (a análise se refaz do banco).

@@ -89,6 +89,12 @@ class Repo(ABC):
         """Apaga as sessoes com expira_em <= agora. Devolve quantas."""
 
     @abstractmethod
+    def podar_historico(self, corte: datetime) -> dict[str, int]:
+        """Retencao das tabelas comuns que crescem, numa transacao so: apaga `alertas` e `confirmacoes` com instante < corte,
+        `comandos_push` com criado_em < corte e `episodios` ENCERRADOS com atualizado_em < corte (episodio aberto nunca sai).
+        Devolve quantas linhas saíram de cada tabela. `leituras` fica de fora: a politica do TimescaleDB cuida dela."""
+
+    @abstractmethod
     def transacao(self) -> AbstractContextManager["Repo"]:
         """with repo.transacao() as tx: ... commit ao sair; qualquer excecao desfaz tudo."""
 

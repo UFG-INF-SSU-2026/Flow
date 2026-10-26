@@ -12,5 +12,8 @@ uu.md
 
 # CA e certificados TLS do projeto: chaves e certificados ficam fora do Git; o app embute uma copia do certificado da CA
 SensorServer/certs/
+
+# Backups do banco (dados pessoais): ficam fora do Git
+SensorServer/backups/
 SensorApp/app/src/main/res/raw/flow_cert.pem
 *.key

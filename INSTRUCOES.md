@@ -83,7 +83,7 @@ FLOW_DB_PASSWORD=<valor gerado>          # papel flow_borda (a borda; sem DDL)
 FLOW_DB_ADMIN_PASSWORD=<valor gerado>    # papel administrativo (docker compose, python -m flow_db, backup)
 ```
 
-O papel `flow_borda` é criado por `python -m flow_db migrar` (o `scripts/preparar.*` o executa). As variáveis `FLOW_DB_ADMIN_*` só são lidas pelo `docker compose` e por `python -m flow_db`; a borda nunca as recebe.
+Backup e restauração: `scripts/backup.sh [--testar]` (Windows: `scripts\backup.ps1 [-Testar]`), detalhes em `docs/banco.md`. O papel `flow_borda` é criado por `python -m flow_db migrar` (o `scripts/preparar.*` o executa). As variáveis `FLOW_DB_ADMIN_*` só são lidas pelo `docker compose` e por `python -m flow_db`; a borda nunca as recebe.
 
 A análise lê desse arquivo **só** as variáveis `FLOW_ANALISE_*` e `FLOW_TLS_*` (caminhos da CA, do certificado e da chave): o segredo dos tokens e a senha do banco nunca entram no ambiente dela. (Sem `.env`, é possível exportar as variáveis no terminal.)
 

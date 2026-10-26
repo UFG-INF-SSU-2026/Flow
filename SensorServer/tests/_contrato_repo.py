@@ -144,7 +144,29 @@ def contas_e_sessoes(repo):
     assert repo.consumir_sessao("b") is None and repo.consumir_sessao("c") == sessao("c", 30)
 
 
+def podar_historico_apaga_so_o_velho_e_nunca_episodio_aberto(repo):
+    corte = _t(100)
+    for seg in (50, 150):
+        repo.gravar_alerta({"instante": _t(seg), "user_id": 1, "device_id": None, "tipo": "luz", "mensagem": "m",
+                            "dados": {}, "episodio_id": None, "schema_version": 3})
+        repo.gravar_confirmacao({"instante": _t(seg), "user_id": 1, "tipo": "push.ack", "dados": {}, "episodio_id": None,
+                                 "message_id": None, "schema_version": 3})
+    repo.gravar_comando(comando("velho", seg=50, episodio="e1"))
+    repo.gravar_comando(comando("novo", seg=150, episodio="e1"))
+    repo.gravar_episodio(episodio(episodio_id="velho-encerrado", estado="encerrado", atualizado_em=_t(50), encerrado_em=_t(50)))
+    repo.gravar_episodio(episodio(episodio_id="velho-aberto", estado="aberto", atualizado_em=_t(50)))
+    repo.gravar_episodio(episodio(episodio_id="novo-encerrado", estado="encerrado", atualizado_em=_t(150), encerrado_em=_t(150)))
+    repo.gravar_leituras([leitura(50)])
+    assert repo.podar_historico(corte) == {"alertas": 1, "confirmacoes": 1, "comandos_push": 1, "episodios": 1}
+    assert repo.podar_historico(corte) == {"alertas": 0, "confirmacoes": 0, "comandos_push": 0, "episodios": 0}   # repetir nao apaga mais
+    restantes = {e["episodio_id"] for e in repo.listar_episodios_recentes(T0 - timedelta(days=1))}
+    assert restantes == {"velho-aberto", "novo-encerrado"}
+    assert [c["message_id"] for c in repo.listar_comandos_de_episodios(["e1"])] == ["novo"]
+    assert len(repo.ler_leituras_recentes(T0)) == 1                       # `leituras` nao e tocada por este metodo
+
+
 TODOS = [leituras_em_lote_e_recentes, listar_leituras_mais_recentes_primeiro_com_filtro_e_limite,
          comando_e_idempotente_pelo_message_id, alerta_e_confirmacao_voltam_com_id,
          episodio_upsert_preserva_encerramento_e_funde_dados, episodios_recentes_incluem_os_abertos_de_qualquer_idade,
-         estado_do_dispositivo_upsert_e_leitura_por_device, transacao_e_tudo_ou_nada, contas_e_sessoes]
+         estado_do_dispositivo_upsert_e_leitura_por_device, transacao_e_tudo_ou_nada, contas_e_sessoes,
+         podar_historico_apaga_so_o_velho_e_nunca_episodio_aberto]

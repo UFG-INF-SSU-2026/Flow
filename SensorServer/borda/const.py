@@ -126,6 +126,12 @@ RETENCAO_EPISODIOS_S = 3600
 # Falha repetida (banco ou analise fora do ar): no maximo uma linha de log neste intervalo (s).
 INTERVALO_LOG_FALHA_S = 10
 
+# Retencao das tabelas comuns que crescem (alertas, confirmacoes, episodios encerrados e comandos_push): um passo da borda a
+# cada INTERVALO_RETENCAO_S apaga o que tem mais de RETENCAO_HISTORICO_DIAS dias. Tem de ser MAIOR que o atraso maximo
+# tolerado (a restauracao da analise olha so RETENCAO_EPISODIOS_S). `leituras` tem retencao propria no banco (14 dias, migracao 0002).
+INTERVALO_RETENCAO_S = 3600
+RETENCAO_HISTORICO_DIAS = 90
+
 # ===========================================================================
 # 6. DESLIGAMENTO ORDENADO
 # ===========================================================================

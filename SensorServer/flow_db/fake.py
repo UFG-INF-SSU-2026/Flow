@@ -187,6 +187,18 @@ class BancoFalso(Repo):
             self.tabelas["sessoes"].remove(achada)
             return copy.deepcopy(achada)
 
+    def podar_historico(self, corte) -> dict:
+        with self.transacao():
+            saida = {}
+            for tabela, coluna, extra in (("alertas", "instante", None), ("confirmacoes", "instante", None),
+                                          ("comandos_push", "criado_em", None),
+                                          ("episodios", "atualizado_em", lambda l: l["estado"] == "encerrado")):
+                velhas = lambda l: l[coluna] < corte and (extra is None or extra(l))      # noqa: E731
+                antes = len(self.tabelas[tabela])
+                self.tabelas[tabela] = [l for l in self.tabelas[tabela] if not velhas(l)]
+                saida[tabela] = antes - len(self.tabelas[tabela])
+            return saida
+
     def podar_sessoes(self, agora) -> int:
         with self._lock:
             antes = len(self.tabelas["sessoes"])
