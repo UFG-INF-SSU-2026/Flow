@@ -72,7 +72,7 @@ Ainda faltam dimensões importantes de contexto (localização dentro da casa, s
 ### 3. Dispositivos e comunicação
 
 - **Smartphone Android:** concentra os sensores internos, realiza a coleta contínua e, desde o Marco 3, também **recebe do servidor** o pedido de confirmação quando uma queda é suspeitada.
-- **ESP32 simulado (Wokwi) + WokwiBridge:** segundo produtor de dados (acelerômetro MPU6050), com um **buzzer** e um botão "Estou bem". O ESP32 só fala serial; a ponte (bridge) faz a comunicação de rede por ele, nos dois sentidos.
+- **ESP32 simulado (Wokwi) + Bridge:** segundo produtor de dados (acelerômetro MPU6050), com um **buzzer** e um botão "Estou bem". O ESP32 só fala serial; a ponte (bridge) faz a comunicação de rede por ele, nos dois sentidos.
 - **Servidor local:** dois processos: a **borda** (Servidor 1) recebe os dados, autentica e autoriza quem os envia, grava no banco (PostgreSQL com TimescaleDB) e entrega as mensagens de volta aos dispositivos; a **análise** (Servidor 2, sem banco e escutando só em `127.0.0.1`) analisa o acelerômetro e decide, chamada apenas pela borda. Tudo na mesma rede Wi-Fi.
 - **Comunicação de ida (dispositivo → servidor):** HTTPS (TLS), a cada 1 segundo (intervalo editável), dentro da mesma sub-rede, sem exposição à internet nesta fase.
 - **Comunicação de volta (servidor → dispositivo):** push por **SSE**. O dispositivo abre a conexão com o servidor e o servidor empurra as mensagens por ela, então nenhum dispositivo precisa abrir porta para receber. No celular o canal só existe enquanto o app está aberto em primeiro plano (limitação assumida, ver `docs/arquitetura.md`, seção 13.2).
@@ -123,7 +123,7 @@ Vale notar que, mesmo com a comunicação restrita à rede local (sem exposiçã
 | --- | --- | --- |
 | **Sensores** | TCS3701 Light / CCT, LIS2DLC12 Accelerometer, Device Orientation Wake Up, Orientation Sensor, GeoMagnetic Rotation Vector, Magnetometer (calibrado e não calibrado); no Wokwi, acelerômetro MPU6050 | Percebem luminosidade, cor da luz, movimento e orientação, formando a base de contexto do sistema |
 | **Atuadores** | Alerta sonoro + botão "Estou bem" no app; buzzer + botão "Estou bem" + LEDs no Wokwi; aviso ao cuidador | Pedir confirmação ao idoso quando uma queda é suspeitada; notificar o cuidador quando o servidor identificar uma informação relevante |
-| **Gateway** | O smartphone Android (para os sensores do celular) e o `WokwiBridge` (para o ESP32 simulado) | Encaminham os dados ao servidor local via Wi-Fi, a cada 1s, e recebem as mensagens que o servidor envia de volta |
+| **Gateway** | O smartphone Android (para os sensores do celular) e o `Bridge` (para o ESP32 simulado) | Encaminham os dados ao servidor local via Wi-Fi, a cada 1s, e recebem as mensagens que o servidor envia de volta |
 
 ### Classificação
 
@@ -145,7 +145,7 @@ O diagrama abaixo representa a modelagem do fluxo do sistema em produção, desd
 
 ```mermaid
 flowchart TD
-    A["Sensores do smartphone<br/>(Light/CCT, Acelerômetro,<br/>Orientação, Magnetômetro)<br/>e acelerômetro do ESP32"] --> B["Gateway<br/>(App Android / WokwiBridge)"]
+    A["Sensores do smartphone<br/>(Light/CCT, Acelerômetro,<br/>Orientação, Magnetômetro)<br/>e acelerômetro do ESP32"] --> B["Gateway<br/>(App Android / Bridge)"]
     B --> C["Coleta e agregação de dados<br/>a cada 1s (intervalo editável)"]
     C --> D["Criptografia do JSON<br/>+ token de autenticação"]
     D --> E["Envio via Wi-Fi<br/>(rede local)"]

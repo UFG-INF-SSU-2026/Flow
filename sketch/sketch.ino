@@ -23,6 +23,10 @@
 */
 
 #include <Wire.h>
+#include "segredos.h"   // FLOW_IDENTIFICADOR e FLOW_SEGREDO (nao vai para o Git; modelo: segredos.h.example)
+#ifdef FLOW_TRANSPORTE_WIFI
+#include "transporte_wifi.h"   // experimental: HTTPS direto com o bridge (ver o arquivo)
+#endif
 
 // ---- MPU6050 ----
 const int MPU_ADDR = 0x68;
@@ -139,36 +143,51 @@ float calcMagnitude() {
   return sqrt(ax*ax + ay*ay + az*az);
 }
 
+// Toda linha de saida passa por aqui. Por padrao vai para a serial (o adaptador do bridge a le). Com FLOW_TRANSPORTE_WIFI
+// (experimental, ver transporte_wifi.h) vai tambem direto para a API HTTPS do bridge.
+void enviarLinha(const char* json) {
+  Serial.println(json);
+#ifdef FLOW_TRANSPORTE_WIFI
+  wifiEnviarEvento(json);
+#endif
+}
+
 // valueMax < 0 = nao incluir o campo (so imobilidade.leitura envia o pico do ciclo)
 void emitirEvento(const char* eventType, const char* estadoTexto, float value, float valueMax = -1.0) {
   sequence++;
-  Serial.print("{");
-  Serial.print("\"schemaVersion\":"); Serial.print(SCHEMA_VERSION); Serial.print(",");
-  Serial.print("\"eventType\":\""); Serial.print(eventType); Serial.print("\",");
-  Serial.print("\"deviceId\":\""); Serial.print(DEVICE_ID); Serial.print("\",");
-  Serial.print("\"entityId\":\""); Serial.print(ENTITY_ID); Serial.print("\",");
-  Serial.print("\"eventTimeMs\":"); Serial.print(millis()); Serial.print(",");
-  Serial.print("\"sequence\":"); Serial.print(sequence); Serial.print(",");
-  Serial.print("\"value\":"); Serial.print(value, 2); Serial.print(",");
-  if (valueMax >= 0.0) { Serial.print("\"valueMax\":"); Serial.print(valueMax, 2); Serial.print(","); }
-  Serial.print("\"unit\":\"m/s2\",");
-  Serial.print("\"state\":\""); Serial.print(estadoTexto); Serial.print("\"");
-  Serial.println("}");
+  char buf[256];
+  int n = snprintf(buf, sizeof(buf),
+    "{\"schemaVersion\":%d,\"eventType\":\"%s\",\"deviceId\":\"%s\",\"entityId\":\"%s\",\"eventTimeMs\":%lu,"
+    "\"sequence\":%lu,\"value\":%.2f,", SCHEMA_VERSION, eventType, DEVICE_ID, ENTITY_ID, (unsigned long)millis(),
+    (unsigned long)sequence, value);
+  if (valueMax >= 0.0) n += snprintf(buf + n, sizeof(buf) - n, "\"valueMax\":%.2f,", valueMax);
+  snprintf(buf + n, sizeof(buf) - n, "\"unit\":\"m/s2\",\"state\":\"%s\"}", estadoTexto);
+  enviarLinha(buf);
 }
 
 // Evento de retorno (push.ack / confirmacao.resposta): o bridge o envia a POST /eventos.
 void emitirEventoRetorno(const char* eventType, const char* estadoTexto, const char* messageId) {
   sequence++;
-  Serial.print("{");
-  Serial.print("\"schemaVersion\":"); Serial.print(SCHEMA_VERSION); Serial.print(",");
-  Serial.print("\"eventType\":\""); Serial.print(eventType); Serial.print("\",");
-  Serial.print("\"deviceId\":\""); Serial.print(DEVICE_ID); Serial.print("\",");
-  Serial.print("\"entityId\":\""); Serial.print(ENTITY_ID); Serial.print("\",");
-  Serial.print("\"eventTimeMs\":"); Serial.print(millis()); Serial.print(",");
-  Serial.print("\"sequence\":"); Serial.print(sequence); Serial.print(",");
-  Serial.print("\"messageId\":\""); Serial.print(messageId); Serial.print("\",");
-  Serial.print("\"state\":\""); Serial.print(estadoTexto); Serial.print("\"");
-  Serial.println("}");
+  char buf[256];
+  snprintf(buf, sizeof(buf),
+    "{\"schemaVersion\":%d,\"eventType\":\"%s\",\"deviceId\":\"%s\",\"entityId\":\"%s\",\"eventTimeMs\":%lu,"
+    "\"sequence\":%lu,\"messageId\":\"%s\",\"state\":\"%s\"}", SCHEMA_VERSION, eventType, DEVICE_ID, ENTITY_ID,
+    (unsigned long)millis(), (unsigned long)sequence, messageId, estadoTexto);
+  enviarLinha(buf);
+}
+
+// Login: o bridge repassa estas credenciais ao servidor, que decide (o firmware e o dono do segredo; o bridge e o adaptador
+// nao guardam nada). Enviado no inicio e sempre que o bridge pedir (CMD;LOGIN). FLOW_SEGREDO nao pode ter aspas nem barra
+// invertida (nao ha escape aqui). O segredo aparece no monitor serial do Wokwi: nao grave nem compartilhe a tela.
+void emitirLogin() {
+  char buf[256];
+  snprintf(buf, sizeof(buf), "{\"eventType\":\"login\",\"identificador\":\"%s\",\"segredo\":\"%s\",\"deviceId\":\"%s\"}",
+           FLOW_IDENTIFICADOR, FLOW_SEGREDO, DEVICE_ID);
+#ifdef FLOW_TRANSPORTE_WIFI
+  wifiLogin(buf);
+#else
+  Serial.println(buf);
+#endif
 }
 
 void desligarBuzzer() {
@@ -200,13 +219,14 @@ void ligarBuzzer(const char* messageId, long timeoutMs) {
   emitirEventoRetorno("push.ack", "ATIVADO", messageId);
 }
 
-// Linha de comando do bridge:  CMD;BUZZER_ON;<messageId>;<timeoutMs>   |   CMD;BUZZER_OFF;<messageId>;<motivo>
+// Linha de comando do bridge:  CMD;BUZZER_ON;<messageId>;<timeoutMs>   |   CMD;BUZZER_OFF;<messageId>;<motivo>   |   CMD;LOGIN
 void processarComando(char* linha) {
   char* ctx = nullptr;
   char* t0 = strtok_r(linha, ";", &ctx);
   char* t1 = strtok_r(nullptr, ";", &ctx);
   char* t2 = strtok_r(nullptr, ";", &ctx);
   char* t3 = strtok_r(nullptr, ";", &ctx);
+  if (t0 && strcmp(t0, "CMD") == 0 && t1 && strcmp(t1, "LOGIN") == 0) { emitirLogin(); return; }   // o bridge pediu o login
   if (!t0 || strcmp(t0, "CMD") != 0 || !t1 || !t2) return;   // linha que nao e comando: ignora
   if (strcmp(t1, "BUZZER_ON") == 0 && t3) {
     ligarBuzzer(t2, atol(t3));
@@ -297,6 +317,10 @@ void setup() {
   Serial.println("MPU6050 encontrado e iniciado!");
   Serial.println("Protótipo iniciado - perfil: Decisão e atuação (MPU6050)");
   Serial.println("Repouso = sliders zerados. Movimento = qualquer slider acima de 3 m/s²");
+#ifdef FLOW_TRANSPORTE_WIFI
+  wifiIniciar();
+#endif
+  emitirLogin();
 }
 
 void loop() {
@@ -313,6 +337,9 @@ void loop() {
 
   // --- Marco 3: comandos do servidor (via bridge) e buzzer, a cada volta do loop ---
   lerComandosSerial();
+#ifdef FLOW_TRANSPORTE_WIFI
+  wifiBuscarComandos();
+#endif
   atenderBuzzer();
 
   // --- Marco 3: amostragem rapida do MPU para capturar o PICO entre ciclos (valueMax) ---

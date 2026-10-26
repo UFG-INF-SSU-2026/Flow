@@ -16,6 +16,7 @@ int main() {
   g_pin[PIN_BTN_CONFIRM] = HIGH; g_pin[PIN_BTN_REARM] = HIGH;
   setup();
   CHECK(Wire.accelCfg == 0x10, "setup escreve ACCEL_CONFIG=0x10 (+-8g)");
+  CHECK(has("\"eventType\":\"login\""), "setup emite a linha de login");
   Serial.out.clear();
   // leitura: 1 g no eixo Z em +-8g = 4096 LSB -> 9.81 m/s2
   Wire.az = 4096; avanca(1100);
@@ -103,6 +104,13 @@ int main() {
   // fora de faixa
   Serial.out.clear(); Wire.az = 32767; Wire.ax = 32767; Wire.ay = 32767; avanca(1100);
   CHECK(!has("LEITURA_FORA_DE_FAIXA"), "~136 m/s2 (fundo de escala +-8g) < teto 160: nao e fora de faixa");
+  // login: o firmware entrega o login no inicio e quando o bridge pede (CMD;LOGIN); o segredo nao entra em eventos
+  Serial.out.clear();
+  Serial.feed("CMD;LOGIN\n"); avanca(30);
+  CHECK(has("\"eventType\":\"login\"") && has("\"identificador\":\"conta-teste\"") && has("\"segredo\":\"segredo-teste\"") && has("\"deviceId\":\"esp32-decisao-imobilidade-01\""), "CMD;LOGIN faz o firmware emitir a linha de login");
+  CHECK(g_tone_pin == -1, "CMD;LOGIN nao mexe no buzzer");
+  Serial.out.clear(); avanca(1100);
+  CHECK(has("imobilidade.leitura") && !has("segredo"), "eventos comuns nao carregam o segredo");
   std::cout << (fails ? "\nFALHAS: " : "\nFIRMWARE OK ") << fails << "\n";
   return fails;
 }

@@ -93,7 +93,7 @@ MAX_DEVICE_ID_LEN = 64
 # App (SensorApp): /dados source=app, leitura_ambiente e eventos de retorno vindos do app.
 SCHEMA_VERSION_APP = 3
 
-# Wokwi (firmware e WokwiBridge): /dados source=wokwi e eventos de retorno vindos do firmware/bridge.
+# Wokwi (firmware e Bridge): /dados source=wokwi e eventos de retorno vindos do firmware/bridge.
 SCHEMA_VERSION_WOKWI = 3
 
 # Mensagem: push que o servidor envia (confirmacao.solicitada / confirmacao.encerrada). App e bridge

@@ -29,7 +29,7 @@ Pelo laço concreto o sistema se aproxima de um **sistema ciber-físico**; o efe
 | Elemento | Papel | Concreto (existe) | Abstrato (visão) |
 | --- | --- | --- | --- |
 | **Sensores** | Percebem o ambiente e o comportamento do idoso | Luz/CCT, acelerômetro, orientação, magnetômetro (celular); acelerômetro MPU6050 (ESP32 simulado) | Localização, sinais vitais (pulseira, dados mockados), microfone para sons de queda |
-| **Produtor / gateway** | Concentra um ou mais sensores, monta o evento, cifra e envia ao servidor. Também é **consumidor**: recebe do servidor os pedidos de confirmação | App Android; dispositivo Wokwi (firmware ESP32 + ponte `WokwiBridge`, um único dispositivo lógico) | Dispositivo dedicado por sensor não coberto pelo celular (ex.: localização) |
+| **Produtor / gateway** | Concentra um ou mais sensores, monta o evento, cifra e envia ao servidor. Também é **consumidor**: recebe do servidor os pedidos de confirmação | App Android; dispositivos simples (Wokwi, ESP32, Arduino) por meio do `Bridge`, cada um com a sua conta | Dispositivo dedicado por sensor não coberto pelo celular (ex.: localização) |
 | **Servidor central** | Autentica, autoriza, valida, agrega, decide e envia mensagens de volta | `SensorServer`: um único ponto lógico de consumo, com visão consolidada por pessoa | Atender mais de uma residência (servidor assíncrono, estado externo), **mantendo a topologia em estrela** |
 | **Atuadores** | Produzem efeito observável a partir de uma decisão | Alerta sonoro e botão "Estou bem" (app); buzzer e botão (Wokwi); aviso ao cuidador registrado em `alertas` | Notificação real ao cuidador; histórico consultável; outras ações |
 
@@ -37,13 +37,13 @@ Cada pessoa monitorada pode ter **mais de um produtor simultâneo** (por exemplo
 
 ### 2.2 Componentes concretos
 
-Há **dois dispositivos** concretos, cada um com a sua conta e falando diretamente com o servidor: o **app Android** e o **dispositivo Wokwi**. Este último é formado por duas pastas, `sketch/` (firmware) e `WokwiBridge/` (ponte), que **juntas representam um único dispositivo**: para o servidor há uma conta, um `user_id` e um conjunto de eventos, e a ponte é apenas o meio pelo qual o ESP32 simulado, que só fala serial, alcança a rede.
+Há dois tipos de cliente do servidor, cada dispositivo com a sua conta: o **app Android** e os **dispositivos simples** (o ESP32 simulado em `sketch/`, placas, simuladores em software). Os dispositivos simples não falam com o servidor: chegam a ele pelo **`Bridge/`**, um gateway HTTPS que serve **vários dispositivos ao mesmo tempo**. Para o servidor, cada dispositivo é uma conta, um `deviceId` e um conjunto de eventos; o bridge é só o meio pelo qual ele os alcança. O app Android não usa o bridge.
 
 | Pasta | Componente | Responsabilidade |
 | --- | --- | --- |
 | `SensorApp/` | App Android (Kotlin) | Produtor real: sensores do celular. Faz login, envia telemetria, mantém o canal de push aberto e exibe o pedido de confirmação. |
 | `sketch/` | Dispositivo Wokwi: firmware ESP32 (`sketch.ino`, simulado no Wokwi) | Acelerômetro MPU6050, máquina de imobilidade local, buzzer e botões. Só fala serial. |
-| `WokwiBridge/` | Dispositivo Wokwi: ponte (`bridge.py`) | Parte do dispositivo que o liga à rede: autentica-se, repassa a telemetria da serial ao servidor e traduz as mensagens de push em comandos de texto para o firmware. |
+| `Bridge/` | Gateway HTTPS (`bridge.py`, `api.py`) e adaptadores (`adaptadores/`) | O bridge expõe uma API local, repassa o login de cada dispositivo ao servidor, carimba e envia os eventos e devolve os comandos já traduzidos. Os adaptadores (`serial.py`, `software.py`) ligam um dispositivo à API, um processo por dispositivo. |
 | `SensorServer/` | Servidor (Flask) | Módulos abaixo. |
 
 O sistema tem **três partes**: os **dispositivos** (app e Wokwi), o **Servidor 1 — a borda** (`python -m borda`) e o **Servidor 2 — a análise** (`python -m analise`). Só a borda fala com o mundo: autentica, valida, grava no banco, entrega o push e responde às consultas. A análise **só decide** (queda, imobilidade, luz): não tem banco, não tem credencial de dispositivo, não entrega nada e escuta só em `127.0.0.1`. **A borda é o único cliente da análise** (HTTPS local com token compartilhado). **Toda comunicação é cifrada com TLS, em todas as pontas** (dispositivos ↔ borda, borda ↔ análise, borda ↔ banco), com a CA própria do projeto (seção 5); nenhuma ponta fala em texto claro, nem em `127.0.0.1`. Um só `.env`; a análise copia dele apenas as variáveis `FLOW_ANALISE_*` e `FLOW_TLS_*` (caminhos da CA, do certificado e da chave). `python -m borda.server` sobe a mesma borda, sem desligamento ordenado, para desenvolvimento (com `FLOW_DB_FAKE=1`, sem Docker).
@@ -103,7 +103,7 @@ flowchart LR
         APP["App Android<br/>(conta: papel idoso)"]
         subgraph WK["Dispositivo Wokwi<br/>(conta: papel dispositivo)"]
             ESP["Firmware ESP32<br/>+ buzzer"]
-            BR["Ponte WokwiBridge"]
+            BR["Adaptador serial<br/>+ Bridge"]
             ESP <-->|"serial RFC2217<br/>localhost:4000"| BR
         end
     end
@@ -139,7 +139,7 @@ flowchart LR
 - **Ida (dispositivo → servidor):** `POST` HTTPS. Telemetria em `/dados`; eventos discretos (ack e resposta do idoso) em `/eventos`.
 - **Volta (servidor → dispositivo):** push por **SSE** (por que não WebSocket: seção 10.5). O **dispositivo abre** a conexão (`GET`) e o servidor empurra mensagens por ela. Nenhum dispositivo expõe porta; o servidor nunca precisa conhecer o endereço de um dispositivo.
 - **Borda e análise:** o Servidor 1 chama o Servidor 2 por HTTPS local (`/analisar`, `/vigiar`, `/restaurar`); o Servidor 2 nunca chama ninguém e nunca vê o banco. O banco é só do Servidor 1, e a conexão com ele é TLS.
-- **Estrela:** cada dispositivo fala diretamente com o servidor (a borda); não há nível intermediário entre dispositivos e servidor. O dispositivo Wokwi é um só: firmware e ponte compartilham uma conta e uma conexão com o servidor, e a ponte existe porque o ESP32 simulado só fala serial.
+- **Estrela:** cada dispositivo fala diretamente com o servidor (a borda); não há nível intermediário entre dispositivos e servidor. Os dispositivos simples chegam ao servidor pelo Bridge, que mantém uma sessão (e um canal de push) por dispositivo; ele existe porque o ESP32 simulado só fala serial e não deve guardar nem repassar a lógica de segurança.
 
 ### 3.1 Sistema completo (concreto e abstrato)
 
@@ -250,7 +250,7 @@ O hub SSE entrega por `(user_id, canal)`. Duas contas `dispositivo` com `user_id
 - **Envelope AES-256-GCM** em todo corpo, por cima do TLS: `{"nonce": "<base64>", "ciphertext": "<base64>"}` (nonce de 12 bytes aleatório por mensagem, tag de 128 bits ao final do ciphertext).
 - O mesmo envelope cifra o **push**: o `data:` de cada evento SSE é um envelope.
 - Implementações equivalentes em Python (`borda/crypto_utils.py` no servidor e `crypto_utils.py` no bridge) e Kotlin (`CryptoUtils.kt`, `javax.crypto`); ambas oferecem `encrypt` e `decrypt`.
-- O firmware **não** faz rede nem criptografia: a cifragem do Wokwi começa no bridge. A serial entre ESP32 e bridge é local e em texto.
+- O firmware **não** faz criptografia de rede: a cifragem do payload e o TLS com o servidor começam no bridge. O trecho firmware ↔ adaptador (serial) é local e em texto; o adaptador ↔ bridge é HTTPS. O segredo do dispositivo mora no firmware e passa só pelo login (nunca é guardado nem impresso).
 
 Por que HTTP (agora sobre TLS) e não MQTT, gRPC ou Kafka: o sistema tem um único consumidor lógico, eventos pequenos e periódicos e nenhuma necessidade de replay ou fan-out; HTTP é o menor mecanismo que atende. O volume e o número de consumidores são a premissa que, se mudar, reabre essa decisão; a topologia, mesmo assim, continua em estrela.
 
@@ -278,7 +278,7 @@ Fora disso **não há schema de aplicação unificado**: cada produtor define se
 | Telemetria do Wokwi | Firmware via bridge | `POST /dados` | `imobilidade.leitura` (com `value` e `valueMax`) e `imobilidade.decisao`. |
 | Retorno | App ou firmware | `POST /eventos` | `push.ack` (`ATIVADO`, `REJEITADO`) e `confirmacao.resposta` (`ESTOU_BEM`, `SEM_RESPOSTA`), com o `messageId` a que respondem. |
 | Push | Servidor | SSE | `queda.confirmacao_solicitada` (`timeoutMs`, `motivo`) e `queda.confirmacao_encerrada` (`resultado`). |
-| Comando serial | Ponte (servidor → firmware) | Serial local, texto, sem `schemaVersion` | `CMD;BUZZER_ON;<messageId>;<timeoutMs>` e `CMD;BUZZER_OFF;<messageId>;<motivo>`. |
+| Comando serial | Bridge e adaptador (servidor → firmware) | Serial local, texto, sem `schemaVersion` | `CMD;BUZZER_ON;<messageId>;<timeoutMs>`, `CMD;BUZZER_OFF;<messageId>;<motivo>` e `CMD;LOGIN` (pede o login ao firmware). O firmware responde ao login com uma linha JSON `{"eventType":"login","identificador":...,"segredo":...,"deviceId":...}`. |
 | Diagnóstico do firmware | Firmware via bridge | `POST /dados` | `sistema.erro`, com o código da falha (hoje `MPU_NAO_ENCONTRADO`, quando o MPU6050 não é detectado). Fica fora do vocabulário que o servidor processa: é descartado e logado, sem alerta e sem resposta de erro (`200`). |
 | Autenticação | App e bridge | `POST /auth/*` | Seção 4.2. |
 
@@ -567,20 +567,29 @@ Os dois dispositivos concretos são o **app Android** (11.1) e o **dispositivo W
 ### 11.2 Dispositivo Wokwi: firmware (`sketch.ino`)
 
 - MPU6050 em **±8 g** (`ACCEL_CONFIG = 0x10`, 4096 LSB/g), teto plausível 160 m/s²; amostragem a cada ~50 ms para o `valueMax` do ciclo de 1 s.
-- Lê comandos da serial sem bloquear: `CMD;BUZZER_ON;<messageId>;<timeoutMs>` e `CMD;BUZZER_OFF;<messageId>;<motivo>`.
+- Lê comandos da serial sem bloquear: `CMD;BUZZER_ON;<messageId>;<timeoutMs>`, `CMD;BUZZER_OFF;<messageId>;<motivo>` e `CMD;LOGIN`. É o dono do segredo da sua conta (`segredos.h`, fora do Git) e o entrega no login, no início e quando o bridge pede.
 - **Buzzer** (pino D13, `tone`/`noTone`): liga com timeout válido (`0 < t ≤ BUZZER_MAX_MS`), responde `push.ack`. Com o buzzer tocando, um `BUZZER_ON` com o **mesmo** `messageId` é ignorado (não reinicia o tempo nem repete o `push.ack`); com `messageId` **diferente**, substitui o episódio em curso. O botão "Estou bem" o desliga e emite `confirmacao.resposta ESTOU_BEM`; o fim do tempo emite `SEM_RESPOSTA`.
 - **Diagnóstico:** se não encontra o MPU6050, emite `sistema.erro` (`MPU_NAO_ENCONTRADO`); o evento segue pela ponte até `/dados` e o servidor o descarta e loga (6.2).
 - **Teto de segurança** `BUZZER_MAX_MS` (30 s): independente do servidor, impede que o buzzer fique ligado se o bridge ou o servidor falharem. É a única exceção a "o timeout vem só do servidor": `TIMEOUT_CONFIRMACAO_S` (em ms) precisa ser `≤ BUZZER_MAX_MS`, senão o firmware rejeita todo pedido (`push.ack REJEITADO`).
 - O botão "Estou bem" tem o mesmo significado na máquina de imobilidade do Marco 2 e no pedido do servidor: um clique vale para os dois, com efeitos independentes. O "Rearme" continua sendo o único que rearma a máquina local.
 
-### 11.3 Dispositivo Wokwi: ponte (`bridge.py`)
+### 11.3 Bridge (`Bridge/`): gateway HTTPS desacoplado
 
-A ponte liga o firmware à rede. É bidirecional, com duas atividades concorrentes que compartilham a sessão e a conexão serial:
+O bridge não conhece serial, Wokwi nem placa. Ele expõe uma **API HTTPS local** (`api.py`, Flask, TLS 1.2+) que qualquer dispositivo usa, e **vários dispositivos podem usá-la ao mesmo tempo**, cada um com a sua sessão (`sessao.py`). Quem fala com a serial ou simula o dispositivo é um **adaptador**, em outro processo (`adaptadores/serial.py` para Wokwi e placas; `adaptadores/software.py` para dispositivos simulados).
 
-- **Serial → servidor:** anexa `user_id` (vindo do login) e `source`, roteia por `eventType` (`imobilidade.*` → `/dados`; `push.ack` e `confirmacao.resposta` → `/eventos`), cifra e envia com Bearer; em `401` renova e repete uma vez; sem fila de retransmissão.
-- **Servidor → serial:** mantém `GET /push/wokwi`, decifra, confere `userId`, `schemaVersion` e validade, ignora `messageId` repetido, **valida a forma** do que vira linha serial (`messageId` só com `A-Z a-z 0-9 -` e até 39 caracteres; `payload` objeto; `timeoutMs` inteiro; `resultado` entre `CONFIRMADO`, `EXPIRADO` e `CANCELADO`; mensagem fora disso é descartada com log e nada é escrito) e traduz a mensagem em comando de texto escrito na serial (escrita protegida por lock; a conexão serial pode ser recriada pela reconexão).
-- A ponte não filtra a **faixa** do `timeoutMs`: quem rejeita valor fora de `0 < t ≤ BUZZER_MAX_MS` é o firmware, e o `push.ack REJEITADO` é a informação que chega ao servidor.
-- A ponte não toma decisões: decifra, valida, traduz, escreve.
+```text
+firmware --serial--> adaptador --HTTPS--> bridge --HTTPS--> servidor
+(segredo)            (sem credencial)     (sem conta)        (autentica e autoriza)
+```
+
+- **Quem decide o quê:** a autenticação e a autorização são do servidor. O bridge **repassa** o `POST /auth/login` do dispositivo (a conta é a dele, com `device_id` e fonte `wokwi`) e não tem conta nem senha própria; o segredo passa pela chamada de login e não é guardado em lugar nenhum, só os tokens, em memória. Se o refresh for recusado (`400`, `401`, `403`), o bridge **não** refaz o login sozinho (não tem o segredo): responde `401` com `{"codigo":"relogin"}` e o dispositivo manda o login de novo. Servidor ou banco fora (`5xx`, sem resposta) **não** derruba a sessão.
+- **Chaves:** o bridge tem a **chave privada** e o certificado da sua API (`certs/bridge.crt`/`bridge.key`, emitidos pela CA do projeto); adaptadores e firmware levam só a **chave pública** da CA e conferem o certificado (a verificação nunca é desligada). Para falar com o servidor, o bridge confia só nessa mesma CA.
+- **Token de sessão local:** o login devolve um token aleatório que amarra as chamadas seguintes à sessão do dispositivo que logou; não é credencial do servidor e não vale fora do bridge. O token de um dispositivo nas rotas de outro leva `403`. Há um teto de dispositivos simultâneos (`FLOW_BRIDGE_MAX_SIMULACOES`).
+- **API:** `POST /v1/login`; `POST /v1/dispositivos/<id>/eventos` (anexa `user_id`, vindo do login, e `source`; roteia por `eventType`: `imobilidade.*` → `/dados`, `push.ack` e `confirmacao.resposta` → `/eventos`; em `401` do servidor renova e repete uma vez; sem fila de retransmissão); `GET /v1/dispositivos/<id>/comandos?espera=<s>` (devolve e esvazia os comandos prontos, com espera opcional de até 25 s); `GET .../estado`; `DELETE /v1/dispositivos/<id>`. Um `4xx` do servidor volta com o mesmo código (por exemplo `403` quando o `deviceId` do evento difere do do token); servidor indisponível ou `5xx` viram `502`.
+- **Servidor → dispositivo:** cada sessão mantém `GET /push/wokwi`, decifra, confere `userId`, `schemaVersion` e validade, ignora `messageId` repetido, **valida a forma** do que vira comando (`messageId` só com `A-Z a-z 0-9 -` e até 39 caracteres; `payload` objeto; `timeoutMs` inteiro; `resultado` entre `CONFIRMADO`, `EXPIRADO` e `CANCELADO`; fora disso é descartada com log) e traduz em linha de comando, numa fila por dispositivo (`traducao.py`).
+- O bridge não filtra a **faixa** do `timeoutMs`: quem rejeita valor fora de `0 < t ≤ BUZZER_MAX_MS` é o firmware, e o `push.ack REJEITADO` é a informação que chega ao servidor.
+- O bridge não toma decisões: valida a forma, traduz e entrega.
+- **Adaptador serial:** pede o login ao firmware (`CMD;LOGIN`), o entrega ao bridge, repassa os eventos e escreve os comandos na serial; reconecta sozinho se a serial cair. **Wokwi direto pelo WiFi** é experimental (`sketch/transporte_wifi.h`, desligado por padrão, não testado): exige o Private Gateway do Wokwi (pago) para alcançar o PC.
 
 ---
 
@@ -591,7 +600,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | Situação | Comportamento |
 | --- | --- |
 | Falha de rede no envio (app ou bridge) | Evento descartado; o ciclo seguinte envia dados frescos. Sem fila. |
-| Fonte de dados indisponível (serial) | O bridge reconecta sozinho (`RECONECTAR_A_CADA_S`). |
+| Fonte de dados indisponível (serial) | O adaptador serial reconecta sozinho. |
 | Nenhum canal ativo no pedido | O resultado (`SEM_CANAL_ATIVO`) vai para o log; o episódio segue até o prazo e fecha `EXPIRADO`. Não há retransmissão pela borda: o anel guarda a mensagem só até expirar, e um dispositivo que conecte antes do `expiresAt` a recebe com `timeoutMs` reduzido. Depois de expirar, o pedido não vale. |
 | Bridge conectado, firmware mudo (simulação pausada) | Entrega ao canal, mas nenhum `push.ack`; o bridge descarta comandos expirados; o firmware tem o teto do buzzer. |
 | Conexão SSE cai | Reconexão com recuo exponencial e `Last-Event-ID`; reenvio só do não expirado, `timeoutMs` recalculado. |
@@ -634,7 +643,7 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 
 - **Chave AES fixa e compartilhada**, embutida no código dos dois lados. Produção: chave por dispositivo, negociada no pareamento (ECDH) ou guardada no Android Keystore.
 - **CA própria, sem rotação nem revogação:** quem tem a chave de um serviço (`certs/borda.key`, ...) se passa por ele, e quem tem a da CA (`certs/ca.key`) emite certificados que todos aceitam; os certificados de serviço valem 730 dias e a CA, dez anos. O app embute o certificado da CA, então trocar a CA exige recompilar (renovar um certificado de serviço, não). Produção: autoridade gerenciada, rotação e revogação automáticas e, se for o caso, mTLS.
-- **Criptografia do Wokwi começa no bridge;** a serial local ESP32 ↔ bridge é texto claro.
+- **Criptografia do dispositivo simples começa no bridge;** a serial local firmware ↔ adaptador é texto claro, e do adaptador em diante tudo é HTTPS.
 - **App só em primeiro plano:** o pedido de confirmação não chega com a tela bloqueada ou o app em segundo plano. Produção: Foreground Service e/ou FCM no `canal_app.py`, sem mudar o contrato.
 - **Tokens no aparelho** em `SharedPreferences` privado; produção: Android Keystore.
 - **Detecção de queda** por limiares iniciais, sem validação com dados reais.
@@ -666,7 +675,7 @@ A telemetria do app pode trazer o bloco opcional `localizacao` (contrato em `doc
 | `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de fundo da borda (descarga e vigia) e a exigência do segredo e da análise na subida; usado pela suíte de testes. |
 | `FLOW_SENHA` | ambiente da CLI `borda/auth.py` | Opcional; senha sem prompt ao criar contas. |
 | `FLOW_SEM_DOTENV` | ambiente (testes) | `1` impede a leitura dos `.env` reais; a suíte do servidor e a do bridge o definem. Variável de ambiente já definida sempre vence o `.env`. |
-| `FLOW_BRIDGE_ID`, `FLOW_BRIDGE_SECRET`, `FLOW_SERVIDOR`, `FLOW_TLS_CERT`, `FLOW_BRIDGE_DEVICE` | `WokwiBridge/.env` ou ambiente | Os dois primeiros são obrigatórios. `FLOW_SERVIDOR` precisa ser `https://` (padrão `https://127.0.0.1:5000`); `FLOW_TLS_CERT` é o arquivo em que a ponte confia: o `ca.crt` da CA do projeto (configure `../SensorServer/certs/ca.crt` no `WokwiBridge/.env`; o padrão do código da ponte ainda é o nome do certificado antigo). `FLOW_BRIDGE_DEVICE` (padrão: o `DEVICE_ID` de `sketch.ino`) é registrado no login e deve ser igual ao `deviceId` dos eventos do firmware (`403` se diferir, 4.3). |
+| `FLOW_SERVIDOR`, `FLOW_TLS_CA`, `FLOW_BRIDGE_HOST`, `FLOW_BRIDGE_PORT`, `FLOW_BRIDGE_API_CERT`, `FLOW_BRIDGE_API_KEY`, `FLOW_BRIDGE_MAX_SIMULACOES` | `Bridge/.env` ou ambiente | Todas têm padrão. `FLOW_SERVIDOR` precisa ser `https://` (padrão `https://127.0.0.1:5000`); `FLOW_TLS_CA` é a CA do projeto (`ca.crt`), a única confiança do bridge; a API escuta em `127.0.0.1:5443` com o par `bridge.crt`/`bridge.key`. O bridge não tem conta: a conta de cada dispositivo (identificador e segredo) está no firmware (`sketch/segredos.h`) e o `deviceId` é o do firmware. |
 | Usuário e senha, IP e porta | tela "Configurações" do app | O app usa sempre `https://`; o IP precisa estar no certificado. |
 | Timeout do botão | `SensorServer/comum/const.py` | Sem recompilar app nem firmware. |
 | Limiares, cooldown, fusão de fontes, retenções | `SensorServer/analise/const.py` | Idem. |
@@ -683,13 +692,13 @@ Ordem de subida: CA e certificados TLS e banco (`scripts/preparar.*` fazem os do
 | Alvo | Como | Observação |
 | --- | --- | --- |
 | Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, contrato e API da análise, contrato do repositório no banco falso, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização, banco e análise fora do ar, e queda ponta a ponta). O TLS tem um teste só de configuração (`tests/unit/test_tls.py`: o certificado serve a análise, o cliente da borda o confere e o banco recebe `verify-full`); os de integração seguem sem TLS. Nos testes de integração a análise roda em memória, no lugar do processo, chamada pelo mesmo cliente da produção (`tests/_pipeline.py`; a descarga, a análise e a entrega rodam de forma síncrona depois de cada POST), sobre o banco falso. `pytest -m banco` roda o mesmo contrato do repositório no PostgreSQL real (banco descartável `flow_teste`). Usa segredo próprio, sem threads de fundo, e usa o banco falso em memória, que também guarda contas e sessões: não toca nos dados reais. |
-| Ponte | `cd WokwiBridge && python -m pytest` (`pytest.ini`) | `tests/test_bridge.py`: tradução e validação das mensagens de push, roteamento das linhas da serial, parser SSE e renovação de sessão. Sem rede e sem serial. |
-| Ponte, ponta a ponta | `WokwiBridge/tests/fake_firmware.py` | Substitui a serial por um firmware falso (impacto, `push.ack`, `ESTOU_BEM`). Exige servidor no ar e `FLOW_BRIDGE_DEVICE=esp32-falso`. Não é pytest. |
+| Bridge | `cd Bridge && python -m pytest` (`pytest.ini`) | Tradução e validação das mensagens de push, parser SSE, login repassado sem guardar o segredo, renovação de sessão, API (token local, roteamento, limite, isolamento entre dois dispositivos) e linhas do adaptador serial. Sem rede e sem serial. |
+| Bridge, dispositivo simulado | `python -m adaptadores.software --device-id sim-a --identificador bridge1 --queda` (na pasta `Bridge`, com `FLOW_SIM_SEGREDO`) | Um dispositivo simulado em software (impacto, `push.ack`, `ESTOU_BEM`); suba vários para ver o isolamento. Exige servidor e bridge no ar. Não é pytest. |
 | Firmware | `sketch/host_test/` | Lógica do firmware no PC, com um Arduino falso; opcional. |
 | App | `SensorApp/app/src/test/` | Testes de unidade na JVM da validação das mensagens de push (`validarPush`). O restante do app (sensores, som, rede) não tem teste automatizado. |
 | Fim a fim sem hardware | `SensorServer/simular_queda.py` | Dispara o ciclo completo contra borda e análise reais (os dois processos no ar; confere as tabelas no banco). |
 
-O cooldown de 60 s entre episódios vale para os testes manuais: para repetir `simular_queda.py` ou `fake_firmware.py`, reinicie o servidor ou aguarde.
+O cooldown de 60 s entre episódios vale para os testes manuais: para repetir `simular_queda.py` ou o adaptador `software` com `--queda`, reinicie o servidor ou aguarde.
 
 ---
 
