@@ -4,6 +4,7 @@ Cliente da ANALISE (Servidor 2) do lado da borda: chama a API HTTP dela e cuida 
     analisar(itens)   manda um lote (Leitura/Resposta) e devolve as `Decisoes`
     vigiar(agora)     pede o encerramento por expiracao dos episodios vencidos
     degradado         True quando a ultima chamada falhou (o /health mostra)
+    ultima_resposta_ha_s  segundos desde a ultima resposta boa (None se nunca respondeu; o /health mostra)
 
 Quando a analise some ou reinicia: cada resposta traz o `boot_id` dela. Se for diferente do ultimo conhecido (ou ainda
 desconhecido), o estado em memoria dela foi perdido: antes de seguir, o cliente chama /restaurar com o que o banco sabe
@@ -14,6 +15,7 @@ O transporte e uma funcao `(metodo, caminho, corpo, timeout_s) -> dict`: em prod
 no certificado do projeto: comum/tls.py); nos testes, uma que chama `analise.api.Analise.tratar` direto, sem rede e sem TLS.
 """
 import threading
+import time
 from typing import Callable
 
 from borda import const as const_borda
@@ -64,6 +66,13 @@ class ClienteAnalise:
         self._boot_id: str | None = None
         self._lock = threading.RLock()       # o laco de descarga e o vigia chamam de threads diferentes
         self.degradado = False
+        self._ultima_resposta: float | None = None     # time.monotonic() da ultima resposta boa
+
+    @property
+    def ultima_resposta_ha_s(self) -> float | None:
+        """Segundos desde a ultima resposta boa da analise (uma casa decimal); None se ela nunca respondeu."""
+        ultima = self._ultima_resposta
+        return None if ultima is None else round(max(0.0, time.monotonic() - ultima), 1)
 
     # ---- chamadas ----
     def _enviar(self, metodo: str, caminho: str, corpo: dict | None, timeout_s: float) -> dict:
@@ -78,6 +87,7 @@ class ClienteAnalise:
             self.degradado = True
             raise AnaliseIndisponivel(type(e).__name__) from None
         self.degradado = False
+        self._ultima_resposta = time.monotonic()
         return resposta
 
     def _restaurar(self) -> None:

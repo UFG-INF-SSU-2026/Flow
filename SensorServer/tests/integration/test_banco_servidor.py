@@ -141,7 +141,8 @@ class TestAnaliseForaDoAr:
         assert len(server._fila_analise) == 2              # esperando
         server.passo_vigia()
         corpo = cli.get("/health").get_json()
-        assert corpo["status"] == "ok" and corpo["analise"] == {"estado": "degradado", "fila": 2}
+        assert corpo["status"] == "ok" and corpo["analise"]["estado"] == "degradado" and corpo["analise"]["fila"] == 2
+        assert corpo["analise"]["ultima_resposta_ha_s"] >= 0       # respondeu na subida (restauracao), depois parou
 
     def test_ao_voltar_a_analise_recebe_a_fila_e_o_health_normaliza(self, cli, tokens, banco, pipeline):
         pipeline.fora_do_ar = True

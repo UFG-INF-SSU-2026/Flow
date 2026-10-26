@@ -254,7 +254,7 @@ Com servidor, app e bridge rodando, confira:
 docker compose exec -T db psql -U flow -d flow -c "SELECT instante_ingestao, user_id, fonte FROM leituras ORDER BY id DESC LIMIT 5"
 ```
 
-Cada leitura aceita é uma linha, de `app` ou de `wokwi`, ligada ao usuário da conta. E `curl --cacert SensorServer/certs/ca.crt https://localhost:5000/health` mostra se a análise está respondendo (`analise.estado`: `ok` ou `degradado`).
+Cada leitura aceita é uma linha, de `app` ou de `wokwi`, ligada ao usuário da conta. E `curl --cacert SensorServer/certs/ca.crt https://localhost:5000/health` mostra se a análise está respondendo (`analise.estado`: `ok` ou `degradado`; `analise.ultima_resposta_ha_s` diz há quantos segundos ela respondeu pela última vez).
 
 ### Queda e confirmação — Wokwi
 

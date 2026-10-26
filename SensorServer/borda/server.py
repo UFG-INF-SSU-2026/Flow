@@ -83,7 +83,7 @@ _fila_leituras: list[dict] = []
 _fila_analise: list = []
 _descartes_leituras = 0
 _descartes_analise = 0
-_ultimo_log_falha = float("-inf")
+_ultimo_log: dict[str, float] = {}        # chave da falha -> instante (monotonic) da ultima linha de log escrita
 _cliente: "cliente_analise.ClienteAnalise | None" = None
 _aplicador = efeitos.Aplicador()
 
@@ -101,12 +101,12 @@ def _instante_origem(source: str, dados: dict) -> datetime | None:
         return None
 
 
-def _log_falha(mensagem: str) -> None:
-    """Falha repetida (banco ou analise fora do ar): no maximo uma linha de log por INTERVALO_LOG_FALHA_S."""
-    global _ultimo_log_falha
+def _log_falha(chave: str, mensagem: str) -> None:
+    """Falha que se repete a cada passo (banco ou analise fora do ar, fila cheia, passo que levanta): no maximo uma linha de
+    log por INTERVALO_LOG_FALHA_S **para cada `chave`**, assim uma falha nao esconde a outra."""
     agora = time.monotonic()
-    if agora - _ultimo_log_falha >= const_borda.INTERVALO_LOG_FALHA_S:
-        _ultimo_log_falha = agora
+    if agora - _ultimo_log.get(chave, float("-inf")) >= const_borda.INTERVALO_LOG_FALHA_S:
+        _ultimo_log[chave] = agora
         print(f"  [pipeline] {mensagem}")
 
 
@@ -129,8 +129,8 @@ def _enfileirar_leitura(user_id: int, source: str, device_id: str, dados: dict, 
         if excesso > 0:
             del _fila_leituras[:excesso]
             _descartes_leituras += excesso
-            print(f"  [db] fila de leituras cheia: {excesso} leitura(s) mais antiga(s) descartada(s) "
-                  f"(total {_descartes_leituras})")
+            _log_falha("fila_leituras", f"fila de leituras cheia: leitura(s) mais antiga(s) descartada(s) "
+                                        f"(total {_descartes_leituras})")
 
 
 def _entrar_na_fila_analise(itens: list, no_inicio: bool = False) -> None:
@@ -145,8 +145,8 @@ def _entrar_na_fila_analise(itens: list, no_inicio: bool = False) -> None:
         if excesso > 0:
             del _fila_analise[:excesso]
             _descartes_analise += excesso
-            print(f"  [analise] fila de espera cheia: {excesso} item(ns) mais antigo(s) descartado(s) "
-                  f"(total {_descartes_analise})")
+            _log_falha("fila_analise", f"fila de espera da analise cheia: item(ns) mais antigo(s) descartado(s) "
+                                       f"(total {_descartes_analise})")
 
 
 def _devolver_lote(lote: list[dict]) -> None:
@@ -158,6 +158,8 @@ def _devolver_lote(lote: list[dict]) -> None:
         if excesso > 0:
             del _fila_leituras[:excesso]
             _descartes_leituras += excesso
+            _log_falha("fila_leituras", f"fila de leituras cheia: leitura(s) mais antiga(s) descartada(s) "
+                                        f"(total {_descartes_leituras})")
 
 
 def _leitura_de_linha(linha: dict) -> Leitura:
@@ -182,7 +184,8 @@ def _descarregar_leituras() -> bool:
             repo.gravar_leituras(lote)
         except Exception as e:  # noqa: BLE001  (o banco nunca derruba a borda)
             _devolver_lote(lote)
-            _log_falha(f"banco indisponivel: {len(lote)}+ leitura(s) esperam na fila: {type(e).__name__}: {str(e)[:200]}")
+            _log_falha("banco", f"banco indisponivel: {len(lote)}+ leitura(s) esperam na fila: "
+                                f"{type(e).__name__}: {str(e)[:200]}")
             return False
         _entrar_na_fila_analise([_leitura_de_linha(l) for l in lote])
     return True
@@ -237,11 +240,11 @@ def _analisar_fila() -> bool:
         try:
             decisoes = _cliente.analisar(lote)
         except cliente_analise.AnaliseIndisponivel as e:
-            _log_falha(f"analise fora do ar ({e}): {len(lote)}+ item(ns) esperam na fila")
+            _log_falha("analise", f"analise fora do ar ({e}): {len(lote)}+ item(ns) esperam na fila")
             return False
         except cliente_analise.RequisicaoRecusada:
             decisoes = None
-            print(f"  [analise] lote de {len(lote)} item(ns) recusado pela analise: descartado")
+            _log_falha("analise_recusou", f"lote de {len(lote)} item(ns) recusado pela analise: descartado")
         with _fila_lock:
             del _fila_analise[:len(lote)]
         if decisoes is not None and not _aplicador.aplicar(decisoes):
@@ -255,7 +258,7 @@ def ciclo_pipeline() -> None:
         _descarregar_leituras()
         _analisar_fila()
     except Exception as e:  # noqa: BLE001  (a thread nunca pode morrer em silencio)
-        print(f"  [pipeline] falha no passo (a thread segue): {type(e).__name__}: {str(e)[:200]}")
+        _log_falha("passo", f"falha no passo (a thread segue): {type(e).__name__}: {str(e)[:200]}")
 
 
 def passo_vigia() -> None:
@@ -267,10 +270,10 @@ def passo_vigia() -> None:
         instante = tempo.agora_utc() - timedelta(seconds=const_borda.ATRASO_VIGIA_S)
         decisoes = _cliente.vigiar(instante)
     except cliente_analise.AnaliseIndisponivel as e:
-        _log_falha(f"analise fora do ar ({e}): o vigia nao encerra episodios ate ela voltar")
+        _log_falha("analise", f"analise fora do ar ({e}): o vigia nao encerra episodios ate ela voltar")
         return
     except Exception as e:  # noqa: BLE001
-        print(f"  [vigia] falha (a thread segue): {type(e).__name__}: {str(e)[:200]}")
+        _log_falha("vigia", f"falha no vigia (a thread segue): {type(e).__name__}: {str(e)[:200]}")
         return
     _aplicador.aplicar(decisoes)
 
@@ -510,12 +513,16 @@ def obter_estado_imobilidade(device_id):
 @app.route("/health", methods=["GET"])
 def health():
     """Disponibilidade da borda (`status`, como sempre) e a saude da analise: `analise.estado` e "degradado" quando a ultima
-    chamada a ela falhou (o vigia a chama a cada INTERVALO_VIGIA_S, entao a queda aparece em instantes). Sempre 200: a borda
-    esta de pe mesmo com a analise parada."""
+    chamada a ela falhou (o vigia a chama a cada INTERVALO_VIGIA_S, entao a queda aparece em instantes), `analise.fila` e o
+    que espera por ela e `analise.ultima_resposta_ha_s` os segundos desde a ultima resposta boa (null se nunca respondeu).
+    Sempre 200: a borda esta de pe mesmo com a analise parada."""
     with _fila_lock:
         espera = len(_fila_analise)
     degradado = _cliente is not None and _cliente.degradado
-    return jsonify({"status": "ok", "analise": {"estado": "degradado" if degradado else "ok", "fila": espera},
+    ha_s = None if _cliente is None else _cliente.ultima_resposta_ha_s
+    return jsonify({"status": "ok",
+                    "analise": {"estado": "degradado" if degradado else "ok", "fila": espera,
+                                "ultima_resposta_ha_s": ha_s},
                     "borda": _estatisticas_borda()})
 
 
