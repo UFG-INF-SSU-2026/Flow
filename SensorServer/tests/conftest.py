@@ -59,6 +59,7 @@ def _limpar_estado() -> None:
               regra_luz._estados):
         d.clear()
     server._fila_leituras.clear()
+    server._em_gravacao = 0
     server._fila_analise.clear()
     server._descartes_leituras = 0
     server._descartes_analise = 0

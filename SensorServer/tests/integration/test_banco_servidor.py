@@ -75,8 +75,10 @@ class TestLeituras:
     def test_com_o_banco_fora_a_borda_aceita_guarda_e_depois_grava_na_ordem(self, cli, tokens, banco, monkeypatch):
         original = repositorios.repo().gravar_leituras
         banco_fora = {"sim": True}
+        durante = []
 
         def instavel(lote):
+            durante.append(server._estatisticas_borda()["fila_leituras"])    # o que o /health mostraria na tentativa
             if banco_fora["sim"]:
                 raise ConnectionError("banco fora")
             return original(lote)
@@ -85,10 +87,12 @@ class TestLeituras:
             assert cli.post("/dados", _app(n=n), tokens["idoso"]).status_code == 200
         server._descarregar_leituras()                     # falha: nao levanta, o lote volta para a fila
         assert [l["payload"]["n"] for l in server._fila_leituras] == [0, 1, 2]
+        assert durante == [3] and server._estatisticas_borda()["fila_leituras"] == 3    # o lote em tentativa conta, sem duplicar
         assert server._fila_analise == []                  # nada foi a analise: o banco nao confirmou
         banco_fora["sim"] = False                          # o banco volta
         server._descarregar_leituras()
         assert [l["payload"]["n"] for l in _leituras(banco)] == [0, 1, 2] and server._fila_leituras == []
+        assert server._estatisticas_borda()["fila_leituras"] == 0
 
     def test_sem_banco_instalado_nada_e_enfileirado(self, cli, tokens):
         repositorios.desinstalar()

@@ -81,6 +81,7 @@ _thread_flush: threading.Thread | None = None
 _thread_vigia: threading.Thread | None = None
 _thread_retencao: threading.Thread | None = None
 _fila_leituras: list[dict] = []
+_em_gravacao = 0                          # tamanho do lote retirado da fila que a thread de fundo tenta gravar agora (/health)
 _fila_analise: list = []
 _descartes_leituras = 0
 _descartes_analise = 0
@@ -153,8 +154,9 @@ def _entrar_na_fila_analise(itens: list, no_inicio: bool = False) -> None:
 
 def _devolver_lote(lote: list[dict]) -> None:
     """Gravacao falhou: o lote volta para o INICIO da fila (ordem preservada), respeitando o teto."""
-    global _descartes_leituras
+    global _descartes_leituras, _em_gravacao
     with _fila_lock:
+        _em_gravacao = 0
         _fila_leituras[0:0] = lote
         excesso = len(_fila_leituras) - const_borda.MAX_FILA_LEITURAS
         if excesso > 0:
@@ -178,10 +180,12 @@ def _descarregar_leituras() -> bool:
     """Esvazia a fila de leituras em lotes: grava no banco e passa cada lote gravado para a fila da analise. Chamada SO
     pela thread de fundo (uma unica escritora de `leituras`; no desligamento, por `encerrar()` depois de a thread parar).
     Devolve False se a gravacao falhou (o lote voltou para a fila)."""
+    global _em_gravacao
     for _ in range(20):    # teto por passada: nao monopoliza a thread se a fila estiver enorme
         with _fila_lock:
             lote = _fila_leituras[:const_borda.TAMANHO_LOTE_LEITURAS]
             del _fila_leituras[:len(lote)]
+            _em_gravacao = len(lote)       # fora da fila, mas ainda nao gravado: o /health continua contando
         if not lote:
             return True
         try:
@@ -194,6 +198,8 @@ def _descarregar_leituras() -> bool:
             _log_falha("banco", f"banco indisponivel: {len(lote)}+ leitura(s) esperam na fila: "
                                 f"{type(e).__name__}: {str(e)[:200]}")
             return False
+        with _fila_lock:
+            _em_gravacao = 0
         _entrar_na_fila_analise([_leitura_de_linha(l) for l in lote])
     return True
 
@@ -316,7 +322,7 @@ def _loop(passo, intervalo_s: float, ao_iniciar: bool = False) -> None:
 
 def _estatisticas_borda() -> dict:
     with _fila_lock:
-        return {"fila_leituras": len(_fila_leituras), "leituras_descartadas": _descartes_leituras,
+        return {"fila_leituras": len(_fila_leituras) + _em_gravacao, "leituras_descartadas": _descartes_leituras,
                 "localizacao_rejeitadas": _localizacao_rejeitadas}
 
 
