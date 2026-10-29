@@ -4,13 +4,11 @@ import android.content.SharedPreferences
 import okhttp3.Authenticator
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.Route
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 /**
  * Autenticacao do app (Marco 3): login, renovacao do token e injecao do cabecalho Authorization.
@@ -21,6 +19,8 @@ import java.util.concurrent.TimeUnit
  * - O papel e o user_id vem do servidor. Este app so aceita o papel "idoso".
  *
  * login() e renovar() sao BLOQUEANTES: chame fora da thread principal.
+ * As chamadas saem pelo cliente unico [FlowHttp]; o interceptor e o autenticador abaixo ignoram rotas de autenticacao (/auth/...)
+ * (que nao leva Authorization nem pode disparar renovacao dentro da propria renovacao).
  */
 class AuthClient(
     private val prefs: SharedPreferences,
@@ -30,11 +30,6 @@ class AuthClient(
     data class Sessao(val accessToken: String, val refreshToken: String, val papel: String, val userId: Int)
     class LoginResult(val ok: Boolean, val mensagem: String)
 
-    // Cliente SEM interceptor/authenticator: usado so para /auth/* (evita recursao)
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .build()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     @Volatile
@@ -70,7 +65,7 @@ class AuthClient(
         sessao = null
     }
 
-    // ---------------------------------------------------------------- chamadas /auth/*
+    // ---------------------------------------------------------------- chamadas de autenticacao (/auth/...)
     /** Retorna (codigoHttp, corpoDecifrado ou null se a resposta nao foi 2xx). */
     private fun postCifrado(path: String, corpo: JSONObject): Pair<Int, JSONObject?> {
         val (nonce, ct) = CryptoUtils.encrypt(corpo.toString())
@@ -79,7 +74,7 @@ class AuthClient(
             .url(baseUrl() + path)
             .post(envelope.toString().toRequestBody(jsonType))
             .build()
-        http.newCall(req).execute().use { resp ->
+        FlowHttp.cliente.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return Pair(resp.code, null)
             val e = JSONObject(resp.body?.string().orEmpty())
             val claro = CryptoUtils.decrypt(e.getString("nonce"), e.getString("ciphertext"))
@@ -97,6 +92,7 @@ class AuthClient(
                 .put("device_id", deviceId)
             val (codigo, resp) = postCifrado("/auth/login", corpo)
             if (codigo == 429) return LoginResult(false, "Muitas tentativas. Aguarde alguns minutos.")
+            if (codigo >= 500) return LoginResult(false, "Servidor indisponível. Tente de novo em instantes.")
             if (resp == null) return LoginResult(false, "Usuário ou senha inválidos.")
             if (resp.getString("papel") != "idoso") {
                 return LoginResult(false, "Tipo de conta ainda não suportado neste app.")
@@ -118,7 +114,8 @@ class AuthClient(
     /**
      * Renova o par de tokens. [tokenUsado] = o access token que acabou de receber 401 (ou null para forcar):
      * se outra thread ja renovou nesse meio tempo, nao renova de novo.
-     * Refresh recusado -> sessao apagada + onSessaoExpirada. Falha de rede -> mantem a sessao (tenta depois).
+     * Refresh recusado (400, 401 ou 403) -> sessao apagada + onSessaoExpirada. Falha de rede ou do servidor (500 ou
+     * mais, como o 503 com o banco fora) -> mantem a sessao e devolve false (tenta depois).
      */
     @Synchronized
     fun renovar(tokenUsado: String?): Boolean {
@@ -126,10 +123,12 @@ class AuthClient(
         if (tokenUsado != null && atual.accessToken != tokenUsado) return true
         return try {
             val corpo = JSONObject().put("schemaVersion", 3).put("refresh_token", atual.refreshToken)
-            val (_, resp) = postCifrado("/auth/refresh", corpo)
+            val (codigo, resp) = postCifrado("/auth/refresh", corpo)
             if (resp == null) {
-                sair()
-                onSessaoExpirada?.invoke()
+                if (refreshEncerraSessao(codigo)) {
+                    sair()
+                    onSessaoExpirada?.invoke()
+                }
                 false
             } else {
                 salvar(
@@ -146,11 +145,11 @@ class AuthClient(
     }
 
     // ---------------------------------------------------------------- OkHttp
-    /** Injeta "Authorization: Bearer ..." em toda requisicao do cliente que o usar. */
+    /** Injeta "Authorization: Bearer ..." em toda requisicao, menos nas de rotas de autenticacao (/auth/...). */
     val interceptor: Interceptor = object : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
             val s = sessao
-            val req = if (s != null) {
+            val req = if (s != null && !ehRotaDeAuth(chain.request())) {
                 chain.request().newBuilder().header("Authorization", "Bearer ${s.accessToken}").build()
             } else {
                 chain.request()
@@ -162,6 +161,7 @@ class AuthClient(
     /** Em caso de 401: renova o token e repete a requisicao UMA vez (X-Retry-Auth evita laco). */
     val authenticator: Authenticator = object : Authenticator {
         override fun authenticate(route: Route?, response: Response): Request? {
+            if (ehRotaDeAuth(response.request)) return null
             if (response.request.header("X-Retry-Auth") != null) return null
             val usado = response.request.header("Authorization")?.removePrefix("Bearer ")
             if (!renovar(usado)) return null
@@ -172,4 +172,6 @@ class AuthClient(
                 .build()
         }
     }
+
+    private fun ehRotaDeAuth(req: Request): Boolean = req.url.encodedPath.startsWith("/auth/")
 }

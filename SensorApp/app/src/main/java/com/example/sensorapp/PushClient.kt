@@ -2,21 +2,19 @@ package com.example.sensorapp
 
 import android.os.Handler
 import android.os.Looper
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 /**
  * Canal de push servidor -> app (Marco 3), por SSE.
  *
  * O APP abre a conexao (GET /push/app) e o servidor empurra mensagens por ela: o celular nao expoe nenhuma porta.
- * O canal existe so enquanto o monitoramento esta ativo e o app em primeiro plano (conectar() em iniciarEnvio,
- * desconectar() em pararEnvio/onPause).
+ * O canal existe enquanto o monitoramento esta ativo: quem o hospeda e o [MonitorService] (servico em primeiro plano),
+ * que chama conectar() ao iniciar e desconectar() ao parar.
  *
  * Callbacks [onMensagem] e [onEstado] sao chamados na thread PRINCIPAL. [onMensagem] so recebe mensagem de forma
  * valida ([validarPush]); o que estiver fora do formato e descartado aqui, em silencio.
@@ -29,14 +27,8 @@ class PushClient(
 ) {
     private val main = Handler(Looper.getMainLooper())
 
-    // readTimeout > keepalive do servidor (15 s): detecta conexao morta sem derrubar um stream saudavel.
-    // (O padrao do OkHttp, 10 s, derrubaria o stream a cada intervalo entre keepalives.)
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(40, TimeUnit.SECONDS)
-        .addInterceptor(auth.interceptor)
-        .authenticator(auth.authenticator)
-        .build()
+    // Variante SSE do cliente unico (readTimeout > keepalive do servidor, sem prazo total de chamada).
+    private val client = FlowHttp.sse()
 
     private var eventSource: EventSource? = null
 

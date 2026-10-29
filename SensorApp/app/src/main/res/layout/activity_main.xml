@@ -85,6 +85,34 @@
         android:layout_height="wrap_content"
         android:text="Alertas: desconectado"
         android:textSize="14sp"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Aparece so com o monitoramento ligado e as notificacoes desligadas: o alarme segue dentro do app aberto -->
+    <TextView
+        android:id="@+id/tvAvisoNotificacao"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Aviso em segundo plano desligado: notificações não permitidas"
+        android:textSize="12sp"
+        android:textColor="#B26A00"
+        android:gravity="center"
+        android:visibility="gone"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Localizacao: desligada por padrao; o texto abaixo diz o que esta acontecendo -->
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/swLocalizacao"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Enviar localização"
+        android:layout_marginTop="16dp" />
+
+    <TextView
+        android:id="@+id/tvLocalizacao"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Localização: desligada"
+        android:textSize="14sp"
         android:layout_marginBottom="32dp" />
 
     <Button

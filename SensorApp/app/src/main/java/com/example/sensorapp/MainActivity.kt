@@ -1,25 +1,29 @@
 package com.example.sensorapp
 
+import android.Manifest
 import android.app.AlertDialog
 import android.content.Context
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
-import android.util.Log
+import android.view.View
 import android.view.WindowManager
 import android.widget.EditText
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.example.sensorapp.databinding.ActivityMainBinding
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -83,10 +87,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var prefs: android.content.SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
 
-    // Marco 3: autenticacao, push e alerta de confirmacao (criados em onCreate, depois do prefs)
-    private lateinit var auth: AuthClient
-    private lateinit var httpClient: OkHttpClient
-    private lateinit var pushClient: PushClient
+    // Estado do processo (sessao, cliente HTTP unico, eventos, localizacao): compartilhado com o MonitorService
+    private val app: FlowApp get() = application as FlowApp
+    private val auth: AuthClient get() = app.auth
     private lateinit var alerta: AlertaController
 
     private var isRunning = false
@@ -97,7 +100,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     // URL base do servidor. O user_id NAO e mais configurado a mao: vem do login (auth.userId).
     private val baseUrl: String
-        get() = "https://$serverIp:$serverPort"   // so HTTPS (res/xml/network_security_config.xml)
+        get() = app.baseUrl()   // so HTTPS (res/xml/network_security_config.xml)
 
     // Janela do acelerometro desde o ultimo envio (Marco 3): alimenta o bloco "acelerometro" do payload.
     private var accMagUltima = 0f
@@ -127,8 +130,42 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
      */
     private var ambientSeqNum: Long = 0L
 
-    private val deviceId: String by lazy {
-        Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "desconhecido"
+    private val deviceId: String get() = app.deviceId
+
+    // Localizacao (opcional, desligada por padrao): so a posicao nova ainda nao enviada entra no lote
+    private var ultimaLocalizacaoEnviadaMs = 0L
+    private var ajustandoSwitchLocalizacao = false
+    private val enviarLocalizacao: Boolean get() = prefs.getBoolean("enviar_localizacao", false)
+
+    // Permissoes pedidas em tempo de execucao (nunca no inicio do app, e o app funciona sem elas)
+    private val pedirNotificacao = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        atualizarAvisoNotificacao()
+    }
+    private val pedirLocalizacao = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { resultado ->
+        val concedida = resultado[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            resultado[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (concedida) {
+            ativarLocalizacao()
+        } else {
+            definirSwitchLocalizacao(false)
+            Toast.makeText(this, "Sem permissão de localização: o app segue funcionando sem enviar a posição.", Toast.LENGTH_LONG).show()
+            atualizarIndicadorLocalizacao()
+        }
+    }
+
+    // O servico de monitoramento avisa a tela (sempre na thread principal)
+    private val ouvinteServico = object : MonitorService.Ouvinte {
+        override fun aoEstadoPush(texto: String) {
+            binding.tvPush.text = "Alertas: $texto"
+        }
+
+        override fun aoEpisodio(episodio: MonitorService.Episodio?) {
+            if (episodio != null && MonitorService.telaVisivel) alerta.exibir(episodio.prazoElapsedMs) else alerta.esconder()
+        }
+
+        override fun aoParar() {
+            if (isRunning) pararEnvio()
+        }
     }
 
     private val sendRunnable = object : Runnable {
@@ -148,33 +185,39 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         prefs = getSharedPreferences("sensor_app_prefs", Context.MODE_PRIVATE)
 
-        // Carrega o IP/porta salvos anteriormente (ou usa o padrao, na primeira vez)
+        // Carrega o IP/porta salvos anteriormente (ou usa o padrao, na primeira vez). O FlowApp le a URL das preferencias.
+        if (!prefs.contains("server_ip") || !prefs.contains("server_port")) {
+            prefs.edit()
+                .putString("server_ip", prefs.getString("server_ip", DEFAULT_SERVER_IP))
+                .putString("server_port", prefs.getString("server_port", DEFAULT_SERVER_PORT))
+                .apply()
+        }
         serverIp = prefs.getString("server_ip", DEFAULT_SERVER_IP) ?: DEFAULT_SERVER_IP
         serverPort = prefs.getString("server_port", DEFAULT_SERVER_PORT) ?: DEFAULT_SERVER_PORT
 
-        // Marco 3: autenticacao + canal de push + alerta de confirmacao
-        auth = AuthClient(prefs, { baseUrl }, deviceId)
-        auth.onSessaoExpirada = {
+        // Marco 3: sessao expirada, falha de retorno e alerta de confirmacao (o canal de push vive no MonitorService)
+        app.aoSessaoExpirada = {
             runOnUiThread {
                 if (isRunning) pararEnvio()
                 atualizarStatus("Sessão expirada: faça login em Configurações", false)
                 atualizarTextoServidor()
             }
         }
-        httpClient = OkHttpClient.Builder()
-            .addInterceptor(auth.interceptor)
-            .authenticator(auth.authenticator)
-            .build()
-        alerta = AlertaController(this, binding.painelAlerta, binding.tvAlerta, binding.btnEstouBem) { tipo, estado, mid ->
-            enviarEventoRetorno(tipo, estado, mid)
+        app.eventos.aoFalhar = { texto -> atualizarStatus(texto, false) }
+        alerta = AlertaController(this, binding.painelAlerta, binding.tvAlerta, binding.btnEstouBem) {
+            MonitorService.responder("ESTOU_BEM")
         }
-        pushClient = PushClient(
-            auth,
-            { "$baseUrl/push/app" },
-            { msg -> alerta.aoReceber(msg) },
-            { estado -> binding.tvPush.text = "Alertas: $estado" }
-        )
+        MonitorService.ouvinte = ouvinteServico
         atualizarTextoServidor()
+
+        // Localizacao: desligada por padrao; so fica ligada se a permissao ainda valer
+        if (enviarLocalizacao && !Localizacao.temPermissao(this)) prefs.edit().putBoolean("enviar_localizacao", false).apply()
+        definirSwitchLocalizacao(enviarLocalizacao)
+        binding.swLocalizacao.setOnCheckedChangeListener { _, marcado ->
+            if (ajustandoSwitchLocalizacao) return@setOnCheckedChangeListener
+            if (marcado) pedirOuAtivarLocalizacao() else desativarLocalizacao()
+        }
+        atualizarIndicadorLocalizacao()
 
         binding.btnStartStop.setOnClickListener {
             try {
@@ -267,9 +310,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             isRunning = true
             binding.btnStartStop.text = "Parar"
             atualizarStatus("Coletando...", true)
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)   // o canal so existe em primeiro plano
-            pushClient.conectar()
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)   // vale so com a tela visivel
+            val comGps = enviarLocalizacao && Localizacao.temPermissao(this)
+            ultimaLocalizacaoEnviadaMs = 0L
+            if (comGps) app.localizacao.iniciar()
+            MonitorService.iniciar(this, comGps)      // o canal de push vive no servico em primeiro plano
+            binding.tvPush.text = "Alertas: conectando"
             handler.post(sendRunnable)
+            pedirPermissaoNotificacaoSeNecessario()
+            atualizarAvisoNotificacao()
+            atualizarIndicadorLocalizacao()
         } catch (e: Exception) {
             atualizarStatus("Erro ao iniciar: ${e.message}", false)
             isRunning = false
@@ -281,18 +331,131 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         binding.btnStartStop.text = "Iniciar"
         atualizarStatus("Parado", false)
         handler.removeCallbacks(sendRunnable)
-        pushClient.desconectar()
-        alerta.cancelar()
+        MonitorService.parar(this)
+        app.localizacao.parar()
+        alerta.esconder()
+        binding.tvPush.text = "Alertas: desconectado"
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         sensorManager.unregisterListener(this)
         activeSensors.clear()
+        atualizarAvisoNotificacao()
+        atualizarIndicadorLocalizacao()
     }
 
-    /** Para automaticamente o envio se o app sair de primeiro plano. */
-    override fun onPause() {
-        super.onPause()
+    /**
+     * O monitoramento continua com o app em segundo plano ou a tela apagada (o servico em primeiro plano mantem o
+     * processo vivo e o aviso vira notificacao). A tela so avisa o servico de que esta visivel ou nao.
+     */
+    override fun onStart() {
+        super.onStart()
+        MonitorService.definirTelaVisivel(true)
         if (isRunning) {
-            pararEnvio()
+            binding.tvPush.text = "Alertas: ${MonitorService.estadoPush}"
+            MonitorService.episodio?.let { alerta.exibir(it.prazoElapsedMs) }
+        }
+        atualizarAvisoNotificacao()
+        atualizarIndicadorLocalizacao()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        MonitorService.definirTelaVisivel(false)
+        alerta.esconder()
+    }
+
+    /** Fechar a tela encerra o monitoramento: nao ha coleta nem servico com o app fechado. */
+    override fun onDestroy() {
+        if (isRunning) pararEnvio()
+        if (MonitorService.ouvinte === ouvinteServico) MonitorService.ouvinte = null
+        app.aoSessaoExpirada = null
+        app.eventos.aoFalhar = null
+        super.onDestroy()
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Permissoes (pedidas na hora, com explicacao; o app funciona sem elas)
+    // ---------------------------------------------------------------------------------------
+
+    /** Android 13 ou superior: pergunta uma vez, quando o monitoramento comeca, por que quer mostrar notificacoes. */
+    private fun pedirPermissaoNotificacaoSeNecessario() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        if (prefs.getBoolean("notificacao_pedida", false)) return
+        prefs.edit().putBoolean("notificacao_pedida", true).apply()
+        AlertDialog.Builder(this)
+            .setTitle("Avisos em segundo plano")
+            .setMessage(
+                "Para avisar você quando a tela estiver apagada ou o app em segundo plano, o app precisa mostrar " +
+                    "notificações. Se preferir não permitir, o alarme continua tocando com o app aberto."
+            )
+            .setPositiveButton("Continuar") { _, _ -> pedirNotificacao.launch(Manifest.permission.POST_NOTIFICATIONS) }
+            .setNegativeButton("Agora não") { _, _ -> atualizarAvisoNotificacao() }
+            .setOnCancelListener { atualizarAvisoNotificacao() }
+            .show()
+    }
+
+    private fun atualizarAvisoNotificacao() {
+        val desligado = isRunning && !NotificationManagerCompat.from(this).areNotificationsEnabled()
+        binding.tvAvisoNotificacao.visibility = if (desligado) View.VISIBLE else View.GONE
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Localizacao (dado sensivel: desligada por padrao, pedida na hora, nunca em log)
+    // ---------------------------------------------------------------------------------------
+
+    private fun definirSwitchLocalizacao(ligado: Boolean) {
+        ajustandoSwitchLocalizacao = true
+        binding.swLocalizacao.isChecked = ligado
+        ajustandoSwitchLocalizacao = false
+    }
+
+    private fun pedirOuAtivarLocalizacao() {
+        if (Localizacao.temPermissao(this)) {
+            ativarLocalizacao()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Enviar localização")
+            .setMessage(
+                "A posição do aparelho será enviada ao servidor, junto com os dados do monitoramento (cifrada), " +
+                    "só enquanto o monitoramento estiver ligado. Você pode desligar a qualquer momento nesta tela."
+            )
+            .setPositiveButton("Continuar") { _, _ ->
+                pedirLocalizacao.launch(
+                    arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+                )
+            }
+            .setNegativeButton("Cancelar") { _, _ -> definirSwitchLocalizacao(false) }
+            .setOnCancelListener { definirSwitchLocalizacao(false) }
+            .show()
+    }
+
+    private fun ativarLocalizacao() {
+        prefs.edit().putBoolean("enviar_localizacao", true).apply()
+        definirSwitchLocalizacao(true)
+        if (isRunning) {
+            ultimaLocalizacaoEnviadaMs = 0L
+            app.localizacao.iniciar()
+            MonitorService.atualizarTipo(this, true)
+        }
+        atualizarIndicadorLocalizacao()
+    }
+
+    /** Desligar para a coleta e o envio imediatamente. */
+    private fun desativarLocalizacao() {
+        prefs.edit().putBoolean("enviar_localizacao", false).apply()
+        app.localizacao.parar()
+        if (isRunning) MonitorService.atualizarTipo(this, false)
+        atualizarIndicadorLocalizacao()
+    }
+
+    private fun atualizarIndicadorLocalizacao() {
+        binding.tvLocalizacao.text = when {
+            !enviarLocalizacao -> "Localização: desligada"
+            !isRunning -> "Localização: será enviada quando o monitoramento começar"
+            app.localizacao.posicao == null -> "Localização: ligada, aguardando posição"
+            app.localizacao.precisa -> "Localização: enviando (precisa)"
+            else -> "Localização: enviando (aproximada)"
         }
     }
 
@@ -361,6 +524,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             atualizarStatus("Erro ao montar dados: ${e.message}", false)
             return
         }
+        atualizarIndicadorLocalizacao()
 
         // Cifra o JSON inteiro (Marco 2) antes de enviar. O servidor decifra
         // o envelope e recupera o payload original (ver CryptoUtils.kt).
@@ -378,7 +542,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             .post(body)
             .build()
 
-        httpClient.newCall(request).enqueue(object : Callback {
+        FlowHttp.cliente.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 runOnUiThread {
                     atualizarStatus("Servidor indisponivel (tentando novamente)", false)
@@ -397,43 +561,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     } else {
                         atualizarStatus("Erro do servidor (codigo ${response.code})", false)
                     }
-                }
-            }
-        })
-    }
-
-    /**
-     * Evento de retorno ao servidor (POST /eventos): push.ack ou confirmacao.resposta.
-     * Sem fila de retransmissao (decisao de arquitetura): se falhar, o servidor expira o episodio sozinho.
-     */
-    private fun enviarEventoRetorno(eventType: String, state: String, messageId: String) {
-        val uid = auth.userId ?: return
-        val json = JSONObject().apply {
-            put("schemaVersion", SCHEMA_VERSION)
-            put("user_id", uid)
-            put("source", "app")
-            put("device_id", deviceId)
-            put("eventType", eventType)
-            put("messageId", messageId)
-            put("event_time", formatarIso8601(System.currentTimeMillis()))
-            put("state", state)
-        }
-        val (nonceB64, cipherB64) = CryptoUtils.encrypt(json.toString())
-        val envelope = JSONObject().put("nonce", nonceB64).put("ciphertext", cipherB64)
-        val body = envelope.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = Request.Builder().url("$baseUrl/eventos").post(body).build()
-
-        httpClient.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                runOnUiThread { atualizarStatus("Falha ao enviar $eventType ao servidor", false) }
-            }
-
-            override fun onResponse(call: Call, response: okhttp3.Response) {
-                response.close()
-                if (!response.isSuccessful) {
-                    // 401/403/400: o servidor recusou o retorno (autenticacao ou escopo). Sem retransmissao; deixa rastro.
-                    Log.w("MainActivity", "POST /eventos ($eventType $state) recusado: ${response.code}")
-                    runOnUiThread { atualizarStatus("Falha ao enviar $eventType ao servidor (código ${response.code})", false) }
                 }
             }
         })
@@ -475,6 +602,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         // Marco 3: bloco do acelerometro (entrada da regra de queda no servidor)
         montarAcelerometro()?.let { root.put("acelerometro", it) }
+
+        // Localizacao (so com o interruptor ligado): vai no lote que ja existe, uma vez por posicao nova
+        if (enviarLocalizacao) montarLocalizacao()?.let { root.put("localizacao", it) }
 
         return root
     }
@@ -539,10 +669,24 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         return bloco
     }
 
-    /** Formata um timestamp em milissegundos como ISO 8601 com offset (ex.: 2026-09-11T22:00:20.000-03:00). */
-    private fun formatarIso8601(millis: Long): String {
-        val formato = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
-        return formato.format(Date(millis))
+    /**
+     * Bloco "localizacao" (docs/schemas.md, 4.3) a partir da ultima posicao, enviado UMA vez por posicao nova (a coleta
+     * e a cada 30 s; o lote sai a cada 1 s). So descarta o absurdo ([montarBlocoLocalizacao]); o servidor valida.
+     * Posicao sem precisao informada nao e enviada. Latitude e longitude nunca vao para log.
+     */
+    private fun montarLocalizacao(): JSONObject? {
+        val local = app.localizacao.posicao ?: return null
+        if (local.time <= ultimaLocalizacaoEnviadaMs) return null
+        if (!local.hasAccuracy()) return null
+        val bloco = montarBlocoLocalizacao(
+            latitude = local.latitude,
+            longitude = local.longitude,
+            precisaoM = local.accuracy.toDouble(),
+            instanteMs = local.time,
+            agoraMs = System.currentTimeMillis()
+        ) ?: return null
+        ultimaLocalizacaoEnviadaMs = local.time
+        return bloco
     }
 
     // ---------------------------------------------------------------------------------------

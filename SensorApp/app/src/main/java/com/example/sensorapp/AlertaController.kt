@@ -7,19 +7,19 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.media.ToneGenerator
 import android.os.CountDownTimer
+import android.os.SystemClock
 import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
 
 /**
- * Pedido de confirmacao de queda no app (Marco 3).
+ * Aviso do pedido de confirmacao de queda DENTRO da tela (Marco 3): painel, botao "Estou bem", contagem regressiva e
+ * alarme (stream de ALARME).
  *
- * Ao receber "queda.confirmacao_solicitada": toca um alarme (stream de ALARME), mostra o botao "Estou bem" com
- * contagem regressiva de payload.timeoutMs (valor RELATIVO, vindo do servidor: nao ha constante de timeout aqui)
- * e avisa o servidor (push.ack ATIVADO). Botao -> confirmacao.resposta ESTOU_BEM; fim do tempo ->
- * confirmacao.resposta SEM_RESPOSTA. "queda.confirmacao_encerrada" (outro dispositivo ja respondeu, ou o prazo do
- * servidor acabou) para tudo SEM enviar evento, mas so se for do episodio em curso.
+ * Quem decide e o [MonitorService] (dono do episodio: push.ack, resposta e prazo); aqui so ha a apresentacao. [exibir]
+ * recebe o prazo absoluto (base de SystemClock.elapsedRealtime) e [esconder] silencia tudo. O botao nao envia nada:
+ * pede ao servico que responda ([aoTocarEstouBem]).
  *
  * Todos os metodos devem ser chamados na thread PRINCIPAL.
  */
@@ -28,80 +28,51 @@ class AlertaController(
     private val painel: View,
     private val tvAlerta: TextView,
     private val btnEstouBem: Button,
-    /** (eventType, state, messageId) -> envia POST /eventos */
-    private val aoResponder: (String, String, String) -> Unit
+    private val aoTocarEstouBem: () -> Unit
 ) {
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var timer: CountDownTimer? = null
     private var player: MediaPlayer? = null
     private var tom: ToneGenerator? = null
     private var volumeOriginal = -1
-    private var episodioAtivo: String? = null
-    private var messageIdAtivo: String? = null
+    private var prazoExibido = -1L
 
     init {
-        btnEstouBem.setOnClickListener { responder("ESTOU_BEM") }
+        btnEstouBem.setOnClickListener { aoTocarEstouBem() }
     }
 
-    /** [msg] ja teve a forma conferida (validarPush); o try/catch e a segunda barreira: nada aqui derruba o app. */
-    fun aoReceber(msg: MensagemPush) {
-        try {
-            when (msg) {
-                is MensagemPush.Solicitada -> iniciar(msg)
-                // So silencia o episodio em curso: uma "encerrada" de outro episodio nao pode calar o alarme atual.
-                is MensagemPush.Encerrada -> if (episodioAtivo == msg.episodeId) encerrarLocal()
-            }
-        } catch (e: Exception) {
-            Log.w("AlertaController", "mensagem de push nao tratada: ${e.javaClass.simpleName}")
-        }
-    }
-
-    /** O app parou / foi para segundo plano: silencia e esconde (o servidor expira o episodio sozinho). */
-    fun cancelar() = encerrarLocal()
-
-    private fun iniciar(msg: MensagemPush.Solicitada) {
-        val episodeId = msg.episodeId
-        if (episodioAtivo == episodeId) return                       // mesmo episodio: ja esta tocando
-        encerrarLocal()                                              // outro episodio: recomeca
-
-        val mid = msg.messageId
-        val timeoutMs = msg.timeoutMs
-        if (timeoutMs <= 0) {
-            aoResponder("push.ack", "REJEITADO", mid)
-            return
-        }
-
-        episodioAtivo = episodeId
-        messageIdAtivo = mid
-        painel.visibility = View.VISIBLE
-        tvAlerta.text = "Você está bem?"
-        tocarAlarme(timeoutMs)
-        aoResponder("push.ack", "ATIVADO", mid)
-
-        timer = object : CountDownTimer(timeoutMs, 250) {
-            override fun onTick(restanteMs: Long) {
-                tvAlerta.text = "Você está bem?\nToque no botão (${(restanteMs + 999) / 1000}s)"
-            }
-
-            override fun onFinish() {
-                responder("SEM_RESPOSTA")
-            }
-        }.start()
-    }
-
-    private fun responder(estado: String) {
-        val mid = messageIdAtivo ?: return
-        encerrarLocal()
-        aoResponder("confirmacao.resposta", estado, mid)
-    }
-
-    private fun encerrarLocal() {
+    /** O app foi para segundo plano ou o episodio acabou: silencia e esconde (a notificacao assume, se houver). */
+    fun esconder() {
         timer?.cancel()
         timer = null
         silenciar()
         painel.visibility = View.GONE
-        episodioAtivo = null
-        messageIdAtivo = null
+        prazoExibido = -1L
+    }
+
+    fun exibir(prazoElapsedMs: Long) {
+        try {
+            if (prazoExibido == prazoElapsedMs) return               // mesmo episodio: ja esta tocando
+            esconder()
+            val restanteMs = prazoElapsedMs - SystemClock.elapsedRealtime()
+            if (restanteMs <= 0) return
+
+            prazoExibido = prazoElapsedMs
+            painel.visibility = View.VISIBLE
+            tvAlerta.text = "Você está bem?"
+            tocarAlarme(restanteMs)
+            timer = object : CountDownTimer(restanteMs, 250) {
+                override fun onTick(restanteMs: Long) {
+                    tvAlerta.text = "Você está bem?\nToque no botão (${(restanteMs + 999) / 1000}s)"
+                }
+
+                override fun onFinish() {
+                    esconder()      // o servico envia o SEM_RESPOSTA no prazo
+                }
+            }.start()
+        } catch (e: Exception) {
+            Log.w("AlertaController", "alerta nao exibido: ${e.javaClass.simpleName}")
+        }
     }
 
     // ---------------------------------------------------------------- som
