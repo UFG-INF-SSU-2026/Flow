@@ -1,0 +1,2 @@
+{"timestamp": "2026-10-16T23:05:19.963119+00:00", "rota": "/auth/login", "status": 401, "motivo": "credenciais_invalidas", "conta": "bridge1", "ip": "127.0.0.1"}
+{"timestamp": "2026-10-16T23:05:23.031645+00:00", "rota": "/auth/login", "status": 401, "motivo": "credenciais_invalidas", "conta": "bridge1", "ip": "127.0.0.1"}
