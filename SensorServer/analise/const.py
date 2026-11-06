@@ -50,15 +50,21 @@ T_POS_IMPACTO_S = 3
 
 # Depois de um impacto, se passar mais que isto (s) sem leitura aproveitavel,
 # o impacto e descartado e a maquina volta a OBSERVANDO. A calibrar.
-INTERVALO_MAX_ENTRE_LEITURAS_S = 3
+INTERVALO_MAX_ENTRE_LEITURAS_S = 1
 
 # Idade maxima (s) da ultima leitura de uma fonte para participar da fusao de
 # fontes. Deve ser menor ou igual a INTERVALO_MAX_ENTRE_LEITURAS_S.
-JANELA_FUSAO_S = 2.0
+JANELA_FUSAO_S = 0.5
 
 # Intervalo minimo (s) entre episodios do mesmo usuario, contado a partir do
 # encerramento do anterior.
-COOLDOWN_S = 60
+COOLDOWN_S = 10
+
+# Reinicio do firmware (wokwi): o contador `sequence` e o `eventTimeMs` (ms desde que a placa ligou) recomecam do zero. Se o
+# `eventTimeMs` de um evento retroceder MAIS que isto (ms) em relacao ao ultimo aceito do mesmo dispositivo, a regra de
+# imobilidade entende que o firmware reiniciou e recomeca a contagem; retrocesso menor e evento atrasado ou repetido
+# (continua descartado). Um reinicio depois de uma execucao mais curta que isto (cerca de 6 s) nao e percebido.
+REINICIO_FIRMWARE_MS = 5000
 
 # No maximo um log de "leitura desatualizada" por (usuario, fonte, versao)
 # neste intervalo (s), para nao inundar o console.

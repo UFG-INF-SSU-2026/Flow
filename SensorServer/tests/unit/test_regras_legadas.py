@@ -47,6 +47,37 @@ class TestImobilidadeEstado:
         assert imob.eh_duplicado(1, ev_imob(seq=4)) is True
         assert imob.eh_duplicado(1, ev_imob(seq=6)) is False
 
+    def test_firmware_reiniciado_recomeca_a_contagem_em_vez_de_descartar_tudo(self, capsys):
+        for seq in range(1, 31):                                       # primeira execucao: 30 s
+            assert imob.eh_duplicado(1, ev_imob(seq=seq)) is False
+        assert imob.eh_duplicado(1, ev_imob(seq=1)) is False           # reiniciou: eventTimeMs voltou de 30000 para 1000
+        assert "reiniciou" in capsys.readouterr().out
+        assert imob.eh_duplicado(1, ev_imob(seq=2)) is False
+        assert imob.eh_duplicado(1, ev_imob(seq=2)) is True            # dentro da nova execucao a dedup volta a valer
+        assert imob.eh_duplicado(1, ev_imob(seq=1)) is True            # e um evento antigo dela continua descartado
+
+    def test_atraso_pequeno_nao_e_reinicio(self):
+        for seq in range(1, 31):
+            imob.eh_duplicado(1, ev_imob(seq=seq))
+        assert imob.eh_duplicado(1, ev_imob(seq=28)) is True           # recuo de 2 s, dentro da tolerancia
+        assert imob.eh_duplicado(1, ev_imob(seq=30)) is True           # repetido
+
+    def test_reinicio_rearma_o_alerta_do_dispositivo(self):
+        e1 = decisao("ALERTA_IMOBILIDADE", 20)
+        assert imob.eh_duplicado(1, e1) is False
+        assert imob.processar_evento(1, e1)["tipo"] == "alerta_imobilidade"
+        e2 = decisao("ALERTA_IMOBILIDADE", 3)                          # nova execucao do firmware
+        e2["eventTimeMs"] = 3000
+        assert imob.eh_duplicado(1, e2) is False                       # aceito como reinicio (3000 << 20000)
+        assert imob.processar_evento(1, e2)["tipo"] == "alerta_imobilidade"   # sem rearme manual, o alerta vale de novo
+
+    def test_reinicio_de_um_dispositivo_nao_afeta_outro(self):
+        for seq in range(1, 31):
+            imob.eh_duplicado(1, ev_imob(seq=seq, device="a"))
+            imob.eh_duplicado(1, ev_imob(seq=seq, device="b"))
+        assert imob.eh_duplicado(1, ev_imob(seq=1, device="a")) is False   # a reiniciou
+        assert imob.eh_duplicado(1, ev_imob(seq=30, device="b")) is True   # b segue com a sua contagem
+
     def test_alerta_so_uma_vez_e_rearma_com_estado_que_encerra(self):
         assert imob.processar_evento(1, decisao("ALERTA_IMOBILIDADE", 1))["tipo"] == "alerta_imobilidade"
         assert imob.processar_evento(1, decisao("ALERTA_IMOBILIDADE", 2)) is None

@@ -6,7 +6,7 @@ Duas fontes de dados, que podem pertencer ao MESMO usuario (o mesmo idoso pode e
 wokwi ao mesmo tempo):
 
     App Android (SensorApp)   -> cifra o JSON (AES-256-GCM, ver crypto_utils.py) -> POST /dados {"nonce", "ciphertext"}
-    Wokwi (via WokwiBridge)   -> o bridge le a serial do ESP32, anexa "user_id" e "source": "wokwi", cifra e -> POST /dados
+    Wokwi (via Bridge)        -> o bridge recebe os eventos do dispositivo (por um adaptador), anexa "user_id" e "source": "wokwi", cifra e -> POST /dados
 
 Autenticacao e autorizacao: nenhuma rota de dados e aberta. O cliente faz login em POST /auth/login (identificador, segredo,
 fonte e device_id, cifrados com a mesma chave) e recebe, tambem cifrados, um access token e um refresh token (auth.py). O

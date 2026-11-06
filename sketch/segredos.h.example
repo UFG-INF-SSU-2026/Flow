@@ -1,0 +1,20 @@
+#pragma once
+// Copie este arquivo para "segredos.h" (na mesma pasta) e preencha. O "segredos.h" NAO vai para o Git.
+// No Wokwi (site), crie o arquivo segredos.h no projeto e cole o conteudo.
+//
+// Conta do tipo "dispositivo" criada no servidor para ESTE firmware (uma por dispositivo, fonte "wokwi"). O firmware e o dono
+// do segredo: ele o entrega ao bridge no login, e o bridge o repassa ao servidor sem guardar. Sem aspas nem barra invertida.
+#define FLOW_IDENTIFICADOR "bridge1"
+#define FLOW_SEGREDO       "troque-pela-senha-da-conta"
+
+// ---- Opcional e EXPERIMENTAL: HTTPS direto com o bridge pelo WiFi (sem serial/adaptador). Ver transporte_wifi.h. ----
+// Descomente para ligar. Exige o Private Gateway do Wokwi (plano pago), que expoe o seu PC como host.wokwi.internal; o
+// certificado da API do bridge precisa ter esse nome (gerar_certificado.py --nome bridge --dns host.wokwi.internal).
+// #define FLOW_TRANSPORTE_WIFI
+// #define FLOW_BRIDGE_URL "https://host.wokwi.internal:5443"
+// Chave PUBLICA da CA do projeto (SensorServer/certs/ca.crt): e o unico certificado em que o firmware confia.
+// static const char FLOW_CA_PEM[] = R"PEM(
+// -----BEGIN CERTIFICATE-----
+// ...cole aqui o conteudo de ca.crt...
+// -----END CERTIFICATE-----
+// )PEM";

@@ -23,6 +23,10 @@
 */
 
 #include <Wire.h>
+#include "segredos.h"   // FLOW_IDENTIFICADOR e FLOW_SEGREDO (nao vai para o Git; modelo: segredos.h.example)
+#ifdef FLOW_TRANSPORTE_WIFI
+#include "transporte_wifi.h"   // experimental: HTTPS direto com o bridge (ver o arquivo)
+#endif
 
 // ---- MPU6050 ----
 const int MPU_ADDR = 0x68;
@@ -99,6 +103,13 @@ bool pendingBuzzerConfirm = false;   // clique em "Estou bem" enquanto o buzzer 
 
 // ---- Buzzer / comandos recebidos pela serial (Marco 3) ----
 bool buzzerAtivo = false;
+
+// LEDs exclusivos: AMARELO = suspeita (a maquina local esta fora de NORMAL), VERMELHO = certeza (o servidor pediu a confirmacao
+// e o buzzer toca). Com o vermelho aceso o amarelo apaga; um "Estou bem" ja pressionado e ainda nao consumido pela maquina
+// tambem o apaga na hora (sem piscar ate o proximo ciclo). Chamado a cada mudanca de estado, de buzzer ou de botao.
+void atualizarLedAmarelo() {
+  digitalWrite(PIN_LED_SUSPEITA, (estado != NORMAL && !buzzerAtivo && !pendingConfirm) ? HIGH : LOW);
+}
 unsigned long tBuzzerInicio = 0;
 unsigned long buzzerTimeoutMs = 0;
 char buzzerMsgId[40] = "";
@@ -139,42 +150,58 @@ float calcMagnitude() {
   return sqrt(ax*ax + ay*ay + az*az);
 }
 
+// Toda linha de saida passa por aqui. Por padrao vai para a serial (o adaptador do bridge a le). Com FLOW_TRANSPORTE_WIFI
+// (experimental, ver transporte_wifi.h) vai tambem direto para a API HTTPS do bridge.
+void enviarLinha(const char* json) {
+  Serial.println(json);
+#ifdef FLOW_TRANSPORTE_WIFI
+  wifiEnviarEvento(json);
+#endif
+}
+
 // valueMax < 0 = nao incluir o campo (so imobilidade.leitura envia o pico do ciclo)
 void emitirEvento(const char* eventType, const char* estadoTexto, float value, float valueMax = -1.0) {
   sequence++;
-  Serial.print("{");
-  Serial.print("\"schemaVersion\":"); Serial.print(SCHEMA_VERSION); Serial.print(",");
-  Serial.print("\"eventType\":\""); Serial.print(eventType); Serial.print("\",");
-  Serial.print("\"deviceId\":\""); Serial.print(DEVICE_ID); Serial.print("\",");
-  Serial.print("\"entityId\":\""); Serial.print(ENTITY_ID); Serial.print("\",");
-  Serial.print("\"eventTimeMs\":"); Serial.print(millis()); Serial.print(",");
-  Serial.print("\"sequence\":"); Serial.print(sequence); Serial.print(",");
-  Serial.print("\"value\":"); Serial.print(value, 2); Serial.print(",");
-  if (valueMax >= 0.0) { Serial.print("\"valueMax\":"); Serial.print(valueMax, 2); Serial.print(","); }
-  Serial.print("\"unit\":\"m/s2\",");
-  Serial.print("\"state\":\""); Serial.print(estadoTexto); Serial.print("\"");
-  Serial.println("}");
+  char buf[256];
+  int n = snprintf(buf, sizeof(buf),
+    "{\"schemaVersion\":%d,\"eventType\":\"%s\",\"deviceId\":\"%s\",\"entityId\":\"%s\",\"eventTimeMs\":%lu,"
+    "\"sequence\":%lu,\"value\":%.2f,", SCHEMA_VERSION, eventType, DEVICE_ID, ENTITY_ID, (unsigned long)millis(),
+    (unsigned long)sequence, value);
+  if (valueMax >= 0.0) n += snprintf(buf + n, sizeof(buf) - n, "\"valueMax\":%.2f,", valueMax);
+  snprintf(buf + n, sizeof(buf) - n, "\"unit\":\"m/s2\",\"state\":\"%s\"}", estadoTexto);
+  enviarLinha(buf);
 }
 
 // Evento de retorno (push.ack / confirmacao.resposta): o bridge o envia a POST /eventos.
 void emitirEventoRetorno(const char* eventType, const char* estadoTexto, const char* messageId) {
   sequence++;
-  Serial.print("{");
-  Serial.print("\"schemaVersion\":"); Serial.print(SCHEMA_VERSION); Serial.print(",");
-  Serial.print("\"eventType\":\""); Serial.print(eventType); Serial.print("\",");
-  Serial.print("\"deviceId\":\""); Serial.print(DEVICE_ID); Serial.print("\",");
-  Serial.print("\"entityId\":\""); Serial.print(ENTITY_ID); Serial.print("\",");
-  Serial.print("\"eventTimeMs\":"); Serial.print(millis()); Serial.print(",");
-  Serial.print("\"sequence\":"); Serial.print(sequence); Serial.print(",");
-  Serial.print("\"messageId\":\""); Serial.print(messageId); Serial.print("\",");
-  Serial.print("\"state\":\""); Serial.print(estadoTexto); Serial.print("\"");
-  Serial.println("}");
+  char buf[256];
+  snprintf(buf, sizeof(buf),
+    "{\"schemaVersion\":%d,\"eventType\":\"%s\",\"deviceId\":\"%s\",\"entityId\":\"%s\",\"eventTimeMs\":%lu,"
+    "\"sequence\":%lu,\"messageId\":\"%s\",\"state\":\"%s\"}", SCHEMA_VERSION, eventType, DEVICE_ID, ENTITY_ID,
+    (unsigned long)millis(), (unsigned long)sequence, messageId, estadoTexto);
+  enviarLinha(buf);
+}
+
+// Login: o bridge repassa estas credenciais ao servidor, que decide (o firmware e o dono do segredo; o bridge e o adaptador
+// nao guardam nada). Enviado no inicio e sempre que o bridge pedir (CMD;LOGIN). FLOW_SEGREDO nao pode ter aspas nem barra
+// invertida (nao ha escape aqui). O segredo aparece no monitor serial do Wokwi: nao grave nem compartilhe a tela.
+void emitirLogin() {
+  char buf[256];
+  snprintf(buf, sizeof(buf), "{\"eventType\":\"login\",\"identificador\":\"%s\",\"segredo\":\"%s\",\"deviceId\":\"%s\"}",
+           FLOW_IDENTIFICADOR, FLOW_SEGREDO, DEVICE_ID);
+#ifdef FLOW_TRANSPORTE_WIFI
+  wifiLogin(buf);
+#else
+  Serial.println(buf);
+#endif
 }
 
 void desligarBuzzer() {
   noTone(PIN_BUZZER);
   buzzerAtivo = false;
   digitalWrite(PIN_LED_ALERTA, LOW);   // LED vermelho acompanha o pedido do servidor
+  atualizarLedAmarelo();               // sem o vermelho, o amarelo volta se a suspeita local continua
 }
 
 void ligarBuzzer(const char* messageId, long timeoutMs) {
@@ -197,21 +224,28 @@ void ligarBuzzer(const char* messageId, long timeoutMs) {
   pendingBuzzerConfirm = false;
   tone(PIN_BUZZER, BUZZER_FREQ_HZ);
   digitalWrite(PIN_LED_ALERTA, HIGH);  // LED vermelho: so liga quando o servidor pede (BUZZER_ON)
+  atualizarLedAmarelo();               // certeza: o amarelo (suspeita) apaga
   emitirEventoRetorno("push.ack", "ATIVADO", messageId);
 }
 
-// Linha de comando do bridge:  CMD;BUZZER_ON;<messageId>;<timeoutMs>   |   CMD;BUZZER_OFF;<messageId>;<motivo>
+// Linha de comando do bridge:  CMD;BUZZER_ON;<messageId>;<timeoutMs>   |   CMD;BUZZER_OFF;<messageId>;<motivo>   |   CMD;LOGIN
 void processarComando(char* linha) {
   char* ctx = nullptr;
   char* t0 = strtok_r(linha, ";", &ctx);
   char* t1 = strtok_r(nullptr, ";", &ctx);
   char* t2 = strtok_r(nullptr, ";", &ctx);
   char* t3 = strtok_r(nullptr, ";", &ctx);
+  if (t0 && strcmp(t0, "CMD") == 0 && t1 && strcmp(t1, "LOGIN") == 0) { emitirLogin(); return; }   // o bridge pediu o login
   if (!t0 || strcmp(t0, "CMD") != 0 || !t1 || !t2) return;   // linha que nao e comando: ignora
   if (strcmp(t1, "BUZZER_ON") == 0 && t3) {
     ligarBuzzer(t2, atol(t3));
   } else if (strcmp(t1, "BUZZER_OFF") == 0) {
-    if (buzzerAtivo) desligarBuzzer();                       // encerrado pelo servidor: desliga sem evento
+    if (buzzerAtivo) {                                       // encerrado pelo servidor: desliga sem evento
+      desligarBuzzer();
+      // Confirmado por outro dispositivo (o app): vale como o "Estou bem" daqui. So com o buzzer tocando: um BUZZER_OFF
+      // reenviado na reconexao nao pode apagar um alerta local sem relacao com ele.
+      if (t3 && strcmp(t3, "CONFIRMADO") == 0) { pendingConfirm = true; atualizarLedAmarelo(); }
+    }
   }
 }
 
@@ -297,6 +331,10 @@ void setup() {
   Serial.println("MPU6050 encontrado e iniciado!");
   Serial.println("Protótipo iniciado - perfil: Decisão e atuação (MPU6050)");
   Serial.println("Repouso = sliders zerados. Movimento = qualquer slider acima de 3 m/s²");
+#ifdef FLOW_TRANSPORTE_WIFI
+  wifiIniciar();
+#endif
+  emitirLogin();
 }
 
 void loop() {
@@ -305,6 +343,7 @@ void loop() {
   bool bordaConfirm = debounceRead(PIN_BTN_CONFIRM, lastRawConfirm, stableConfirm, lastChangeConfirm);
   if (bordaConfirm && stableConfirm == LOW) {
     pendingConfirm = true;                       // maquina de imobilidade (Marco 2), consumido no ciclo de 1 s
+    atualizarLedAmarelo();                       // o amarelo apaga na hora
     if (buzzerAtivo) pendingBuzzerConfirm = true; // resposta ao pedido do servidor (Marco 3), tratado ja
   }
 
@@ -313,6 +352,9 @@ void loop() {
 
   // --- Marco 3: comandos do servidor (via bridge) e buzzer, a cada volta do loop ---
   lerComandosSerial();
+#ifdef FLOW_TRANSPORTE_WIFI
+  wifiBuscarComandos();
+#endif
   atenderBuzzer();
 
   // --- Marco 3: amostragem rapida do MPU para capturar o PICO entre ciclos (valueMax) ---
@@ -353,8 +395,6 @@ void loop() {
 
   switch (estado) {
     case NORMAL: {
-      digitalWrite(PIN_LED_SUSPEITA, LOW);
-
       if (magnitude < LIMIAR_BAIXO) {
         if (!contandoPersistencia) {
           contandoPersistencia = true;
@@ -371,7 +411,6 @@ void loop() {
       break;
     }
     case AGUARDANDO_CONFIRMACAO: {
-      digitalWrite(PIN_LED_SUSPEITA, HIGH);
       if (pressConfirm) {
         estado = NORMAL;
         emitirEvento("imobilidade.decisao", "CONFIRMADO_OK", magnitude);
@@ -389,8 +428,14 @@ void loop() {
       break;
     }
     case ALERTA_CONFIRMADO: {
-      // Alerta local: LED AMARELO (o vermelho so liga quando o servidor envia o comando)
-      digitalWrite(PIN_LED_SUSPEITA, HIGH);
+      // Alerta local: LED AMARELO (o vermelho so liga quando o servidor envia o comando). "Estou bem" (aqui ou, pelo servidor,
+      // em outro dispositivo) e o Rearme encerram o alerta; sem nenhum dos dois ele permanece.
+      if (pressConfirm) {
+        estado = NORMAL;
+        contandoPersistencia = false;                        // se a pessoa seguir parada, a contagem recomeca do zero
+        emitirEvento("imobilidade.decisao", "CONFIRMADO_OK", magnitude);
+        break;
+      }
       if (pressRearm) {
         estado = NORMAL;
         contandoPersistencia = false;
@@ -399,4 +444,5 @@ void loop() {
       break;
     }
   }
+  atualizarLedAmarelo();                                     // um unico lugar decide o amarelo (ver a funcao)
 }
