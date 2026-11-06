@@ -184,6 +184,24 @@ class TestImobilidade:
 
 
 # ============================================================================ regra de luz
+class TestReinicioDoFirmware:
+    def test_queda_na_execucao_nova_do_firmware_abre_o_pedido_com_o_servidor_no_ar(self, sem_relogio):
+        """O firmware reinicia (sequence e eventTimeMs voltam a 1 e 1000) e o servidor continua no ar: a queda da nova execucao
+        nao pode ser descartada como evento repetido."""
+        estado = nucleo.novo_estado()
+        for k in range(40):                                              # primeira execucao: seq 1..40, sem episodio
+            nucleo.processar_leitura(estado, leitura_wokwi(k, k + 1, 0.3, 0.4))
+        saidas = queda_wokwi(estado, t0=100, seq0=1)                     # segunda execucao: recomeca em seq 1
+        assert [bool(s.comandos) for s in saidas] == [False, False, False, False, True]
+        assert not any(s.descartes for s in saidas)
+
+    def test_sem_reinicio_o_evento_repetido_continua_descartado(self, sem_relogio):
+        estado = nucleo.novo_estado()
+        nucleo.processar_leitura(estado, leitura_wokwi(0, 5, 0.3, 0.4))
+        d = nucleo.processar_leitura(estado, leitura_wokwi(1, 5, 0.3, 0.4))
+        assert [x.motivo for x in d.descartes] == [nucleo.DESCARTE_DUPLICADA]
+
+
 class TestLuz:
     def test_tres_leituras_noturnas_frias_geram_o_alerta_no_instante_da_terceira(self, sem_relogio):
         estado = nucleo.novo_estado()

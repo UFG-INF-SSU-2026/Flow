@@ -52,6 +52,7 @@ class EstadoDispositivo:
     agregacao de server.py (que e limpo a cada flush de 1s), esta tabela
     persiste entre janelas e guarda a "mudanca de estado" do dispositivo."""
     ultimo_sequence: int | None = None
+    ultimo_event_time_ms: float | None = None  # eventTimeMs do ultimo evento aceito (ms desde que o firmware ligou)
     estado_atual: str = "DESCONHECIDO"      # ultimo state de imobilidade.leitura (heartbeat)
     ultima_decisao: str | None = None       # ultimo state de imobilidade.decisao
     alerta_ativo: bool = False              # evita reemitir arquivo de alerta para o mesmo episodio
@@ -139,19 +140,40 @@ def validar_evento(evento: dict) -> None:
             )
 
 
+def _firmware_reiniciou(do_device: EstadoDispositivo, tempo_ms) -> bool:
+    """O eventTimeMs (ms desde que a placa ligou) so recua se o firmware reiniciou: dentro de uma execucao ele so cresce."""
+    if isinstance(tempo_ms, bool) or not isinstance(tempo_ms, (int, float)) or do_device.ultimo_event_time_ms is None:
+        return False
+    return tempo_ms < do_device.ultimo_event_time_ms - const_analise.REINICIO_FIRMWARE_MS
+
+
 def eh_duplicado(user_id: int, evento: dict, estado: EstadoImobilidade | None = None) -> bool:
     """Deduplicacao/idempotencia: sequence deve ser maior que o ultimo
     conhecido para aquele (user_id, deviceId) (sequence e global por dispositivo no
     firmware, nao por eventType - um unico contador incrementa a cada
-    emitirEvento(), seja leitura ou decisao)."""
+    emitirEvento(), seja leitura ou decisao).
+
+    Excecao: o firmware que reinicia (Wokwi reiniciado, placa religada) recomeca o contador em 1. Sem tratar isso, todo
+    evento da nova execucao seria descartado como repetido, em silencio, ate o contador passar do valor antigo. O sinal do
+    reinicio e o eventTimeMs recuar mais que REINICIO_FIRMWARE_MS: a contagem e o alerta em aberto sao esquecidos e o evento
+    e aceito."""
     device_id = str(evento["deviceId"])
     do_device = _estado_do(user_id, device_id, estado)
     seq = evento["sequence"]
+    tempo_ms = evento.get("eventTimeMs")
 
     if do_device.ultimo_sequence is not None and seq <= do_device.ultimo_sequence:
-        return True
+        if not _firmware_reiniciou(do_device, tempo_ms):
+            return True
+        print(f"  [wokwi] dispositivo {device_id} reiniciou (eventTimeMs {do_device.ultimo_event_time_ms:g} -> {tempo_ms:g}): "
+              f"contagem de sequence e alerta anterior esquecidos")
+        do_device.alerta_ativo = False
+        do_device.estado_atual = "DESCONHECIDO"
+        do_device.ultima_decisao = None
 
     do_device.ultimo_sequence = seq
+    if isinstance(tempo_ms, (int, float)) and not isinstance(tempo_ms, bool):
+        do_device.ultimo_event_time_ms = tempo_ms
     return False
 
 

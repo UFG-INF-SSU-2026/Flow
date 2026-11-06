@@ -103,6 +103,13 @@ bool pendingBuzzerConfirm = false;   // clique em "Estou bem" enquanto o buzzer 
 
 // ---- Buzzer / comandos recebidos pela serial (Marco 3) ----
 bool buzzerAtivo = false;
+
+// LEDs exclusivos: AMARELO = suspeita (a maquina local esta fora de NORMAL), VERMELHO = certeza (o servidor pediu a confirmacao
+// e o buzzer toca). Com o vermelho aceso o amarelo apaga; um "Estou bem" ja pressionado e ainda nao consumido pela maquina
+// tambem o apaga na hora (sem piscar ate o proximo ciclo). Chamado a cada mudanca de estado, de buzzer ou de botao.
+void atualizarLedAmarelo() {
+  digitalWrite(PIN_LED_SUSPEITA, (estado != NORMAL && !buzzerAtivo && !pendingConfirm) ? HIGH : LOW);
+}
 unsigned long tBuzzerInicio = 0;
 unsigned long buzzerTimeoutMs = 0;
 char buzzerMsgId[40] = "";
@@ -194,6 +201,7 @@ void desligarBuzzer() {
   noTone(PIN_BUZZER);
   buzzerAtivo = false;
   digitalWrite(PIN_LED_ALERTA, LOW);   // LED vermelho acompanha o pedido do servidor
+  atualizarLedAmarelo();               // sem o vermelho, o amarelo volta se a suspeita local continua
 }
 
 void ligarBuzzer(const char* messageId, long timeoutMs) {
@@ -216,6 +224,7 @@ void ligarBuzzer(const char* messageId, long timeoutMs) {
   pendingBuzzerConfirm = false;
   tone(PIN_BUZZER, BUZZER_FREQ_HZ);
   digitalWrite(PIN_LED_ALERTA, HIGH);  // LED vermelho: so liga quando o servidor pede (BUZZER_ON)
+  atualizarLedAmarelo();               // certeza: o amarelo (suspeita) apaga
   emitirEventoRetorno("push.ack", "ATIVADO", messageId);
 }
 
@@ -231,7 +240,12 @@ void processarComando(char* linha) {
   if (strcmp(t1, "BUZZER_ON") == 0 && t3) {
     ligarBuzzer(t2, atol(t3));
   } else if (strcmp(t1, "BUZZER_OFF") == 0) {
-    if (buzzerAtivo) desligarBuzzer();                       // encerrado pelo servidor: desliga sem evento
+    if (buzzerAtivo) {                                       // encerrado pelo servidor: desliga sem evento
+      desligarBuzzer();
+      // Confirmado por outro dispositivo (o app): vale como o "Estou bem" daqui. So com o buzzer tocando: um BUZZER_OFF
+      // reenviado na reconexao nao pode apagar um alerta local sem relacao com ele.
+      if (t3 && strcmp(t3, "CONFIRMADO") == 0) { pendingConfirm = true; atualizarLedAmarelo(); }
+    }
   }
 }
 
@@ -329,6 +343,7 @@ void loop() {
   bool bordaConfirm = debounceRead(PIN_BTN_CONFIRM, lastRawConfirm, stableConfirm, lastChangeConfirm);
   if (bordaConfirm && stableConfirm == LOW) {
     pendingConfirm = true;                       // maquina de imobilidade (Marco 2), consumido no ciclo de 1 s
+    atualizarLedAmarelo();                       // o amarelo apaga na hora
     if (buzzerAtivo) pendingBuzzerConfirm = true; // resposta ao pedido do servidor (Marco 3), tratado ja
   }
 
@@ -380,8 +395,6 @@ void loop() {
 
   switch (estado) {
     case NORMAL: {
-      digitalWrite(PIN_LED_SUSPEITA, LOW);
-
       if (magnitude < LIMIAR_BAIXO) {
         if (!contandoPersistencia) {
           contandoPersistencia = true;
@@ -398,7 +411,6 @@ void loop() {
       break;
     }
     case AGUARDANDO_CONFIRMACAO: {
-      digitalWrite(PIN_LED_SUSPEITA, HIGH);
       if (pressConfirm) {
         estado = NORMAL;
         emitirEvento("imobilidade.decisao", "CONFIRMADO_OK", magnitude);
@@ -416,8 +428,14 @@ void loop() {
       break;
     }
     case ALERTA_CONFIRMADO: {
-      // Alerta local: LED AMARELO (o vermelho so liga quando o servidor envia o comando)
-      digitalWrite(PIN_LED_SUSPEITA, HIGH);
+      // Alerta local: LED AMARELO (o vermelho so liga quando o servidor envia o comando). "Estou bem" (aqui ou, pelo servidor,
+      // em outro dispositivo) e o Rearme encerram o alerta; sem nenhum dos dois ele permanece.
+      if (pressConfirm) {
+        estado = NORMAL;
+        contandoPersistencia = false;                        // se a pessoa seguir parada, a contagem recomeca do zero
+        emitirEvento("imobilidade.decisao", "CONFIRMADO_OK", magnitude);
+        break;
+      }
       if (pressRearm) {
         estado = NORMAL;
         contandoPersistencia = false;
@@ -426,4 +444,5 @@ void loop() {
       break;
     }
   }
+  atualizarLedAmarelo();                                     // um unico lugar decide o amarelo (ver a funcao)
 }

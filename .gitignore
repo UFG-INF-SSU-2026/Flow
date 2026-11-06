@@ -9,6 +9,8 @@ uu.md
 .env
 *.patch
 *.diff
+**/segredos.h
+roadmap.md
 
 # CA e certificados TLS do projeto: chaves e certificados ficam fora do Git; o app embute uma copia do certificado da CA
 SensorServer/certs/

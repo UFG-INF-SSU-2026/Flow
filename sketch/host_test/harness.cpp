@@ -111,6 +111,78 @@ int main() {
   CHECK(g_tone_pin == -1, "CMD;LOGIN nao mexe no buzzer");
   Serial.out.clear(); avanca(1100);
   CHECK(has("imobilidade.leitura") && !has("segredo"), "eventos comuns nao carregam o segredo");
+  // ---- LEDs exclusivos: amarelo = suspeita (maquina local), vermelho = certeza (servidor pediu, buzzer tocando) ----
+  {
+    auto amarelo = []() { return g_pin[PIN_LED_SUSPEITA] == HIGH; };
+    auto vermelho = []() { return g_pin[PIN_LED_ALERTA] == HIGH; };
+    auto clicaEstouBem = []() { g_pin[PIN_BTN_CONFIRM] = LOW; avanca(120); g_pin[PIN_BTN_CONFIRM] = HIGH; avanca(60); };
+    auto clicaRearme = []() { g_pin[PIN_BTN_REARM] = LOW; avanca(120); g_pin[PIN_BTN_REARM] = HIGH; avanca(60); };
+    // Estado conhecido: buzzer desligado, maquina em NORMAL (movimento tira de AGUARDANDO; o Rearme tira de ALERTA).
+    auto paraNormal = [&]() {
+      Serial.feed("CMD;BUZZER_OFF;reset;CANCELADO\n"); avanca(30);
+      Wire.ax = 0; Wire.ay = 0; Wire.az = 4096; avanca(1100); clicaRearme(); avanca(1100);
+    };
+    auto ateAlerta = [&]() { Wire.ax = 0; Wire.ay = 0; Wire.az = 0; avanca(15000); };   // 5 s de persistencia + 8 s de espera
+
+    paraNormal();
+    CHECK(!amarelo() && !vermelho(), "LEDs: em NORMAL os dois apagados");
+    Wire.az = 0; avanca(7000);
+    CHECK(amarelo() && !vermelho(), "LEDs: suspeita local acende so o amarelo");
+    avanca(9000);
+    CHECK(amarelo() && !vermelho(), "LEDs: o alerta local persiste com o amarelo");
+    Serial.feed("CMD;BUZZER_ON;led-1;5000\n"); avanca(30);
+    CHECK(vermelho() && !amarelo(), "LEDs: o vermelho ligou, o amarelo apagou (exclusivos)");
+    Serial.out.clear(); clicaEstouBem();
+    CHECK(g_tone_pin == -1 && !vermelho() && !amarelo(), "LEDs: Estou bem com o vermelho aceso apaga buzzer, vermelho e amarelo");
+    avanca(1100);
+    CHECK(has("\"state\":\"CONFIRMADO_OK\"") && has("\"state\":\"ESTOU_BEM\""), "Estou bem em ALERTA_CONFIRMADO volta a maquina para NORMAL (CONFIRMADO_OK) e responde ao servidor");
+    CHECK(!amarelo(), "LEDs: o amarelo continua apagado depois do ciclo");
+    Serial.out.clear(); avanca(6500);
+    CHECK(has("SUSPEITA_IMOBILIDADE") && amarelo(), "pessoa segue parada: a contagem recomeca e o amarelo volta a acender");
+
+    // vermelho apaga SEM clique (fim do tempo): o amarelo volta, o alerta local continua sem resolucao
+    paraNormal(); ateAlerta();
+    Serial.feed("CMD;BUZZER_ON;led-2;1500\n"); avanca(30);
+    CHECK(vermelho() && !amarelo(), "LEDs: segundo pedido, vermelho aceso e amarelo apagado");
+    Serial.out.clear(); avanca(1700);
+    CHECK(has("\"state\":\"SEM_RESPOSTA\"") && !vermelho() && amarelo(), "LEDs: fim do tempo sem clique apaga o vermelho e o amarelo volta");
+
+    // servidor encerra como CONFIRMADO com o buzzer tocando (alguem confirmou em outro dispositivo): limpa tambem o amarelo
+    paraNormal(); ateAlerta();
+    Serial.feed("CMD;BUZZER_ON;led-3;5000\n"); avanca(30);
+    Serial.out.clear();
+    Serial.feed("CMD;BUZZER_OFF;enc-1;CONFIRMADO\n"); avanca(1100);
+    CHECK(g_tone_pin == -1 && !vermelho() && !amarelo() && has("\"state\":\"CONFIRMADO_OK\""), "encerramento CONFIRMADO do servidor apaga os dois LEDs e volta a maquina para NORMAL");
+    CHECK(!has("confirmacao.resposta"), "encerramento do servidor nao emite resposta do dispositivo");
+
+    // servidor encerra como EXPIRADO: o amarelo volta
+    paraNormal(); ateAlerta();
+    Serial.feed("CMD;BUZZER_ON;led-4;5000\n"); avanca(30);
+    Serial.out.clear();
+    Serial.feed("CMD;BUZZER_OFF;enc-2;EXPIRADO\n"); avanca(100);
+    CHECK(!vermelho() && amarelo() && !has("CONFIRMADO_OK"), "encerramento EXPIRADO apaga o vermelho e o amarelo volta (sem confirmar nada)");
+
+    // BUZZER_OFF CONFIRMADO reenviado na reconexao, sem buzzer tocando: nao pode apagar um alerta local
+    paraNormal(); ateAlerta();
+    Serial.out.clear();
+    Serial.feed("CMD;BUZZER_OFF;enc-velho;CONFIRMADO\n"); avanca(1100);
+    CHECK(amarelo() && !has("CONFIRMADO_OK"), "BUZZER_OFF CONFIRMADO sem buzzer tocando (reenvio) nao apaga o alerta local");
+
+    // Estou bem em ALERTA_CONFIRMADO sem buzzer: tambem encerra o alerta
+    Serial.out.clear(); clicaEstouBem(); avanca(1100);
+    CHECK(has("\"state\":\"CONFIRMADO_OK\"") && !amarelo(), "Estou bem em ALERTA_CONFIRMADO, sem buzzer, encerra o alerta e apaga o amarelo");
+
+    // O Rearme continua funcionando
+    paraNormal(); ateAlerta();
+    Serial.out.clear(); clicaRearme(); avanca(1100);
+    CHECK(has("\"state\":\"REARMADO_MANUAL\"") && !amarelo(), "Rearme continua encerrando o alerta local");
+
+    // Estou bem em AGUARDANDO_CONFIRMACAO continua valendo
+    paraNormal(); Wire.az = 0; avanca(7000);
+    CHECK(amarelo(), "LEDs: em AGUARDANDO o amarelo esta aceso");
+    Serial.out.clear(); clicaEstouBem(); avanca(1100);
+    CHECK(has("\"state\":\"CONFIRMADO_OK\"") && !amarelo(), "Estou bem em AGUARDANDO_CONFIRMACAO volta para NORMAL e apaga o amarelo");
+  }
   std::cout << (fails ? "\nFALHAS: " : "\nFIRMWARE OK ") << fails << "\n";
   return fails;
 }
