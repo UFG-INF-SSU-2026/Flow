@@ -581,6 +581,10 @@ def health():
                                 "ultima_resposta_ha_s": ha_s},
                     "borda": _estatisticas_borda()})
 
+@app.route("/painel", methods=["GET"])
+def painel():
+    from flask import send_file
+    return send_file(os.path.join(os.path.dirname(__file__), "painel.html"))
 
 @app.route("/", methods=["GET"])
 def status():

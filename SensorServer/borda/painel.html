@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Flow - painel</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; }
+  table { border-collapse: collapse; }
+  th, td { border: 1px solid #888; padding: 4px 8px; text-align: left; }
+  #erro { color: #b00; }
+  #painel { display: none; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h3>Login (conta admin)</h3>
+  Servidor: <input id="base" size="30"><br>
+  Identificador: <input id="ident"><br>
+  Senha: <input id="senha" type="password"><br>
+  <button onclick="entrar()">Entrar</button>
+</div>
+
+<div id="painel">
+  <h3>Idosos <small id="status"></small></h3>
+  <table>
+    <thead>
+      <tr><th>Idoso</th><th>Dispositivo</th><th>Acelerômetro (m/s²)</th><th>Luz (lux)</th><th>GPS</th><th>Última leitura</th></tr>
+    </thead>
+    <tbody id="corpo"></tbody>
+  </table>
+</div>
+
+<p id="erro"></p>
+
+<script>
+// Mesma chave AES-256 de SensorServer/borda/crypto_utils.py (SHARED_KEY_B64)
+const CHAVE_B64 = "nL+mtDjw5+64sqP0berkvBun36w9EFNxkyPjR+UHSik=";
+const INTERVALO_MS = 3000;
+
+let base = "", ident = "", senha = "", token = null, timer = null;
+
+const b64ToBytes = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const bytesToB64 = b => btoa(String.fromCharCode(...new Uint8Array(b)));
+
+async function chave() {
+  return crypto.subtle.importKey("raw", b64ToBytes(CHAVE_B64), "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+// Envelope do servidor: {nonce, ciphertext} em base64 (tag GCM no fim do ciphertext)
+async function cifrar(obj) {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, await chave(),
+                                         new TextEncoder().encode(JSON.stringify(obj)));
+  return { nonce: bytesToB64(nonce), ciphertext: bytesToB64(ct) };
+}
+
+async function decifrar(env) {
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(env.nonce) }, await chave(),
+                                         b64ToBytes(env.ciphertext));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+async function fazerLogin() {
+  const r = await fetch(base + "/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(await cifrar({ identificador: ident, segredo: senha }))
+  });
+  if (!r.ok) throw new Error("login falhou (HTTP " + r.status + ")");
+  token = (await decifrar(await r.json())).access_token;
+}
+
+async function buscarDados() {
+  let r = await fetch(base + "/dados?limite=200", { headers: { Authorization: "Bearer " + token } });
+  if (r.status === 401) {            // token expirou: loga de novo
+    await fazerLogin();
+    r = await fetch(base + "/dados?limite=200", { headers: { Authorization: "Bearer " + token } });
+  }
+  if (!r.ok) throw new Error("GET /dados falhou (HTTP " + r.status + ")");
+  return r.json();
+}
+
+// Memória entre atualizações: guarda o último valor de cada campo por (idoso, dispositivo).
+// Necessária porque o servidor só devolve as últimas 200 leituras e a luz/GPS nem sempre vêm em todo envio
+// (a localização, por exemplo, vai uma vez por posição nova).
+const memoria = {};
+
+function atualizarCampo(d, campo, valor, instante) {
+  if (valor === null || valor === undefined) return;
+  if (d[campo + "_t"] === undefined || instante >= d[campo + "_t"]) { d[campo] = valor; d[campo + "_t"] = instante; }
+}
+
+function agrupar(leituras) {
+  // as leituras vêm da mais nova para a mais velha: processa da mais velha para a mais nova
+  for (const l of [...leituras].reverse()) {
+    const dispositivos = (memoria[l.user_id] ??= {});
+    const d = (dispositivos[l.device_id] ??= { fonte: l.source, ultima: l.timestamp, acel: null, luz: null, gps: null });
+    const t = Date.parse(l.timestamp) || 0;
+    if (!d.ultima || t >= Date.parse(d.ultima)) d.ultima = l.timestamp;
+    const x = l.dados || {};
+    if (l.source === "app") {
+      atualizarCampo(d, "acel", x.acelerometro && x.acelerometro.magnitude, t);
+      // luz: o bloco leitura_ambiente só existe em celular com sensor de luz E sensor "CCT";
+      // sem ele, usa a leitura bruta do sensor de luz (Android TYPE_LIGHT = 5)
+      let lux = x.leitura_ambiente && x.leitura_ambiente.luminosidade;
+      if (lux == null && x.sensores && x.sensores["5"] && Array.isArray(x.sensores["5"].valores)) lux = x.sensores["5"].valores[0];
+      atualizarCampo(d, "luz", lux, t);
+      if (x.localizacao && x.localizacao.latitude != null)
+        atualizarCampo(d, "gps", x.localizacao.latitude.toFixed(5) + ", " + x.localizacao.longitude.toFixed(5), t);
+    } else if (l.source === "wokwi") {
+      atualizarCampo(d, "acel", x.eventType === "imobilidade.leitura" ? x.value : null, t);
+    }
+  }
+  return memoria;
+}
+
+const fmt = (v, fonteSuporta) => !fonteSuporta ? "N/A" : (v === null ? "sem dado" : (typeof v === "number" ? v.toFixed(2) : v));
+
+function desenhar(idosos) {
+  const corpo = document.getElementById("corpo");
+  corpo.innerHTML = "";
+  for (const uid of Object.keys(idosos).sort((a, b) => a - b)) {
+    const disp = Object.entries(idosos[uid]);
+    disp.forEach(([devId, d], i) => {
+      const tr = document.createElement("tr");
+      const celulas = [];
+      if (i === 0) celulas.push(["Idoso " + uid, disp.length]);
+      celulas.push([devId + " (" + d.fonte + ")"]);
+      celulas.push([fmt(d.acel, true)]);
+      celulas.push([fmt(d.luz, d.fonte === "app")]);
+      celulas.push([fmt(d.gps, d.fonte === "app")]);
+      celulas.push([new Date(d.ultima).toLocaleString("pt-BR")]);
+      for (const [texto, span] of celulas) {
+        const td = document.createElement("td");
+        td.textContent = texto;
+        if (span) td.rowSpan = span;
+        tr.appendChild(td);
+      }
+      corpo.appendChild(tr);
+    });
+  }
+}
+
+async function atualizar() {
+  try {
+    desenhar(agrupar(await buscarDados()));
+    document.getElementById("erro").textContent = "";
+    document.getElementById("status").textContent = "(atualizado " + new Date().toLocaleTimeString() + ")";
+  } catch (e) {
+    document.getElementById("erro").textContent = e.message;
+  }
+}
+
+async function entrar() {
+  base = document.getElementById("base").value.replace(/\/$/, "");
+  ident = document.getElementById("ident").value;
+  senha = document.getElementById("senha").value;
+  try {
+    await fazerLogin();
+  } catch (e) {
+    document.getElementById("erro").textContent = e.message;
+    return;
+  }
+  document.getElementById("login").style.display = "none";
+  document.getElementById("painel").style.display = "block";
+  atualizar();
+  timer = setInterval(atualizar, INTERVALO_MS);
+}
+
+document.getElementById("base").value = location.origin.startsWith("http") ? location.origin : "https://127.0.0.1:5000";
+</script>
+</body>
+</html>
