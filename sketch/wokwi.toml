@@ -3,7 +3,11 @@ version = 1
 firmware = 'build/sketch.ino.bin'
 elf = 'build/sketch.ino.elf'
 
-# Expõe a porta serial do ESP32 simulado como servidor RFC2217 (serial-over-TCP)
-# em localhost:4000. Isso NÃO depende do Private IoT Gateway pago — funciona
-# com a licença gratuita/Community do Wokwi para VS Code.
-rfc2217ServerPort = 4000
+# O firmware fala SOMENTE HTTPS com a API do bridge, pelo WiFi simulado ("Wokwi-GUEST"). Nao ha serial para a rede:
+# a porta RFC2217 (rfc2217ServerPort) foi removida de proposito, para nada sair do firmware em texto claro.
+#
+# Gateway de rede do Wokwi: e ele que deixa o ESP32 simulado alcancar o seu PC, como host.wokwi.internal (o nome que consta
+# no certificado do bridge). Rode o wokwigw (https://github.com/wokwi/wokwigw, releases) ANTES de iniciar a simulacao;
+# ele escuta em localhost:9011. Ver INSTRUCOES.md, secao 2.
+[net]
+gateway = "ws://localhost:9011"

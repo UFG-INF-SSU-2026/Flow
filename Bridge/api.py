@@ -1,5 +1,5 @@
 """
-API local do bridge (HTTPS). Qualquer dispositivo simples a usa por um adaptador (serial, software) ou direto (ESP32 com WiFi).
+API local do bridge (HTTPS). Os dispositivos simples a usam direto (o ESP32 do Wokwi, pelo WiFi) ou por um adaptador em software.
 
   POST   /v1/login                           repassa o login ao servidor; devolve o token de sessao LOCAL
   POST   /v1/dispositivos/<id>/eventos       evento do dispositivo -> servidor (carimba user_id e source)

@@ -26,4 +26,4 @@ a secao do `docs/schemas.md`.
 
 ## Fora desta pasta
 
-O comando serial servidor -> firmware (`CMD;BUZZER_ON;...`, secao 3 do `docs/schemas.md`) nao e JSON e nao tem schema.
+O comando bridge -> firmware (texto dentro do HTTPS) (`CMD;BUZZER_ON;...`, secao 3 do `docs/schemas.md`) nao e JSON e nao tem schema.

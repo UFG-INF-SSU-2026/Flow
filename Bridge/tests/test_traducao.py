@@ -1,4 +1,4 @@
-"""Traducao pura (sem rede, serial nem Flask): o que vira comando para o firmware e o que e descartado."""
+"""Traducao pura (sem rede nem Flask): o que vira comando para o firmware e o que e descartado."""
 import json
 import uuid
 from collections import deque
@@ -34,7 +34,7 @@ def test_traduzir_tipo_desconhecido_devolve_none():
     assert traducao.traduzir(pedido(messageType="outro.tipo", payload={})) is None
 
 
-# ------------------------------------------------------------------ tratar_push: o que chega a serial
+# ------------------------------------------------------------------ tratar_push: o que chega ao firmware
 def test_push_valido_escreve_um_comando():
     msg = pedido()
     assert entregar(msg) == [f"CMD;BUZZER_ON;{msg['messageId']};5000"]
@@ -63,7 +63,7 @@ def test_tipo_nao_suportado_nao_escreve():
     assert entregar(pedido(messageType="outro.tipo", payload={})) == []
 
 
-# ------------------------------------------------------------------ tratar_push: forma invalida nao vira linha serial
+# ------------------------------------------------------------------ tratar_push: forma invalida nao vira linha de comando
 @pytest.mark.parametrize("message_id", [
     "abc;def",              # ';' separaria campos do comando
     "abc\ndef",             # quebra de linha partiria o comando em dois

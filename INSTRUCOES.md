@@ -17,9 +17,9 @@ Flow/
 │   └── simular_queda.py  # simula uma queda sem Wokwi nem celular
 ├── SensorApp/          # app Android (Kotlin): telemetria + recebe o pedido de confirmação
 │   └── app/src/test/   # testes de unidade (JVM) da validação das mensagens de push
-├── WokwiBridge/        # ponte Python bidirecional entre a simulação Wokwi e o servidor
+├── Bridge/             # ponte Python (API HTTPS) entre a simulação Wokwi e o servidor
 │   ├── .env.example    # modelo da configuração do bridge (copie para .env)
-│   └── tests/          # test_bridge.py (pytest) e fake_firmware.py (testa a ponte sem Wokwi)
+│   └── tests/          # suíte pytest do bridge
 ├── sketch/             # projeto Wokwi (ESP32 + MPU6050 + buzzer), simulado no VS Code
 │   └── host_test/      # teste opcional da lógica do firmware no PC
 ├── docs/               # arquitetura e schemas
@@ -34,7 +34,7 @@ Flow/
 - **Servidor → dispositivo:** o **dispositivo abre** uma conexão SSE com o servidor e o servidor empurra mensagens por ela. Nenhum dispositivo escuta porta; por isso o único requisito de rede é que o celular e o bridge **alcancem o servidor**.
 - **Servidor 1 ↔ Servidor 2:** a borda (porta 5000) é a única que fala com os dispositivos e com o banco; a análise só escuta em `127.0.0.1:5100` e só a borda a chama.
 - **TLS em todas as pontas:** dispositivos ↔ borda, borda ↔ análise e borda ↔ banco falam HTTPS/TLS (o banco, SQL sobre TLS), com a **CA própria do projeto**: ela assina o certificado de cada serviço e é a única confiança de cada cliente. Ver a seção "Certificado TLS" abaixo.
-- **Wokwi:** o ESP32 simulado só fala serial. O bridge lê e escreve nessa serial (RFC2217, `localhost:4000`) e faz a ponte com o servidor.
+- **Wokwi → bridge:** o firmware do ESP32 simulado fala **HTTPS direto** com a API do bridge (`https://host.wokwi.internal:5443`), pelo WiFi simulado. O nome `host.wokwi.internal` é o seu PC visto de dentro da simulação, pelo gateway de rede do Wokwi (`wokwigw`). Não há serial, nem porta RFC2217, nem adaptador no caminho.
 
 ## Pré-requisitos
 
@@ -53,13 +53,13 @@ A configuração do servidor e a do bridge ficam em arquivos **`.env`**, um em c
 ```powershell
 # Windows (PowerShell)
 Copy-Item SensorServer\.env.example SensorServer\.env
-Copy-Item WokwiBridge\.env.example WokwiBridge\.env
+Copy-Item Bridge\.env.example Bridge\.env
 ```
 
 ```bash
 # Linux/macOS
 cp SensorServer/.env.example SensorServer/.env
-cp WokwiBridge/.env.example WokwiBridge/.env
+cp Bridge/.env.example Bridge/.env
 ```
 
 Regras:
@@ -113,9 +113,9 @@ cd SensorServer
 python scripts/gerar_certificado.py --ip <IP do computador na rede>   # ex.: --ip 192.168.0.10
 ```
 
-Isso cria, em `SensorServer/certs/` (**fora do Git**): `ca.crt` e `ca.key` (a chave da CA é segredo; só o script a lê), e `borda.crt`/`borda.key`, `analise.crt`/`analise.key` e `banco.crt`/`banco.key`. Copia ainda o `ca.crt` (público) para `SensorApp/app/src/main/res/raw/flow_cert.pem`. O certificado da borda só vale para os endereços listados nele (`localhost`, `127.0.0.1`, `::1`, o IP de rede detectado e os de `--ip`/`--dns`); quem acessa por outro endereço recusa a conexão. Para acrescentar ou trocar um IP: `python scripts/gerar_certificado.py --forcar --ip <IP>`, depois `docker compose restart db` e reinicie borda e análise. Isso **não troca a CA**: o app e o bridge continuam confiando, **sem recompilar**. Só `--forcar-ca` recria a CA (e então o app precisa ser recompilado). Para a API HTTPS do bridge, `--nome bridge` emite `certs/bridge.crt`.
+Isso cria, em `SensorServer/certs/` (**fora do Git**): `ca.crt` e `ca.key` (a chave da CA é segredo; só o script a lê), e `borda.crt`/`borda.key`, `analise.crt`/`analise.key` e `banco.crt`/`banco.key`. Copia ainda o `ca.crt` (público) para `SensorApp/app/src/main/res/raw/flow_cert.pem`. O certificado da borda só vale para os endereços listados nele (`localhost`, `127.0.0.1`, `::1`, o IP de rede detectado e os de `--ip`/`--dns`); quem acessa por outro endereço recusa a conexão. Para acrescentar ou trocar um IP: `python scripts/gerar_certificado.py --forcar --ip <IP>`, depois `docker compose restart db` e reinicie borda e análise. Isso **não troca a CA**: o app e o bridge continuam confiando, **sem recompilar**. Só `--forcar-ca` recria a CA (e então o app precisa ser recompilado). Para a API HTTPS do bridge, **emita também o certificado dele com o nome que o firmware usa**: `python scripts/gerar_certificado.py --nome bridge --dns host.wokwi.internal` (o certificado do bridge precisa listar `host.wokwi.internal`, senão o firmware recusa a conexão).
 
-Quem confia na CA (e só nela): a borda (para a análise e para o banco), o bridge (`FLOW_TLS_CERT` no `WokwiBridge/.env`, apontando para `../SensorServer/certs/ca.crt`) e o app (embutida na compilação). Se o bridge rodar em outra máquina, copie para lá só o `ca.crt`, nunca uma chave. Gere os certificados **antes** de abrir o app no Android Studio.
+Quem confia na CA (e só nela): a borda (para a análise e para o banco), o bridge (`FLOW_TLS_CA` no `Bridge/.env`, apontando para `../SensorServer/certs/ca.crt`) e o firmware (`FLOW_CA_PEM` em `sketch/segredos.h`, só o conteúdo de `ca.crt`) e o app (embutida na compilação). Se o bridge rodar em outra máquina, copie para lá só o `ca.crt`, nunca uma chave. Gere os certificados **antes** de abrir o app no Android Studio.
 
 ## 1. Servidor (`SensorServer/`)
 
@@ -135,55 +135,53 @@ A borda escuta **só em HTTPS** e, por padrão, **só neste computador** (`127.0
 
 ## 2. Simulação Wokwi (`sketch/`)
 
-1. Abra a pasta `sketch/` no VS Code com a extensão Wokwi instalada.
-2. Compile (dentro de `sketch/`):
+O firmware fala **somente HTTPS** com o bridge. Antes de compilar:
+
+1. **Certificado do bridge com o nome do Wokwi** (em `SensorServer/`; os certificados de serviço são reemitidos, a CA continua a mesma):
+
+   ```bash
+   python scripts/gerar_certificado.py --forcar --nome bridge --dns host.wokwi.internal
+   ```
+
+2. **`sketch/segredos.h`:** copie `segredos.h.example` para `segredos.h` e preencha a conta (`FLOW_IDENTIFICADOR`, `FLOW_SEGREDO`) e a `FLOW_CA_PEM` (cole o conteúdo de `SensorServer/certs/ca.crt`, **nunca** o `ca.key`). `FLOW_BRIDGE_URL` precisa ser `https://...`: com `http://` o sketch **não compila**.
+
+3. **Gateway de rede do Wokwi.** O ESP32 simulado só alcança o seu PC por ele. Baixe o `wokwigw` (releases de <https://github.com/wokwi/wokwigw>, código aberto) e deixe rodando num terminal **antes** de iniciar a simulação; ele escuta em `localhost:9011`, e o `sketch/wokwi.toml` já aponta para lá (`[net] gateway = "ws://localhost:9011"`). Sem ele, a simulação não alcança o PC.
+
+4. Abra a pasta `sketch/` no VS Code com a extensão Wokwi instalada e compile (dentro de `sketch/`):
 
    ```bash
    arduino-cli compile --fqbn esp32:esp32:esp32 --output-dir build .
    ```
 
-3. Inicie a simulação (`F1` → `Wokwi: Start Simulator`) e **deixe a aba do simulador visível**: com a aba oculta a simulação pausa e o firmware deixa de ler comandos.
+5. Inicie a simulação (`F1` → `Wokwi: Start Simulator`) e **deixe a aba do simulador visível**: com a aba oculta a simulação pausa. No monitor serial aparecem só mensagens de diagnóstico (`WiFi conectado`, `bridge: login aceito`, ...); nenhum evento, comando nem a senha passa pela serial.
 
-O diagrama tem agora um **buzzer** (pino D13) além do acelerômetro, dos botões "Estou bem" e "Rearme" e dos LEDs. Qualquer alteração em `sketch.ino` ou `diagram.json` exige repetir a compilação e reiniciar a simulação.
+Se aparecer `bridge: login nao aceito (HTTP -1)`, a conexão HTTPS não se completou. Confira, nesta ordem: `wokwigw` rodando; bridge no ar; o certificado do bridge lista `host.wokwi.internal`; a `FLOW_CA_PEM` é a CA atual; e o aviso `sem horario (NTP)` (sem o horário certo o certificado não valida). Se o bridge escutar só em `127.0.0.1` e o gateway não alcançar esse endereço, ponha `FLOW_BRIDGE_HOST=0.0.0.0` no `Bridge/.env` (continua só HTTPS) e inclua o IP do PC no certificado do bridge (`--ip`).
 
-## 3. Bridge (`WokwiBridge/`)
+O diagrama tem um **buzzer** (pino D13) além do acelerômetro, dos botões "Estou bem" e "Rearme" e dos LEDs. Qualquer alteração em `sketch.ino`, `transporte_wifi.h` ou `diagram.json` exige repetir a compilação e reiniciar a simulação.
+
+## 3. Bridge (`Bridge/`)
 
 ```bash
-cd WokwiBridge
+cd Bridge
 pip install -r requirements.txt
-```
-
-O bridge lê a configuração do `WokwiBridge/.env` (nada de editar o `bridge.py`):
-
-| Chave | Valor | Padrão |
-| --- | --- | --- |
-| `FLOW_BRIDGE_ID` | `bridge1` | — (obrigatória) |
-| `FLOW_BRIDGE_SECRET` | senha da conta `bridge1` | — (obrigatória) |
-| `FLOW_SERVIDOR` | URL base do servidor (precisa ser `https://`) | `https://127.0.0.1:5000` |
-| `FLOW_TLS_CERT` | arquivo em que o bridge confia: o `ca.crt` da CA do projeto | defina `../SensorServer/certs/ca.crt` (o padrão do código ainda é o nome do certificado antigo) |
-| `FLOW_BRIDGE_DEVICE` | `deviceId` do firmware que o bridge repassa | `esp32-decisao-imobilidade-01` (o `DEVICE_ID` de `sketch.ino`) |
-
-O servidor exige que o `deviceId` dos eventos seja o mesmo informado no login do bridge (`403` se diferir). Só é preciso definir `FLOW_BRIDGE_DEVICE` se você mudar o `DEVICE_ID` do firmware.
-
-> No Windows, prefira `127.0.0.1` a `localhost` em `FLOW_SERVIDOR`: o `localhost` tenta IPv6 primeiro e cada conexão nova do bridge espera 1-2 s, o que atrasa a telemetria e as respostas ao servidor (o pedido de confirmação pode expirar antes de a resposta chegar).
-
-Exemplo de `WokwiBridge/.env`:
-
-```ini
-FLOW_BRIDGE_ID=bridge1
-FLOW_BRIDGE_SECRET=<senha da conta bridge1>
-FLOW_SERVIDOR=https://127.0.0.1:5000
-```
-
-Depois é só rodar:
-
-```bash
+cp .env.example .env      # todas as chaves têm padrão; só mude o que precisar
 python bridge.py
 ```
 
-(Sem `.env`, as mesmas chaves podem ser definidas no terminal, como antes: `export FLOW_BRIDGE_ID=bridge1` no Linux/macOS, ou `$env:FLOW_BRIDGE_ID='bridge1'` no PowerShell, com aspas simples.)
+O bridge **não tem conta nem senha**: o login de cada dispositivo vem do próprio firmware (`sketch/segredos.h`) e o bridge só o repassa ao servidor. Ele lê o `Bridge/.env` (modelo: `.env.example`):
 
-O bridge faz login, abre o canal de push do servidor, repassa a telemetria da simulação e escreve na serial os comandos do buzzer. Se a simulação ainda não estiver de pé, ele fica tentando reconectar.
+| Chave | Valor | Padrão |
+| --- | --- | --- |
+| `FLOW_SERVIDOR` | URL base do servidor (precisa ser `https://`; outra coisa encerra o bridge) | `https://127.0.0.1:5000` |
+| `FLOW_TLS_CA` | `ca.crt` da CA do projeto: a única confiança do bridge para falar com o servidor | `../SensorServer/certs/ca.crt` |
+| `FLOW_BRIDGE_HOST`, `FLOW_BRIDGE_PORT` | onde a API do bridge escuta (só HTTPS) | `127.0.0.1`, `5443` |
+| `FLOW_BRIDGE_API_CERT`, `FLOW_BRIDGE_API_KEY` | certificado e chave da API do bridge (`gerar_certificado.py --nome bridge`) | `../SensorServer/certs/bridge.crt`, `bridge.key` |
+
+O servidor exige que o `deviceId` dos eventos seja um dos `device_id` da conta (`403` se diferir), e o firmware usa `esp32-decisao-imobilidade-01` (o `DEVICE_ID` de `sketch.ino`).
+
+> No Windows, prefira `127.0.0.1` a `localhost` em `FLOW_SERVIDOR`: o `localhost` tenta IPv6 primeiro e cada conexão nova do bridge espera 1-2 s.
+
+O bridge faz o login do dispositivo no servidor quando o firmware o envia, abre o canal de push, repassa a telemetria e devolve os comandos do buzzer quando o firmware os busca. Se o firmware subir antes do bridge, ele tenta o login de novo a cada 5 s.
 
 ## 4. App Android (`SensorApp/`)
 
@@ -213,12 +211,12 @@ A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` 
 ### Bridge (pytest)
 
 ```bash
-cd WokwiBridge
+cd Bridge
 pip install -r requirements.txt   # inclui o pytest
 python -m pytest
 ```
 
-A configuração está em `WokwiBridge/pytest.ini`. Os testes não usam rede nem serial, e não leem o seu `.env`: cobrem a validação e a tradução das mensagens de push, o roteamento das linhas que vêm do firmware, o leitor SSE e a renovação de sessão. O `tests/fake_firmware.py` (abaixo) não é coletado pelo pytest.
+A configuração está em `Bridge/pytest.ini`. Os testes não usam rede e não leem o seu `.env`: cobrem a validação e a tradução das mensagens de push, o roteamento dos eventos, o leitor SSE, a renovação de sessão e a recusa de `http://` na configuração.
 
 ### App Android (JVM)
 
@@ -229,10 +227,10 @@ Os testes de `SensorApp/app/src/test/` (validação da forma das mensagens de pu
 | O quê | Como | Para que serve |
 | --- | --- | --- |
 | `SensorServer/simular_queda.py` | com o servidor rodando: `FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python simular_queda.py [URL_BASE]` (URL padrão `https://127.0.0.1:5000`) (ainda lê essas duas do terminal; não usa o `.env` do bridge) | Simula um wokwi que sofre impacto e fica imóvel; o pedido de confirmação chega ao app e/ou ao bridge conectados, sem Wokwi. |
-| `WokwiBridge/tests/fake_firmware.py` | na pasta `WokwiBridge`, com servidor e conta do bridge, o `WokwiBridge/.env` preenchido e `FLOW_BRIDGE_DEVICE=esp32-falso` (variável do terminal, que vence o `.env`): `python tests/fake_firmware.py` | Substitui a serial por um "firmware falso" e confere o que o bridge escreve. O `FLOW_BRIDGE_DEVICE` precisa ser o `deviceId` que o firmware falso usa (`esp32-falso`). |
-| `sketch/host_test/` | ver `sketch/host_test/README.md` | Roda a lógica do firmware no PC (inclui o buzzer e a idempotência do `BUZZER_ON`). |
+| `python -m adaptadores.software ...` (em `Bridge/`) | ver `docs/arquitetura.md`, seção 14.1 | Dispositivo simulado em software, sem Wokwi, por HTTPS na API do bridge. |
+| `sketch/host_test/` | ver `sketch/host_test/README.md` | Roda a lógica do firmware no PC, com um dublê do transporte HTTPS (buzzer, idempotência do `BUZZER_ON`, e a Serial sem segredo nem eventos). |
 
-O servidor mantém um **cooldown de 60 s** entre episódios do mesmo usuário (`COOLDOWN_S`): para repetir `simular_queda.py` ou `fake_firmware.py` em seguida, reinicie o servidor ou aguarde.
+O servidor mantém um **cooldown de 60 s** entre episódios do mesmo usuário (`COOLDOWN_S`): para repetir `simular_queda.py` ou o adaptador `software` em seguida, reinicie o servidor ou aguarde.
 
 ## Testando manualmente
 

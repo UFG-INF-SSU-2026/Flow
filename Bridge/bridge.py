@@ -1,9 +1,9 @@
 """
 Bridge: porta de entrada HTTPS dos dispositivos simples (ESP32, Arduino, Wokwi, simuladores) para o servidor.
 
-O bridge nao conhece serial nem Wokwi: recebe eventos pela API local (api.py), repassa o login do dispositivo ao servidor,
-carimba o que o dispositivo nao conhece e devolve os comandos do servidor, ja traduzidos. Quem fala com a serial ou simula
-o dispositivo e um adaptador, em outro processo (adaptadores/).
+O bridge nao conhece Wokwi nem placa: recebe eventos pela API local (api.py), repassa o login do dispositivo ao servidor,
+carimba o que o dispositivo nao conhece e devolve os comandos do servidor, ja traduzidos. O ESP32 do Wokwi fala HTTPS direto
+com esta API (sketch/transporte_wifi.h); nao ha serial. Dispositivos simulados em software usam adaptadores/software.py.
 
 Configuracao: Bridge/.env (modelo: .env.example) ou variaveis de ambiente (ver config.py).
 Pre-requisitos: servidor no ar, conta de papel 'dispositivo' (fonte 'wokwi') criada por dispositivo, e os certificados
@@ -18,13 +18,19 @@ import ssl
 import sys
 from pathlib import Path
 
-from werkzeug.serving import make_server
+from werkzeug.serving import WSGIRequestHandler, make_server
 
 import config
 from api import criar_app
 from sessao import log
 
 DOTENV_CARREGADO = config.carregar_dotenv(config.DOTENV_ARQUIVO)    # antes de ler as variaveis
+
+
+class ConexaoPersistente(WSGIRequestHandler):
+    """HTTP/1.1 com conexao persistente: o ESP32 faz uma chamada por segundo (evento e busca de comandos) e refazer o
+    handshake TLS a cada uma pararia o laco do firmware (botoes, buzzer). Com HTTP/1.1, uma conexao TLS serve varias chamadas."""
+    protocol_version = "HTTP/1.1"
 
 
 def contexto_tls(cfg: config.Config) -> ssl.SSLContext:
@@ -65,8 +71,9 @@ def main() -> None:
     if not _so_loopback(cfg.host):
         log(f"AVISO: a API escuta fora do loopback ({cfg.host}); o certificado da API precisa ter esse endereco "
             f"(gerar_certificado.py --nome bridge --ip ...), e os dispositivos da rede so devem usar HTTPS.")
-    servidor = make_server(cfg.host, cfg.porta, criar_app(cfg), threaded=True, ssl_context=contexto_tls(cfg))
-    log("Pronto. Os adaptadores e os dispositivos fazem login em POST /v1/login.")
+    servidor = make_server(cfg.host, cfg.porta, criar_app(cfg), threaded=True, ssl_context=contexto_tls(cfg),
+                           request_handler=ConexaoPersistente)
+    log("Pronto. Os dispositivos (firmware no Wokwi, adaptador em software) fazem login em POST /v1/login, sempre por HTTPS.")
     servidor.serve_forever()
 
 

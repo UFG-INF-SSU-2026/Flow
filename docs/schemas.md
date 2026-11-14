@@ -5,7 +5,7 @@ Documento único dos contratos que passam pelo servidor. Cada seção traz o sch
 
 Cada schema evolui de forma independente: a versão atual de cada um fica na tabela abaixo e no cabeçalho da sua seção, e as regras gerais se referem sempre à "versão atual do schema", nunca a um número fixo.
 
-> **Fonte única dos contratos:** os schemas legíveis por máquina ficam em `SensorServer/schemas/` (um arquivo por contrato, com `x-versao`; política de versão em `schemas/LEIAME.md`). A borda confere a **estrutura** contra eles (`validacao.py`); a **semântica** (faixas, sentinelas) é regra da análise. Este documento é a descrição humana e é conferido contra os arquivos e contra `const.py` por `tests/unit/test_contratos.py`. A seção 3 (comando serial) não é JSON e não tem arquivo de schema.
+> **Fonte única dos contratos:** os schemas legíveis por máquina ficam em `SensorServer/schemas/` (um arquivo por contrato, com `x-versao`; política de versão em `schemas/LEIAME.md`). A borda confere a **estrutura** contra eles (`validacao.py`); a **semântica** (faixas, sentinelas) é regra da análise. Este documento é a descrição humana e é conferido contra os arquivos e contra `const.py` por `tests/unit/test_contratos.py`. A seção 3 (comando do bridge ao firmware) não é JSON e não tem arquivo de schema.
 
 ## Versões atuais
 
@@ -13,7 +13,7 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 | --- | --- | --- |
 | 1 | Wokwi → servidor: telemetria | 3 |
 | 2 | Wokwi → servidor: eventos de retorno | 3 |
-| 3 | Servidor → firmware: comando serial | 3 |
+| 3 | Servidor → firmware: comando (texto, dentro do HTTPS) | 3 |
 | 4 | App Android → servidor: telemetria | 3 |
 | 4.2 | App: `leitura_ambiente` (bloco aninhado, versão própria) | 3 |
 | 4.3 | App: `localizacao` (bloco aninhado, versão própria) | 3 |
@@ -82,7 +82,7 @@ Versões 1 e 2 não trazem `valueMax`: a leitura entra na regra de queda com o p
 
 `POST /eventos` · **Versão atual: 3**
 
-Emitidos pelo firmware na serial como linhas JSON; o bridge os roteia para `/eventos`.
+Emitidos pelo firmware como JSON, por HTTPS, para a API do bridge (`POST /v1/dispositivos/<id>/eventos`); o bridge os roteia para `/eventos`.
 
 | Campo | Tipo | Regra |
 | --- | --- | --- |
@@ -112,11 +112,11 @@ Emitidos pelo firmware na serial como linhas JSON; o bridge os roteia para `/eve
 
 ---
 
-## 3. Servidor → firmware: comando serial local
+## 3. Servidor → firmware: comando do bridge
 
-Via bridge, serial local, texto · **Versão atual: 3**
+Via bridge, texto dentro da resposta HTTPS de `GET /v1/dispositivos/<id>/comandos` (`{"comandos":["CMD;...", ...]}`) · **Versão atual: 3**
 
-Não é JSON (o ESP32 não usa biblioteca JSON), portanto não carrega `schemaVersion`; a versão é a do contrato. Uma linha terminada em `\n`:
+A linha não é JSON (o ESP32 não usa biblioteca JSON), portanto não carrega `schemaVersion`; a versão é a do contrato. Cada comando é uma linha de texto, com menos de 96 bytes (o firmware descarta, sem truncar, a que for maior):
 
 | Linha | Campos |
 | --- | --- |

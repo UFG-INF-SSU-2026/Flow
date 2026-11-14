@@ -1,8 +1,8 @@
 """
 Traducao pura: mensagem de push do servidor -> linha de comando do firmware, e o parser SSE. Nao faz rede nem conhece
-serial, Wokwi ou Flask. O bridge nao decide nada: valida a forma, traduz e entrega.
+Wokwi ou Flask. O bridge nao decide nada: valida a forma, traduz e entrega.
 
-Comando (o mesmo formato serve a serial e a API):
+Comando (texto dentro da resposta HTTPS de GET /comandos):
     CMD;BUZZER_ON;<messageId>;<timeoutMs>
     CMD;BUZZER_OFF;<messageId>;<resultado>
 """
