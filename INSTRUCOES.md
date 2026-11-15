@@ -206,7 +206,7 @@ pip install -r requirements.txt   # inclui o pytest
 python -m pytest
 ```
 
-A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados), `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo, banco e análise fora do ar e ciclo de queda ponta a ponta) e `tests/banco/` (o mesmo contrato do repositório no PostgreSQL real; fora da execução padrão: `python -m pytest -m banco`, com o container no ar). Nos testes a análise roda em memória no lugar do processo. Ela é independente do seu ambiente: **não lê o seu `.env`** (`FLOW_SEM_DOTENV=1`), define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`), usa um banco falso em memória (que também guarda contas e sessões), então **não usa nem altera** as suas contas reais.
+A configuração está em `SensorServer/pytest.ini`. A suíte tem `tests/unit/` (módulos isolados), `tests/integration/` (rotas HTTP, push SSE, autorização, limite de corpo, banco e análise fora do ar e ciclo de queda ponta a ponta) e `tests/banco/` (o mesmo contrato do repositório no PostgreSQL real; fora da execução padrão: `python -m pytest -m banco`, com o container no ar). Nos testes a análise roda em memória no lugar do processo. Ela é independente do seu ambiente: **não lê o seu `.env`** (`FLOW_SEM_DOTENV=1`), define o próprio `FLOW_JWT_SECRET`, desliga as threads de fundo (`FLOW_SEM_THREADS=1`), usa um banco falso em memória (que também guarda contas e sessões), então **não usa nem altera** as suas contas reais. Dois testes saem do padrão de "análise em memória": `tests/integration/test_texto_claro_recusado.py` sobe em loopback a borda (`python -m borda` e `python -m borda.server`) e a análise (`python -m analise`), com certificado de teste, e confere que só respondem por HTTPS; e `tests/unit/test_sem_texto_claro.py` varre servidor, bridge, firmware e app atrás de `http://` e `ws://` fora de uma lista de exceções. Nenhum dos dois lê o seu `.env` nem usa o seu `certs/`.
 
 ### Bridge (pytest)
 
@@ -216,7 +216,7 @@ pip install -r requirements.txt   # inclui o pytest
 python -m pytest
 ```
 
-A configuração está em `Bridge/pytest.ini`. Os testes não usam rede e não leem o seu `.env`: cobrem a validação e a tradução das mensagens de push, o roteamento dos eventos, o leitor SSE, a renovação de sessão e a recusa de `http://` na configuração.
+A configuração está em `Bridge/pytest.ini`. Os testes não usam rede externa e não leem o seu `.env`: um deles sobe o bridge em loopback com um certificado de teste gerado na hora (usa `SensorServer/scripts/gerar_certificado.py`; sem esse arquivo ao lado de `Bridge/`, o teste é pulado). Cobrem a validação e a tradução das mensagens de push, o roteamento dos eventos, o leitor SSE, a renovação de sessão, a recusa de `http://` na configuração e a recusa de texto claro pelo bridge real.
 
 ### App Android (JVM)
 
