@@ -1,6 +1,6 @@
 """
 ANALISE do SensorServer (Servidor 2): decide (queda, imobilidade, luz). Nao tem banco, nao tem credencial de dispositivo e
-nao entrega nada: a borda a chama por uma API HTTP local e grava e entrega o que ela decidir.
+nao entrega nada: a borda a chama por uma API HTTPS local e grava e entrega o que ela decidir.
 
   nucleo.py          nucleo das regras: "processar este lote com este relogio e este estado" (sem I/O, sem thread)
   regra_queda.py, regra_imobilidade.py, regra_luz.py   as regras, com o estado em memoria explicito

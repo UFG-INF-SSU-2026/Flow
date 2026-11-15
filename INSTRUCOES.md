@@ -8,7 +8,7 @@ Este projeto une um app Android, uma simulação Wokwi (ESP32 + acelerômetro + 
 Flow/
 ├── SensorServer/       # servidor central (Flask): borda (autenticação, banco, push) e análise (decide)
 │   ├── .env.example    # modelo da configuração do servidor (copie para .env)
-│   ├── borda/          # Servidor 1: rotas, auth, SSE, banco; chama a análise por HTTP local
+│   ├── borda/          # Servidor 1: rotas, auth, SSE, banco; chama a análise por HTTPS local
 │   ├── analise/        # Servidor 2: núcleo e regras (queda, imobilidade, luz); sem banco
 │   ├── comum/          # constantes, schemas, mensagem de push, contrato borda↔análise e TLS
 │   ├── certs/          # CA do projeto e certificados TLS (gerados por scripts/gerar_certificado.py; fora do Git)

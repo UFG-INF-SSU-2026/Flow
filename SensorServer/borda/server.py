@@ -232,7 +232,7 @@ def _montar_restauracao() -> dict:
 
 
 def configurar_analise(transporte) -> "cliente_analise.ClienteAnalise":
-    """Liga a borda a analise por `transporte` (HTTP em producao; chamada direta nos testes)."""
+    """Liga a borda a analise por `transporte` (HTTPS em producao; chamada direta nos testes)."""
     global _cliente
     _cliente = cliente_analise.ClienteAnalise(transporte, _montar_restauracao)
     return _cliente
