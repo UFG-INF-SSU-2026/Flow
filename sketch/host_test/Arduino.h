@@ -22,7 +22,7 @@ inline int digitalRead(int p) { return g_pin[p]; }
 inline void tone(int pin, unsigned f) { g_tone_pin = pin; g_tone_freq = f; }
 inline void noTone(int pin) { if (g_tone_pin == pin) { g_tone_pin = -1; g_tone_freq = 0; } }
 struct SerialMock {
-  std::string out; std::deque<char> in;
+  std::string out;   // so diagnostico: o firmware nao le a Serial
   void begin(int) {} operator bool() const { return true; }
   void print(const char* s) { out += s; }
   void print(int v) { out += std::to_string(v); }
@@ -30,9 +30,6 @@ struct SerialMock {
   void print(uint32_t v) { out += std::to_string(v); }
   void print(float v, int d) { char b[32]; snprintf(b, 32, "%.*f", d, v); out += b; }
   void println(const char* s) { out += s; out += "\n"; }
-  int available() { return (int)in.size(); }
-  int read() { int c = in.front(); in.pop_front(); return c; }
-  void feed(const std::string& s) { for (char c : s) in.push_back(c); }
 };
 static SerialMock Serial;
 // Wire falso: o "MPU" devolve valores configuraveis; registra a escrita em ACCEL_CONFIG

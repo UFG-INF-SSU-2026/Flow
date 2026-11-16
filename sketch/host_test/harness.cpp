@@ -1,100 +1,102 @@
 #include "Arduino.h"
-#include "sketch_host.cpp"
+#include "sketch_host.cpp"   // inclui o transporte_wifi.h desta pasta (duble)
 #include <iostream>
 #include <cassert>
 static int fails = 0;
 #define CHECK(c, m) do { if (c) std::cout << "PASS " << m << "\n"; else { std::cout << "FAIL " << m << "\n"; fails++; } } while (0)
-static bool has(const char* t) { return Serial.out.find(t) != std::string::npos; }
+static bool has(const char* t) { return g_rede_eventos.find(t) != std::string::npos; }
 static void avanca(unsigned long ms) { for (unsigned long i = 0; i < ms; i += 10) { g_millis += 10; loop(); } }
 // Todos os valores de "sequence" que o firmware imprimiu, na ordem.
 static std::vector<unsigned long> sequencias() {
   std::vector<unsigned long> r; const std::string chave = "\"sequence\":"; size_t pos = 0;
-  while ((pos = Serial.out.find(chave, pos)) != std::string::npos) { pos += chave.size(); r.push_back(strtoul(Serial.out.c_str() + pos, nullptr, 10)); }
+  while ((pos = g_rede_eventos.find(chave, pos)) != std::string::npos) { pos += chave.size(); r.push_back(strtoul(g_rede_eventos.c_str() + pos, nullptr, 10)); }
   return r;
 }
 int main() {
   g_pin[PIN_BTN_CONFIRM] = HIGH; g_pin[PIN_BTN_REARM] = HIGH;
   setup();
   CHECK(Wire.accelCfg == 0x10, "setup escreve ACCEL_CONFIG=0x10 (+-8g)");
-  CHECK(has("\"eventType\":\"login\""), "setup emite a linha de login");
-  Serial.out.clear();
+  CHECK(g_wifi_iniciado == 1, "setup inicia o WiFi/HTTPS uma vez");
+  CHECK(g_rede_login.find("\"eventType\":\"login\"") != std::string::npos, "setup faz o login pelo transporte HTTPS");
+  CHECK(g_rede_eventos.find("segredo") == std::string::npos, "o login nao vai pelo canal de eventos");
+  g_rede_eventos.clear();
   // leitura: 1 g no eixo Z em +-8g = 4096 LSB -> 9.81 m/s2
   Wire.az = 4096; avanca(1100);
   CHECK(has("\"eventType\":\"imobilidade.leitura\""), "emite imobilidade.leitura");
   CHECK(has("\"value\":9.81") && has("\"valueMax\":9.81"), "value e valueMax corretos com divisor 4096");
   CHECK(has("\"schemaVersion\":3"), "schemaVersion 3");
   // pico entre ciclos: sobe o eixo por 100 ms e volta
-  Serial.out.clear(); Wire.az = 0; avanca(500); Wire.az = 16384; avanca(100); Wire.az = 0; avanca(500);
+  g_rede_eventos.clear(); Wire.az = 0; avanca(500); Wire.az = 16384; avanca(100); Wire.az = 0; avanca(500);
   CHECK(has("\"valueMax\":39.2") || has("\"valueMax\":39.3") || has("\"valueMax\":39.22"), "valueMax captura o pico (4 g) amostrado a cada 50 ms");
   // comando BUZZER_ON
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_ON;msg-123;5000\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_ON;msg-123;5000\n"); avanca(30);
   CHECK(g_tone_pin == PIN_BUZZER && g_tone_freq == BUZZER_FREQ_HZ, "BUZZER_ON liga tone no pino do buzzer");
   CHECK(has("\"eventType\":\"push.ack\"") && has("\"state\":\"ATIVADO\"") && has("\"messageId\":\"msg-123\""), "emite push.ack ATIVADO com messageId");
   // botao Estou bem (acoplado a pressConfirm tambem)
-  Serial.out.clear();
+  g_rede_eventos.clear();
   g_pin[PIN_BTN_CONFIRM] = LOW; avanca(120); g_pin[PIN_BTN_CONFIRM] = HIGH; avanca(60);
   CHECK(g_tone_pin == -1, "botao Estou bem desliga o buzzer");
   CHECK(has("\"eventType\":\"confirmacao.resposta\"") && has("\"state\":\"ESTOU_BEM\"") && has("msg-123"), "emite confirmacao.resposta ESTOU_BEM");
   // timeout
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_ON;msg-456;1500\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_ON;msg-456;1500\n"); avanca(30);
   CHECK(g_tone_pin == PIN_BUZZER, "segundo BUZZER_ON liga");
   avanca(1400); CHECK(g_tone_pin == PIN_BUZZER, "ainda toca antes do timeout");
   avanca(300);
   CHECK(g_tone_pin == -1 && has("\"state\":\"SEM_RESPOSTA\"") && has("msg-456"), "timeout desliga e emite SEM_RESPOSTA");
   // BUZZER_OFF do servidor
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_ON;msg-789;5000\n"); avanca(30);
-  Serial.feed("CMD;BUZZER_OFF;msg-off;CONFIRMADO\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_ON;msg-789;5000\n"); avanca(30);
+  bridge_envia("CMD;BUZZER_OFF;msg-off;CONFIRMADO\n"); avanca(30);
   CHECK(g_tone_pin == -1, "BUZZER_OFF desliga");
   CHECK(!has("confirmacao.resposta"), "BUZZER_OFF nao emite evento de resposta");
   // comando invalido e teto
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_ON;msg-x;999999\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_ON;msg-x;999999\n"); avanca(30);
   CHECK(g_tone_pin == -1 && has("\"state\":\"REJEITADO\""), "timeout acima do teto -> REJEITADO e buzzer desligado");
-  Serial.out.clear();
-  Serial.feed("lixo qualquer\nCMD;BUZZER_ON\nCMD;BUZZER_ON;;100\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("lixo qualquer\nCMD;BUZZER_ON\nCMD;BUZZER_ON;;100\n"); avanca(30);
   CHECK(g_tone_pin == -1, "linhas invalidas nao ligam o buzzer");
   // clique sem buzzer nao gera resposta
-  Serial.out.clear();
+  g_rede_eventos.clear();
   g_pin[PIN_BTN_CONFIRM] = LOW; avanca(120); g_pin[PIN_BTN_CONFIRM] = HIGH; avanca(60);
   CHECK(!has("confirmacao.resposta"), "clique sem buzzer ativo nao emite resposta");
   // BUZZER_ON repetido (mesmo messageId) com o buzzer tocando: ignorado, sem reemitir ack nem reiniciar o tempo
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_ON;msg-dup;1500\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_ON;msg-dup;1500\n"); avanca(30);
   CHECK(g_tone_pin == PIN_BUZZER && has("\"messageId\":\"msg-dup\""), "BUZZER_ON de teste de idempotencia liga");
   avanca(900);
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_ON;msg-dup;1500\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_ON;msg-dup;1500\n"); avanca(30);
   CHECK(!has("push.ack"), "BUZZER_ON repetido (mesmo id) nao reemite push.ack");
   avanca(700);   // ~1660 ms desde o pedido original: venceu o prazo de 1500 ms; se o tempo tivesse reiniciado, ainda tocaria
   CHECK(g_tone_pin == -1 && has("\"state\":\"SEM_RESPOSTA\"") && has("msg-dup"), "BUZZER_ON repetido (mesmo id) nao reinicia o tempo");
   // BUZZER_ON com messageId DIFERENTE com o buzzer tocando: substitui o episodio (decisao fixada em ligarBuzzer)
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_ON;msg-A;5000\n"); avanca(30);
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_ON;msg-B;5000\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_ON;msg-A;5000\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_ON;msg-B;5000\n"); avanca(30);
   CHECK(g_tone_pin == PIN_BUZZER && has("\"state\":\"ATIVADO\"") && has("\"messageId\":\"msg-B\""), "BUZZER_ON com id diferente substitui: push.ack ATIVADO para o novo");
   CHECK(!has("SEM_RESPOSTA") && !has("msg-A"), "substituicao nao emite SEM_RESPOSTA para o id anterior");
-  Serial.out.clear();
+  g_rede_eventos.clear();
   g_pin[PIN_BTN_CONFIRM] = LOW; avanca(120); g_pin[PIN_BTN_CONFIRM] = HIGH; avanca(60);
   CHECK(g_tone_pin == -1 && has("\"state\":\"ESTOU_BEM\"") && has("msg-B") && !has("msg-A"), "resposta depois da substituicao usa o id novo");
   // linha maior que o buffer (96 bytes): descartada, nao liga o buzzer, e o canal continua utilizavel
-  Serial.out.clear();
-  Serial.feed(std::string("CMD;BUZZER_ON;") + std::string(100, 'a') + ";5000\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia(std::string("CMD;BUZZER_ON;") + std::string(100, 'a') + ";5000\n"); avanca(30);
   CHECK(g_tone_pin == -1 && !has("push.ack"), "linha de comando maior que o buffer e descartada e nao liga o buzzer");
-  Serial.feed("CMD;BUZZER_ON;msg-pos-longa;5000\n"); avanca(30);
+  bridge_envia("CMD;BUZZER_ON;msg-pos-longa;5000\n"); avanca(30);
   CHECK(g_tone_pin == PIN_BUZZER && has("msg-pos-longa"), "apos linha longa demais, comando valido volta a funcionar");
-  Serial.feed("CMD;BUZZER_OFF;msg-off2;CANCELADO\n"); avanca(30);
+  bridge_envia("CMD;BUZZER_OFF;msg-off2;CANCELADO\n"); avanca(30);
   // BUZZER_OFF com o buzzer ja desligado: nada a fazer, nenhum evento de retorno
-  Serial.out.clear();
-  Serial.feed("CMD;BUZZER_OFF;msg-off3;EXPIRADO\n"); avanca(30);
+  g_rede_eventos.clear();
+  bridge_envia("CMD;BUZZER_OFF;msg-off3;EXPIRADO\n"); avanca(30);
   CHECK(g_tone_pin == -1 && !has("push.ack") && !has("confirmacao.resposta"), "BUZZER_OFF com o buzzer desligado nao emite evento de retorno");
   // sequence: contador unico, estritamente crescente entre leitura e eventos de retorno
-  Serial.out.clear();
+  g_rede_eventos.clear();
   avanca(1100);
-  Serial.feed("CMD;BUZZER_ON;msg-seq;5000\n"); avanca(30);
+  bridge_envia("CMD;BUZZER_ON;msg-seq;5000\n"); avanca(30);
   g_pin[PIN_BTN_CONFIRM] = LOW; avanca(120); g_pin[PIN_BTN_CONFIRM] = HIGH; avanca(60);
   avanca(1100);
   { std::vector<unsigned long> q = sequencias(); bool cresce = q.size() >= 4;
@@ -102,14 +104,18 @@ int main() {
     CHECK(has("imobilidade.leitura") && has("push.ack") && has("confirmacao.resposta"), "o trecho de sequence tem leitura, push.ack e confirmacao.resposta");
     CHECK(cresce, "sequence estritamente crescente entre imobilidade.leitura e eventos de retorno"); }
   // fora de faixa
-  Serial.out.clear(); Wire.az = 32767; Wire.ax = 32767; Wire.ay = 32767; avanca(1100);
+  g_rede_eventos.clear(); Wire.az = 32767; Wire.ax = 32767; Wire.ay = 32767; avanca(1100);
   CHECK(!has("LEITURA_FORA_DE_FAIXA"), "~136 m/s2 (fundo de escala +-8g) < teto 160: nao e fora de faixa");
-  // login: o firmware entrega o login no inicio e quando o bridge pede (CMD;LOGIN); o segredo nao entra em eventos
-  Serial.out.clear();
-  Serial.feed("CMD;LOGIN\n"); avanca(30);
-  CHECK(has("\"eventType\":\"login\"") && has("\"identificador\":\"conta-teste\"") && has("\"segredo\":\"segredo-teste\"") && has("\"deviceId\":\"esp32-decisao-imobilidade-01\""), "CMD;LOGIN faz o firmware emitir a linha de login");
+  // login: o segredo so existe no login HTTPS; nenhum comando remoto o faz sair (CMD;LOGIN deixou de existir)
+  g_rede_login.clear(); g_rede_eventos.clear();
+  bridge_envia("CMD;LOGIN\n"); avanca(30);
+  CHECK(g_rede_login.empty() && !has("login"), "CMD;LOGIN e ignorado: nenhum comando remoto faz o firmware emitir o login");
   CHECK(g_tone_pin == -1, "CMD;LOGIN nao mexe no buzzer");
-  Serial.out.clear(); avanca(1100);
+  emitirLogin();
+  CHECK(g_rede_login.find("\"eventType\":\"login\"") != std::string::npos && g_rede_login.find("\"identificador\":\"conta-teste\"") != std::string::npos
+        && g_rede_login.find("\"segredo\":\"segredo-teste\"") != std::string::npos && g_rede_login.find("\"deviceId\":\"esp32-decisao-imobilidade-01\"") != std::string::npos,
+        "emitirLogin entrega identificador, segredo e deviceId ao transporte HTTPS");
+  g_rede_eventos.clear(); avanca(1100);
   CHECK(has("imobilidade.leitura") && !has("segredo"), "eventos comuns nao carregam o segredo");
   // ---- LEDs exclusivos: amarelo = suspeita (maquina local), vermelho = certeza (servidor pediu, buzzer tocando) ----
   {
@@ -119,7 +125,7 @@ int main() {
     auto clicaRearme = []() { g_pin[PIN_BTN_REARM] = LOW; avanca(120); g_pin[PIN_BTN_REARM] = HIGH; avanca(60); };
     // Estado conhecido: buzzer desligado, maquina em NORMAL (movimento tira de AGUARDANDO; o Rearme tira de ALERTA).
     auto paraNormal = [&]() {
-      Serial.feed("CMD;BUZZER_OFF;reset;CANCELADO\n"); avanca(30);
+      bridge_envia("CMD;BUZZER_OFF;reset;CANCELADO\n"); avanca(30);
       Wire.ax = 0; Wire.ay = 0; Wire.az = 4096; avanca(1100); clicaRearme(); avanca(1100);
     };
     auto ateAlerta = [&]() { Wire.ax = 0; Wire.ay = 0; Wire.az = 0; avanca(15000); };   // 5 s de persistencia + 8 s de espera
@@ -130,59 +136,62 @@ int main() {
     CHECK(amarelo() && !vermelho(), "LEDs: suspeita local acende so o amarelo");
     avanca(9000);
     CHECK(amarelo() && !vermelho(), "LEDs: o alerta local persiste com o amarelo");
-    Serial.feed("CMD;BUZZER_ON;led-1;5000\n"); avanca(30);
+    bridge_envia("CMD;BUZZER_ON;led-1;5000\n"); avanca(30);
     CHECK(vermelho() && !amarelo(), "LEDs: o vermelho ligou, o amarelo apagou (exclusivos)");
-    Serial.out.clear(); clicaEstouBem();
+    g_rede_eventos.clear(); clicaEstouBem();
     CHECK(g_tone_pin == -1 && !vermelho() && !amarelo(), "LEDs: Estou bem com o vermelho aceso apaga buzzer, vermelho e amarelo");
     avanca(1100);
     CHECK(has("\"state\":\"CONFIRMADO_OK\"") && has("\"state\":\"ESTOU_BEM\""), "Estou bem em ALERTA_CONFIRMADO volta a maquina para NORMAL (CONFIRMADO_OK) e responde ao servidor");
     CHECK(!amarelo(), "LEDs: o amarelo continua apagado depois do ciclo");
-    Serial.out.clear(); avanca(6500);
+    g_rede_eventos.clear(); avanca(6500);
     CHECK(has("SUSPEITA_IMOBILIDADE") && amarelo(), "pessoa segue parada: a contagem recomeca e o amarelo volta a acender");
 
     // vermelho apaga SEM clique (fim do tempo): o amarelo volta, o alerta local continua sem resolucao
     paraNormal(); ateAlerta();
-    Serial.feed("CMD;BUZZER_ON;led-2;1500\n"); avanca(30);
+    bridge_envia("CMD;BUZZER_ON;led-2;1500\n"); avanca(30);
     CHECK(vermelho() && !amarelo(), "LEDs: segundo pedido, vermelho aceso e amarelo apagado");
-    Serial.out.clear(); avanca(1700);
+    g_rede_eventos.clear(); avanca(1700);
     CHECK(has("\"state\":\"SEM_RESPOSTA\"") && !vermelho() && amarelo(), "LEDs: fim do tempo sem clique apaga o vermelho e o amarelo volta");
 
     // servidor encerra como CONFIRMADO com o buzzer tocando (alguem confirmou em outro dispositivo): limpa tambem o amarelo
     paraNormal(); ateAlerta();
-    Serial.feed("CMD;BUZZER_ON;led-3;5000\n"); avanca(30);
-    Serial.out.clear();
-    Serial.feed("CMD;BUZZER_OFF;enc-1;CONFIRMADO\n"); avanca(1100);
+    bridge_envia("CMD;BUZZER_ON;led-3;5000\n"); avanca(30);
+    g_rede_eventos.clear();
+    bridge_envia("CMD;BUZZER_OFF;enc-1;CONFIRMADO\n"); avanca(1100);
     CHECK(g_tone_pin == -1 && !vermelho() && !amarelo() && has("\"state\":\"CONFIRMADO_OK\""), "encerramento CONFIRMADO do servidor apaga os dois LEDs e volta a maquina para NORMAL");
     CHECK(!has("confirmacao.resposta"), "encerramento do servidor nao emite resposta do dispositivo");
 
     // servidor encerra como EXPIRADO: o amarelo volta
     paraNormal(); ateAlerta();
-    Serial.feed("CMD;BUZZER_ON;led-4;5000\n"); avanca(30);
-    Serial.out.clear();
-    Serial.feed("CMD;BUZZER_OFF;enc-2;EXPIRADO\n"); avanca(100);
+    bridge_envia("CMD;BUZZER_ON;led-4;5000\n"); avanca(30);
+    g_rede_eventos.clear();
+    bridge_envia("CMD;BUZZER_OFF;enc-2;EXPIRADO\n"); avanca(100);
     CHECK(!vermelho() && amarelo() && !has("CONFIRMADO_OK"), "encerramento EXPIRADO apaga o vermelho e o amarelo volta (sem confirmar nada)");
 
     // BUZZER_OFF CONFIRMADO reenviado na reconexao, sem buzzer tocando: nao pode apagar um alerta local
     paraNormal(); ateAlerta();
-    Serial.out.clear();
-    Serial.feed("CMD;BUZZER_OFF;enc-velho;CONFIRMADO\n"); avanca(1100);
+    g_rede_eventos.clear();
+    bridge_envia("CMD;BUZZER_OFF;enc-velho;CONFIRMADO\n"); avanca(1100);
     CHECK(amarelo() && !has("CONFIRMADO_OK"), "BUZZER_OFF CONFIRMADO sem buzzer tocando (reenvio) nao apaga o alerta local");
 
     // Estou bem em ALERTA_CONFIRMADO sem buzzer: tambem encerra o alerta
-    Serial.out.clear(); clicaEstouBem(); avanca(1100);
+    g_rede_eventos.clear(); clicaEstouBem(); avanca(1100);
     CHECK(has("\"state\":\"CONFIRMADO_OK\"") && !amarelo(), "Estou bem em ALERTA_CONFIRMADO, sem buzzer, encerra o alerta e apaga o amarelo");
 
     // O Rearme continua funcionando
     paraNormal(); ateAlerta();
-    Serial.out.clear(); clicaRearme(); avanca(1100);
+    g_rede_eventos.clear(); clicaRearme(); avanca(1100);
     CHECK(has("\"state\":\"REARMADO_MANUAL\"") && !amarelo(), "Rearme continua encerrando o alerta local");
 
     // Estou bem em AGUARDANDO_CONFIRMACAO continua valendo
     paraNormal(); Wire.az = 0; avanca(7000);
     CHECK(amarelo(), "LEDs: em AGUARDANDO o amarelo esta aceso");
-    Serial.out.clear(); clicaEstouBem(); avanca(1100);
+    g_rede_eventos.clear(); clicaEstouBem(); avanca(1100);
     CHECK(has("\"state\":\"CONFIRMADO_OK\"") && !amarelo(), "Estou bem em AGUARDANDO_CONFIRMACAO volta para NORMAL e apaga o amarelo");
   }
+  // A Serial e so diagnostico para quem olha o monitor: nunca carrega evento, comando nem credencial.
+  CHECK(Serial.out.find("segredo") == std::string::npos && Serial.out.find("eventType") == std::string::npos && Serial.out.find("CMD;") == std::string::npos,
+        "a Serial nao carrega segredo, evento nem comando");
   std::cout << (fails ? "\nFALHAS: " : "\nFIRMWARE OK ") << fails << "\n";
   return fails;
 }

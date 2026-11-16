@@ -94,14 +94,17 @@ class TestGatilhoA:
 
     def test_silencio_maior_que_o_intervalo_descarta_o_impacto(self):
         avaliar(T0, IMPACTO)
-        assert avaliar(T0 + 3.5, CALMA) is None          # passou de INTERVALO_MAX_ENTRE_LEITURAS_S (3)
+        lacuna = const_analise.INTERVALO_MAX_ENTRE_LEITURAS_S + 0.5
+        assert avaliar(T0 + lacuna, CALMA) is None       # passou de INTERVALO_MAX_ENTRE_LEITURAS_S
         assert fase() == "OBSERVANDO"
-        for dt in (4.5, 5.5, 6.5, 7.5):
+        for dt in (lacuna + 1, lacuna + 2, lacuna + 3, lacuna + 4):
             assert avaliar(T0 + dt, CALMA) is None
 
     def test_lacuna_de_exatamente_o_intervalo_maximo_ainda_vale(self):
         avaliar(T0, IMPACTO)
-        assert avaliar(T0 + 3.0, CALMA) is not None      # 3.0 nao e "mais que" 3
+        # exatamente o intervalo maximo nao e "mais que" o intervalo: o impacto continua valendo
+        assert avaliar(T0 + const_analise.INTERVALO_MAX_ENTRE_LEITURAS_S, CALMA) is None
+        assert fase() == "POS_IMPACTO"
 
     def test_leitura_invalida_nao_move_a_maquina(self):
         avaliar(T0, IMPACTO)

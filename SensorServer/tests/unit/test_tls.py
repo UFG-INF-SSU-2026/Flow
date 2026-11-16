@@ -1,5 +1,6 @@
-"""TLS: so a configuracao. A CA do projeto assina o certificado de quem serve; o cliente da borda e o banco confiam so na CA.
-Os testes de integracao seguem sem TLS (a analise roda em memoria, sem rede)."""
+"""TLS: a configuracao, a analise servida em TLS dentro do teste e o transporte da borda para a analise, que so aceita https://.
+A CA do projeto assina o certificado de quem serve; o cliente da borda e o banco confiam so na CA.
+Os testes de integracao que montam o servidor (conftest) seguem sem TLS: a analise roda em memoria, sem rede."""
 import importlib
 import threading
 
@@ -34,6 +35,21 @@ def test_sem_certificado_ou_com_url_http_nada_sobe(monkeypatch, tmp_path):
     monkeypatch.setenv("FLOW_DB_SSLMODE", "require")
     with pytest.raises(config.ConfigBanco, match="FLOW_DB_SSLMODE"):
         config.sslmode()
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:5100", "HTTP://127.0.0.1:5100"])
+def test_transporte_da_borda_recusa_url_http_no_argumento(monkeypatch, tmp_path, url):
+    # CA inexistente: se o transporte lesse a CA antes de conferir a URL, o erro seria outro (citaria gerar_certificado).
+    monkeypatch.setenv("FLOW_TLS_CA", str(tmp_path / "nao-existe-ca.crt"))
+    with pytest.raises(tls.ConfigTls, match=r"FLOW_ANALISE_URL.*https://"):
+        cliente_analise.transporte_http(url, TOKEN)
+
+
+def test_transporte_da_borda_recusa_url_http_vinda_do_ambiente(monkeypatch, tmp_path):
+    monkeypatch.setenv("FLOW_TLS_CA", str(tmp_path / "nao-existe-ca.crt"))
+    monkeypatch.setenv("FLOW_ANALISE_URL", "http://127.0.0.1:5100")
+    with pytest.raises(tls.ConfigTls, match=r"FLOW_ANALISE_URL.*https://"):
+        cliente_analise.transporte_http(token=TOKEN)
 
 
 def test_ca_assina_o_servico_e_so_a_ca_e_confianca(monkeypatch, tmp_path):

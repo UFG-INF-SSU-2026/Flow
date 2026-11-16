@@ -1,5 +1,5 @@
 """
-Cliente da ANALISE (Servidor 2) do lado da borda: chama a API HTTP dela e cuida do que acontece quando ela cai.
+Cliente da ANALISE (Servidor 2) do lado da borda: chama a API HTTPS dela e cuida do que acontece quando ela cai.
 
     analisar(itens)   manda um lote (Leitura/Resposta) e devolve as `Decisoes`
     vigiar(agora)     pede o encerramento por expiracao dos episodios vencidos

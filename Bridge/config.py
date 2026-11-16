@@ -44,6 +44,11 @@ class Config:
     api_chave: str = ""
     max_simulacoes: int = 8
 
+    def __post_init__(self):
+        # Garantia no proprio objeto: nenhuma Config (e portanto nenhuma Sessao) nasce apontando para texto claro.
+        if not self.servidor.lower().startswith("https://"):
+            raise ValueError(f"FLOW_SERVIDOR precisa comecar com https:// (toda ponta fala TLS); recebido: {self.servidor}")
+
 
 def _caminho(valor: str | None, padrao: Path) -> str:
     p = Path(valor).expanduser() if valor else padrao
@@ -64,13 +69,16 @@ def _inteiro(nome: str, padrao: int, minimo: int, maximo: int) -> int:
 
 
 def ler_config() -> Config:
-    """Le o ambiente na hora do uso (depois de carregar_dotenv)."""
-    return Config(
-        servidor=os.environ.get("FLOW_SERVIDOR", "https://127.0.0.1:5000").rstrip("/"),
-        ca=_caminho(os.environ.get("FLOW_TLS_CA"), _CERTS / "ca.crt"),
-        host=os.environ.get("FLOW_BRIDGE_HOST", "127.0.0.1"),
-        porta=_inteiro("FLOW_BRIDGE_PORT", 5443, 1, 65535),
-        api_cert=_caminho(os.environ.get("FLOW_BRIDGE_API_CERT"), _CERTS / "bridge.crt"),
-        api_chave=_caminho(os.environ.get("FLOW_BRIDGE_API_KEY"), _CERTS / "bridge.key"),
-        max_simulacoes=_inteiro("FLOW_BRIDGE_MAX_SIMULACOES", 8, 1, 64),
-    )
+    """Le o ambiente na hora do uso (depois de carregar_dotenv). FLOW_SERVIDOR que nao seja https:// encerra com mensagem."""
+    try:
+        return Config(
+            servidor=os.environ.get("FLOW_SERVIDOR", "https://127.0.0.1:5000").rstrip("/"),
+            ca=_caminho(os.environ.get("FLOW_TLS_CA"), _CERTS / "ca.crt"),
+            host=os.environ.get("FLOW_BRIDGE_HOST", "127.0.0.1"),
+            porta=_inteiro("FLOW_BRIDGE_PORT", 5443, 1, 65535),
+            api_cert=_caminho(os.environ.get("FLOW_BRIDGE_API_CERT"), _CERTS / "bridge.crt"),
+            api_chave=_caminho(os.environ.get("FLOW_BRIDGE_API_KEY"), _CERTS / "bridge.key"),
+            max_simulacoes=_inteiro("FLOW_BRIDGE_MAX_SIMULACOES", 8, 1, 64),
+        )
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
