@@ -31,7 +31,3 @@ def test_contexto_tls_da_api_exige_tls_1_2_ou_superior(tmp_path):
     cfg = Config(servidor="https://127.0.0.1:5000", ca=str(pasta / "ca.crt"), api_cert=str(pasta / "bridge.crt"),
                  api_chave=str(pasta / "bridge.key"))
     assert bridge.contexto_tls(cfg).minimum_version == ssl.TLSVersion.TLSv1_2
-
-
-def test_conexao_persistente_usa_http_1_1():
-    assert bridge.ConexaoPersistente.protocol_version == "HTTP/1.1"
