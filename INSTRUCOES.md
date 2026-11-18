@@ -177,6 +177,8 @@ O bridge **não tem conta nem senha**: o login de cada dispositivo vem do própr
 | `FLOW_BRIDGE_HOST`, `FLOW_BRIDGE_PORT` | onde a API do bridge escuta (só HTTPS) | `127.0.0.1`, `5443` |
 | `FLOW_BRIDGE_API_CERT`, `FLOW_BRIDGE_API_KEY` | certificado e chave da API do bridge (`gerar_certificado.py --nome bridge`) | `../SensorServer/certs/bridge.crt`, `bridge.key` |
 
+A API do bridge é servida pelo `cheroot` (o `pip install -r requirements.txt` já o instala), sempre sobre HTTPS. A conexão TLS é reaproveitada entre as chamadas: uma conexão ociosa por mais de 10 s é fechada e a chamada seguinte paga um handshake de novo. Cada requisição gera uma linha no terminal, `[bridge] HH:MM:SS.mmm METODO /caminho STATUS`, sem query string, corpo nem cabeçalhos. `Ctrl+C` encerra o bridge.
+
 O servidor exige que o `deviceId` dos eventos seja um dos `device_id` da conta (`403` se diferir), e o firmware usa `esp32-decisao-imobilidade-01` (o `DEVICE_ID` de `sketch.ino`).
 
 > No Windows, prefira `127.0.0.1` a `localhost` em `FLOW_SERVIDOR`: o `localhost` tenta IPv6 primeiro e cada conexão nova do bridge espera 1-2 s.
@@ -216,7 +218,7 @@ pip install -r requirements.txt   # inclui o pytest
 python -m pytest
 ```
 
-A configuração está em `Bridge/pytest.ini`. Os testes não usam rede externa e não leem o seu `.env`: um deles sobe o bridge em loopback com um certificado de teste gerado na hora (usa `SensorServer/scripts/gerar_certificado.py`; sem esse arquivo ao lado de `Bridge/`, o teste é pulado). Cobrem a validação e a tradução das mensagens de push, o roteamento dos eventos, o leitor SSE, a renovação de sessão, a recusa de `http://` na configuração e a recusa de texto claro pelo bridge real.
+A configuração está em `Bridge/pytest.ini`. Os testes não usam rede externa e não leem o seu `.env`: um deles sobe o bridge em loopback com um certificado de teste gerado na hora (usa `SensorServer/scripts/gerar_certificado.py`; sem esse arquivo ao lado de `Bridge/`, o teste é pulado). Cobrem a validação e a tradução das mensagens de push, o roteamento dos eventos, o leitor SSE, a renovação de sessão, a recusa de `http://` na configuração e a recusa de texto claro pelo bridge real. Outro teste sobe o bridge real em loopback e confere a conexão persistente: várias chamadas na mesma conexão TLS, corpo acima do limite, muitas conexões ociosas sem travar o servidor e o log de acesso sem corpo nem `Authorization`.
 
 ### App Android (JVM)
 
@@ -256,12 +258,14 @@ Cada leitura aceita é uma linha, de `app` ou de `wokwi`, ligada ao usuário da 
 
 ### Queda e confirmação — Wokwi
 
-1. Com a simulação rodando, leve os sliders do acelerômetro a um valor alto (impacto) por um instante.
-2. Zere todos os sliders e mantenha parado por alguns segundos.
+1. Com a simulação rodando, leve **dois** eixos do acelerômetro a 2 g ao mesmo tempo (por exemplo X e Y, cerca de 27,7 m/s²): o simulador limita cada eixo a 2 g (19,6 m/s²), abaixo do limiar de impacto de 20 m/s², então um eixo sozinho nunca conta como impacto.
+2. Zere todos os sliders e mantenha parado por alguns segundos. Zere os dois eixos no mesmo segundo: um eixo que sobra em 2 g conta como movimento e cancela o impacto (**não verificado** no Wokwi). Sem sliders, `python -m adaptadores.software ... --queda` (na pasta `Bridge`, com `--device-id` igual ao `device_id` da conta e a simulação do Wokwi parada) reproduz o impacto seguido de imobilidade.
 3. O servidor deve concluir "queda provável" (impacto seguido de imobilidade) e o **buzzer toca**. Pressione **Estou bem** em até 5 s: o buzzer cala.
 4. Se não pressionar, o buzzer cala ao fim do prazo.
 
 Sem impacto algum, deixar tudo zerado por tempo suficiente também dispara o pedido, por **imobilidade prolongada**, mas com mais atraso (o gatilho de impacto tem preferência). O campo `motivo` do registro `episodio.aberto` (tabela `confirmacoes`) mostra qual gatilho abriu o episódio.
+
+Para conferir o ritmo do laço do firmware: depois do login, as linhas `GET .../comandos` do terminal do bridge devem ficar espaçadas perto de 1 s, e o `eventTimeMs` de leituras consecutivas (consulta de "Leituras no banco") deve diferir perto de 1000 ms (o Wokwi roda um pouco mais lento que o relógio). Numa execução medida, o espaçamento foi de cerca de 1,0 s (o `eventTimeMs` diferiu 1000 ms entre leituras consecutivas), o login levou cerca de 3,2 s (o handshake) e as chamadas seguintes, de 64 a 127 ms. Depois de uma pausa maior que 10 s, a primeira chamada paga um handshake de novo (medido: cerca de 3,2 s) e o ritmo volta ao normal.
 
 ### Queda e confirmação — App
 

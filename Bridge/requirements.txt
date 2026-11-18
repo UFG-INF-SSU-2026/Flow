@@ -3,3 +3,5 @@ requests>=2.31
 cryptography>=42.0
 pytest>=8.0
 python-dotenv>=1.0
+# faixa estreita de proposito: o bridge usa internos do cheroot (AdaptadorSoTls em bridge.py)
+cheroot>=11.1,<12

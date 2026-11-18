@@ -405,7 +405,7 @@ Regras da máquina:
 
 - Em `OBSERVANDO`, um impacto leva a `POS_IMPACTO` e guarda o instante.
 - Em `POS_IMPACTO`, um movimento volta a `OBSERVANDO`; se a mesma leitura também for impacto, recomeça em `POS_IMPACTO` com novo instante. Sem movimento por `T_POS_IMPACTO_S`, abre o episódio.
-- Em `POS_IMPACTO`, se passar mais de `INTERVALO_MAX_ENTRE_LEITURAS_S` (3 s, a calibrar) sem nenhuma leitura usada, o impacto é descartado: uma única leitura calma depois de um silêncio longo não prova imobilidade.
+- Em `POS_IMPACTO`, se passar mais de `INTERVALO_MAX_ENTRE_LEITURAS_S` (2 s, a calibrar: o ciclo do firmware é de cerca de 1,0 s, com jitter) sem nenhuma leitura usada, o impacto é descartado: uma única leitura calma depois de um silêncio longo não prova imobilidade.
 
 Dados degradados:
 
@@ -469,7 +469,7 @@ sequenceDiagram
 | `T_POS_IMPACTO_S` | 3 | Imobilidade exigida após o impacto. |
 | `COOLDOWN_S` | 60 | Entre episódios do mesmo usuário. |
 | `JANELA_FUSAO_S` | 2 | Idade máxima de uma leitura para participar da fusão (9.2.1). |
-| `INTERVALO_MAX_ENTRE_LEITURAS_S` | 3 | Sem leitura usada por mais que isso, o impacto é descartado. A calibrar. |
+| `INTERVALO_MAX_ENTRE_LEITURAS_S` | 2 | Sem leitura usada por mais que isso, o impacto é descartado. A calibrar. |
 | `LOG_DESATUALIZADA_INTERVALO_S` | 60 | Frequência máxima do log de leitura desatualizada. |
 | `TOLERANCIA_RELOGIO_S` | 60 | Regressão de `timestamp_envio` acima da qual a deduplicação do app assume reajuste de relógio. |
 | `RETENCAO_MENSAGENS_S` | 3600 | Tempo que o mapa `messageId` → episódio guarda a entrada depois de a mensagem expirar. |
@@ -576,7 +576,7 @@ Os dois dispositivos concretos são o **app Android** (11.1) e o **dispositivo W
 
 ### 11.3 Bridge (`Bridge/`): gateway HTTPS desacoplado
 
-O bridge não conhece Wokwi nem placa. Ele expõe uma **API HTTPS** (`api.py`, Flask, TLS 1.2+, HTTP/1.1 com conexão persistente, para uma só conexão TLS servir as chamadas de cada segundo do ESP32) que qualquer dispositivo usa, e **vários dispositivos podem usá-la ao mesmo tempo**, cada um com a sua sessão (`sessao.py`). O firmware do Wokwi a chama direto; dispositivos simulados em software usam o **adaptador** `adaptadores/software.py`, em outro processo. **Não existe adaptador serial nem porta RFC2217**: a única entrada do bridge é HTTPS.
+O bridge não conhece Wokwi nem placa. Ele expõe uma **API HTTPS** (`api.py`, Flask, servida pelo `cheroot` sobre TLS 1.2+; a conexão TLS é reaproveitada entre as chamadas e fechada depois de `CONEXAO_OCIOSA_S` (10 s) ociosa, para uma só conexão servir as chamadas de cada segundo do ESP32; no Wokwi, numa execução, as chamadas do firmware ficaram espaçadas em cerca de 1,0 s, com 64 a 127 ms por chamada depois do login; pagaram o handshake, de cerca de 3,2 s, só o login e a primeira chamada depois de uma pausa maior que 10 s) que qualquer dispositivo usa, e **vários dispositivos podem usá-la ao mesmo tempo**, cada um com a sua sessão (`sessao.py`). O firmware do Wokwi a chama direto; dispositivos simulados em software usam o **adaptador** `adaptadores/software.py`, em outro processo. **Não existe adaptador serial nem porta RFC2217**: a única entrada do bridge é HTTPS.
 
 ```text
 firmware --HTTPS--> bridge --HTTPS--> servidor
@@ -648,6 +648,10 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 - **Banco sem recusa forçada de conexão sem TLS:** o compose liga `ssl=on` e a borda exige `verify-full`, mas o projeto não configura o PostgreSQL para recusar clientes sem TLS; a porta só é publicada em `127.0.0.1`. **Comportamento não verificado** (o container não foi executado para isto). Produção: exigir `hostssl` no controle de acesso do PostgreSQL.
 - **A varredura de `http://` é textual:** não detecta endereço montado por concatenação nem confere o comportamento do firmware ou do app em execução; o `static_assert` do firmware e o `cleartextTrafficPermitted="false"` do app são configuração, **não verificada** aqui em compilação, aparelho ou Wokwi.
 - **Testes que sobem processos:** o comportamento deles no Windows **não foi verificado**.
+- **Conexão ociosa por mais de 10 s é fechada** no bridge, e a chamada seguinte paga um handshake (cerca de 3,2 s no ESP32 simulado, medido no login e na retomada depois de uma pausa maior que 10 s). Produção: ajustar o `timeout` ao perfil do dispositivo, ou manter a conexão com tráfego periódico.
+- **Servidor do bridge em `cheroot`, com um adaptador que depende de internos da biblioteca** (por isso `cheroot>=11.1,<12`). Produção: fixar a versão e revisar a cada atualização.
+- **Servidor do bridge no Python 3.14 e no Windows:** **não verificado** (nem os testes que sobem o bridge).
+- **Log de acesso mínimo no bridge:** hora, método, caminho sem query string e status, sem corpo e sem cabeçalhos. Não é trilha de auditoria.
 - **App só em primeiro plano:** o pedido de confirmação não chega com a tela bloqueada ou o app em segundo plano. Produção: Foreground Service e/ou FCM no `canal_app.py`, sem mudar o contrato.
 - **Tokens no aparelho** em `SharedPreferences` privado; produção: Android Keystore.
 - **Detecção de queda** por limiares iniciais, sem validação com dados reais.
@@ -696,7 +700,7 @@ Ordem de subida: CA e certificados TLS e banco (`scripts/preparar.*` fazem os do
 | Alvo | Como | Observação |
 | --- | --- | --- |
 | Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, contrato e API da análise, contrato do repositório no banco falso, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização, banco e análise fora do ar, e queda ponta a ponta). O TLS tem um teste de configuração (`tests/unit/test_tls.py`: o certificado serve a análise, o cliente da borda o confere e recusa uma URL `http://`, e o banco recebe `verify-full`). Os de integração seguem sem TLS, com uma exceção: `tests/integration/test_texto_claro_recusado.py` sobe os processos reais (`python -m borda`, `python -m borda.server` e `python -m analise`) em loopback, com certificado de teste, e confere que só respondem por HTTPS e recusam texto claro. `tests/unit/test_sem_texto_claro.py` varre o repositório atrás de `http://` e `ws://` fora de uma lista de exceções. Nos testes de integração a análise roda em memória, no lugar do processo, chamada pelo mesmo cliente da produção (`tests/_pipeline.py`; a descarga, a análise e a entrega rodam de forma síncrona depois de cada POST), sobre o banco falso. `pytest -m banco` roda o mesmo contrato do repositório no PostgreSQL real (banco descartável `flow_teste`). Usa segredo próprio, sem threads de fundo, e usa o banco falso em memória, que também guarda contas e sessões: não toca nos dados reais. |
-| Bridge | `cd Bridge && python -m pytest` (`pytest.ini`) | Tradução e validação das mensagens de push, parser SSE, login repassado sem guardar o segredo, renovação de sessão, API (token local, roteamento, limite, isolamento entre dois dispositivos) a recusa de `http://` na configuração e a recusa de texto claro pelo bridge real (`python bridge.py` em loopback, com certificado de teste gerado na hora; `tests/test_texto_claro_recusado.py`). Sem rede externa (só loopback). |
+| Bridge | `cd Bridge && python -m pytest` (`pytest.ini`) | Tradução e validação das mensagens de push, parser SSE, login repassado sem guardar o segredo, renovação de sessão, API (token local, roteamento, limite, isolamento entre dois dispositivos) a recusa de `http://` na configuração e a recusa de texto claro pelo bridge real (`python bridge.py` em loopback, com certificado de teste gerado na hora; `tests/test_texto_claro_recusado.py`) e a conexão persistente no bridge real (`tests/test_conexao_persistente.py`: várias chamadas na mesma conexão TLS sem `Connection: close`, corpo acima do limite com a conexão seguindo atendida, conexões ociosas que não ocupam thread, adaptador só-TLS, dimensionamento de threads e log de acesso sem corpo nem `Authorization`). Sem rede externa (só loopback). |
 | Bridge, dispositivo simulado | `python -m adaptadores.software --device-id sim-a --identificador bridge1 --queda` (na pasta `Bridge`, com `FLOW_SIM_SEGREDO`) | Um dispositivo simulado em software (impacto, `push.ack`, `ESTOU_BEM`); suba vários para ver o isolamento. Exige servidor e bridge no ar. Não é pytest. |
 | Firmware | `sketch/host_test/` | Lógica do firmware no PC, com um Arduino falso; opcional. |
 | App | `SensorApp/app/src/test/` | Testes de unidade na JVM da validação das mensagens de push (`validarPush`). O restante do app (sensores, som, rede) não tem teste automatizado. |

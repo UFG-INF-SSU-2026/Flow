@@ -50,7 +50,7 @@ T_POS_IMPACTO_S = 3
 
 # Depois de um impacto, se passar mais que isto (s) sem leitura aproveitavel,
 # o impacto e descartado e a maquina volta a OBSERVANDO. A calibrar.
-INTERVALO_MAX_ENTRE_LEITURAS_S = 1
+INTERVALO_MAX_ENTRE_LEITURAS_S = 2
 
 # Idade maxima (s) da ultima leitura de uma fonte para participar da fusao de
 # fontes. Deve ser menor ou igual a INTERVALO_MAX_ENTRE_LEITURAS_S.

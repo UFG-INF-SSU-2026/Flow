@@ -16,9 +16,12 @@ Uso:
 import ipaddress
 import ssl
 import sys
+from datetime import datetime
 from pathlib import Path
 
-from werkzeug.serving import WSGIRequestHandler, make_server
+from cheroot import errors as erros_cheroot
+from cheroot.ssl.builtin import BuiltinSSLAdapter
+from cheroot.wsgi import Server
 
 import config
 from api import criar_app
@@ -27,10 +30,25 @@ from sessao import log
 DOTENV_CARREGADO = config.carregar_dotenv(config.DOTENV_ARQUIVO)    # antes de ler as variaveis
 
 
-class ConexaoPersistente(WSGIRequestHandler):
-    """HTTP/1.1 com conexao persistente: o ESP32 faz uma chamada por segundo (evento e busca de comandos) e refazer o
-    handshake TLS a cada uma pararia o laco do firmware (botoes, buzzer). Com HTTP/1.1, uma conexao TLS serve varias chamadas."""
-    protocol_version = "HTTP/1.1"
+# Uma conexao TLS serve varias chamadas (o ESP32 faz uma por segundo; refazer o handshake a cada uma custa ~3,2 s no ESP32
+# simulado e para o laco do firmware). Ociosa por mais que isso, a conexao e fechada e a chamada seguinte paga um handshake.
+CONEXAO_OCIOSA_S = 10
+
+# O long-poll de /comandos e as chamadas em andamento seguram uma thread cada; conexao ociosa nao segura.
+THREADS_MINIMAS = 16
+THREADS_POR_DISPOSITIVO = 2
+THREADS_FOLGA = 4
+
+
+class AdaptadorSoTls(BuiltinSSLAdapter):
+    """Texto claro na porta TLS e derrubado sem resposta. O cheroot tentaria responder 400 em texto claro, e isso nao pode
+    acontecer (nem de erro). Depende de internos da biblioteca (NoSSLError, wrap): por isso a faixa estreita em requirements.txt."""
+
+    def wrap(self, sock):
+        try:
+            return super().wrap(sock)
+        except erros_cheroot.NoSSLError as e:
+            raise erros_cheroot.FatalSSLAlert(*e.args) from e
 
 
 def contexto_tls(cfg: config.Config) -> ssl.SSLContext:
@@ -39,6 +57,60 @@ def contexto_tls(cfg: config.Config) -> ssl.SSLContext:
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cfg.api_cert, cfg.api_chave)
     return ctx
+
+
+def numero_de_threads(cfg: config.Config) -> int:
+    return max(THREADS_MINIMAS, THREADS_POR_DISPOSITIVO * cfg.max_simulacoes + THREADS_FOLGA)
+
+
+def criar_servidor(cfg: config.Config, app) -> Server:
+    """Servidor WSGI com TLS do projeto (>= 1.2) e conexao persistente. Nao faz bind nem inicia nada."""
+    servidor = Server((cfg.host, cfg.porta), app, numthreads=numero_de_threads(cfg), timeout=CONEXAO_OCIOSA_S)
+    adaptador = AdaptadorSoTls(cfg.api_cert, cfg.api_chave)
+    adaptador.context = contexto_tls(cfg)                 # o contexto que vale e o do projeto, nao o padrao do adaptador
+    servidor.ssl_adapter = adaptador
+    return servidor
+
+
+def acesso_logado(app):
+    """Camada WSGI fina: uma linha por requisicao, ao terminar a resposta (hora, metodo, caminho sem query, status).
+    Nunca registra corpo nem cabecalho (em especial Authorization). Nao bufferiza a resposta e propaga o close()."""
+    def camada(environ, start_response):
+        status = [""]
+
+        def sr(estado, cabecalhos, *args):
+            status[0] = estado.split(" ", 1)[0]
+            return start_response(estado, cabecalhos, *args)
+
+        metodo, caminho = environ.get("REQUEST_METHOD", ""), environ.get("PATH_INFO", "")
+        resposta = app(environ, sr)
+        return _FimDeResposta(resposta, lambda: _registrar_acesso(metodo, caminho, status[0]))
+    return camada
+
+
+class _FimDeResposta:
+    """Devolve o iteravel da aplicacao como veio; ao fechar, fecha o original e registra o acesso."""
+
+    def __init__(self, resposta, ao_fechar):
+        self._resposta, self._ao_fechar = resposta, ao_fechar
+
+    def __iter__(self):
+        return iter(self._resposta)
+
+    def close(self):
+        try:
+            if hasattr(self._resposta, "close"):
+                self._resposta.close()
+        finally:
+            self._ao_fechar()
+
+
+def _registrar_acesso(metodo: str, caminho: str, status: str) -> None:
+    try:
+        agora = datetime.now()
+        log(f"{agora:%H:%M:%S}.{agora.microsecond // 1000:03d} {metodo} {caminho} {status}")
+    except Exception:                                     # o log nunca derruba a requisicao
+        pass
 
 
 def verificar(cfg: config.Config) -> str | None:
@@ -71,11 +143,13 @@ def main() -> None:
     if not _so_loopback(cfg.host):
         log(f"AVISO: a API escuta fora do loopback ({cfg.host}); o certificado da API precisa ter esse endereco "
             f"(gerar_certificado.py --nome bridge --ip ...), e os dispositivos da rede so devem usar HTTPS.")
-    servidor = make_server(cfg.host, cfg.porta, criar_app(cfg), threaded=True, ssl_context=contexto_tls(cfg),
-                           request_handler=ConexaoPersistente)
+    servidor = criar_servidor(cfg, acesso_logado(criar_app(cfg)))
+    servidor.prepare()                                    # bind: erro de porta em uso chega aqui, com a mensagem do sistema
     log("Pronto. Os dispositivos (firmware no Wokwi, adaptador em software) fazem login em POST /v1/login, sempre por HTTPS.")
-    servidor.serve_forever()
-
+    try:
+        servidor.serve()
+    finally:
+        servidor.stop()                                   # sem stop() as threads do cheroot seguram o processo (inclusive no Ctrl+C)
 
 if __name__ == "__main__":
     try:
