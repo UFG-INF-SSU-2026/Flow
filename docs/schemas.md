@@ -21,6 +21,7 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 | 6 | Servidor → dispositivo: push | 3 |
 | 7 | Autenticação: login | 3 |
 | 8 | Autenticação: refresh | 3 |
+| 11 | Autenticação: emissão de certificado | 1 |
 
 **Como evoluir um schema:** (1) altere a seção; (2) incremente a versão no cabeçalho da seção e nesta tabela; (3) adicione uma linha ao backlog daquela seção. Nada mais precisa mudar.
 
@@ -32,7 +33,7 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 - **Autenticação:** toda rota, exceto `/`, `/health`, `/auth/login` e `/auth/refresh`, exige `Authorization: Bearer <access_token>`.
 - **`schemaVersion`** é obrigatório **na raiz** de todo payload de produtor e se refere à versão do schema daquele payload (ver tabela de versões atuais). Se ausente, o servidor assume `1`. A versão **mais recente** de cada contrato é definida num único lugar do servidor (uma constante `const.SCHEMA_VERSION_*` por contrato); `const.SCHEMA_VERSION_MINIMA` (hoje `1`) é a menor aceita.
   - Versão **de `1` até a mais recente** é aceita e **usada**, inclusive a anterior à atual (as regras logam o aviso "desatualizada"). Na regra de queda a versão decide a prioridade entre dispositivos do mesmo usuário (arquitetura, 9.2.1); wokwi v1/v2 (sem `valueMax`) alimentam a regra de forma degradada, e app v1/v2 (sem `acelerometro`) não geram leitura de aceleração.
-  - Versão **maior que a mais recente**, menor que a mínima, não inteira (inclui `"3"` e `3.0`) ou booleana é **descartada e logada**. Em `/dados` e `/eventos` a resposta é `200` com `{"status": "ok", "descartado": true, "motivo": "schemaVersion_nao_suportado"}` e o conteúdo não chega ao buffer nem às regras. Em `/auth/login` e `/auth/refresh` a resposta é `400` (a ausência é aceita).
+  - Versão **maior que a mais recente**, menor que a mínima, não inteira (inclui `"3"` e `3.0`) ou booleana é **descartada e logada**. Em `/dados` e `/eventos` a resposta é `200` com `{"status": "ok", "descartado": true, "motivo": "schemaVersion_nao_suportado"}` e o conteúdo não chega ao buffer nem às regras. Em `/auth/login`, `/auth/refresh` e `/auth/certificado` a resposta é `400` (a ausência é aceita).
 - **`source`** é obrigatório e deve ser `app` ou `wokwi` em `/dados` e `/eventos`; ausente ou inválido = `400`. **`user_id`** deve ser um número inteiro JSON; string (mesmo só de dígitos), booleano, decimal, `null` ou ausente = `400`. O corpo decifrado deve ser um objeto JSON; senão `400`.
 - **`user_id` e `source`** continuam no payload de telemetria, mas **devem coincidir com as claims do token** (`user_ids`, `fonte`); divergência = `403`. O `device_id`/`deviceId` que o payload declarar também deve ser o `device_id` do token (o informado no login); divergência = `403`. O bridge faz login com o `deviceId` do firmware (`FLOW_BRIDGE_DEVICE`).
 - **Tempos:** `issuedAt`/`expiresAt` em ISO 8601 UTC com milissegundos e `Z`. Prazos para o dispositivo são **relativos** (`timeoutMs`), nunca absolutos.
@@ -369,3 +370,48 @@ Campos comuns: `timestamp` (ISO 8601 UTC) e `tipo`: `episodio.aberto`, `push.ent
 | Versão | Mudança |
 | --- | --- |
 | sem versão | Campos de fusão no `episodio.aberto` do gatilho A; `tardia` para qualquer retorno de episódio encerrado; `mensagem_desconhecida`. |
+
+---
+
+## 11. Autenticação: emissão de certificado
+
+`POST /auth/certificado` (corpo e resposta em envelope) · **Versão atual: 1**
+
+Troca o pedido de certificado (CSR) que o cliente gerou por um certificado de cliente de validade curta, assinado pela CA de dispositivos (independente da CA raiz). A chave privada é gerada no próprio cliente e nunca chega ao servidor. Exige `Authorization: Bearer` de um token com a permissão `certificado:emitir`, que têm os papéis `idoso` (fonte `app`) e `dispositivo` (fonte `wokwi`); `admin` e `cuidador` recebem `403`.
+
+Requisição:
+
+| Campo | Tipo | Regra |
+| --- | --- | --- |
+| `csr` | string | pedido de certificado em PEM, um único bloco: chave EC na curva P-256, assinado com ECDSA e SHA-256, com assinatura válida (prova de posse da chave) |
+| `schemaVersion` | inteiro | versão atual deste schema; ausente é aceita, maior que a atual ou inválida dá `400` |
+
+Resposta `200`:
+
+| Campo | Tipo | Regra |
+| --- | --- | --- |
+| `certificado` | string | certificado X.509 em PEM |
+
+O servidor ignora do CSR tudo o que não é a chave pública: assunto e extensões pedidas (SAN, `CA:TRUE`, usos de chave) não influenciam o certificado. Campos extras no pedido (`device_id`, `user_id`, conta) também são ignorados. O `device_id` do certificado é o do login: o do app (livre, até 64 caracteres) ou o do dispositivo.
+
+Certificado emitido:
+
+| Item | Valor |
+| --- | --- |
+| Assunto | `CN` = `device_id` do token; `OU` = conta do token (nunca do CSR) |
+| Emissor | CA de dispositivos (`certs/ca-dispositivos.crt`) |
+| Uso | `ExtendedKeyUsage` só `clientAuth`; `KeyUsage` só `digitalSignature`; `BasicConstraints` `CA:FALSE`; sem SAN |
+| Validade | `CERT_DISPOSITIVO_DIAS` dias (`borda/const.py`) a partir da emissão, com folga de 5 minutos para trás, e nunca além da validade da CA |
+| Serial | aleatório |
+
+Falhas: `400` com `codigo: csr_invalido` (CSR recusado: texto que não é um único PEM de pedido, chave que não é EC P-256, assinatura que não é ECDSA com SHA-256 ou que não confere) ou corpo fora do contrato ou `schemaVersion` inválido ou maior que a atual; `401` sem token ou token inválido; `403` papel sem a permissão (`sem_permissao`); `503` com `codigo: emissao_indisponivel` (CA de dispositivos ausente, ilegível, vencida ou com chave que não corresponde ao certificado; as demais rotas seguem funcionando). Nenhuma resposta nem mensagem de erro traz o conteúdo do CSR.
+
+**Uso do certificado pelo app (a borda confere).** O app fala direto com a borda, sem bridge. Se a borda subiu com a CA de dispositivos (`certs/ca-dispositivos.crt`), o TLS passa a pedir certificado de cliente de forma opcional e a confiar só nessa CA: certificado de outra CA, vencido ou sem `clientAuth` tem o handshake recusado. Para um token com fonte `app`, toda rota protegida, exceto esta, exige que a conexão traga um certificado cujo `OU` e `CN` sejam a conta e o `device_id` do token: sem certificado, `401` com `codigo: certificado_ausente` (o app emite o seu e repete); certificado de outra conta ou de outro `device_id`, `403` com `codigo: certificado_incompativel`. Login, refresh e esta rota passam sem certificado, porque quem as chama ainda não tem um. Sem a CA na subida, nada é exigido e a borda avisa no console. O certificado vale por conexão: o app precisa abrir uma conexão nova depois de receber o certificado. O Wokwi (fonte `wokwi`) passa pelo bridge, que confere o certificado do dispositivo antes de encaminhar; a borda não o exige dele.
+
+A emissão é registrada no log da borda (serial, conta, `device_id` e fim da validade), nunca o CSR, o certificado, o token nem chave. Não há tabela, consulta nem revogação: a validade curta é a única proteção. A resposta não tem schema próprio, como nas demais rotas de `/auth`.
+
+### Backlog de mudanças
+
+| Versão | Mudança |
+| --- | --- |
+| v1 (criação) | Contrato de emissão de certificado criado. |

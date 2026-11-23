@@ -11,6 +11,7 @@ A segunda metade confere o que o teste de const nao cobre: o nucleo nao tem I/O.
 import ast
 import glob
 import os
+import re
 
 import pytest
 
@@ -86,3 +87,32 @@ def test_a_analise_nao_conhece_segredo_de_transporte_nem_senha_de_banco(arquivo)
     with open(os.path.join(RAIZ, arquivo), encoding="utf-8") as f:
         texto = f.read()
     assert "FLOW_JWT_SECRET" not in texto and "crypto_utils" not in texto and "FLOW_DB_" not in texto
+
+
+# ---------------------------------------------------------------------------
+# Quem le qual chave de CA (literais de texto do codigo de producao; docstrings e comentarios de codigo tambem contam)
+# ---------------------------------------------------------------------------
+CHAVE_DA_RAIZ = re.compile(r"(?<![\w-])ca\.key", re.I)
+CA_DE_DISPOSITIVOS = re.compile(r"ca[-_]dispositivos", re.I)
+PACOTES_DE_PRODUCAO = ("comum", "analise", "borda", "flow_db")
+
+
+def _literais(arquivo: str) -> list[str]:
+    with open(os.path.join(RAIZ, arquivo), encoding="utf-8") as f:
+        return [n.value for n in ast.walk(ast.parse(f.read())) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+
+
+def _referenciam(padrao, pacotes: tuple[str, ...]) -> set[str]:
+    return {arq for p in pacotes for arq in _arquivos(p) if any(padrao.search(t) for t in _literais(arq))}
+
+
+def test_nenhum_servico_le_a_chave_da_ca_raiz():
+    assert not _referenciam(CHAVE_DA_RAIZ, PACOTES_DE_PRODUCAO)
+
+
+def test_so_a_borda_conhece_a_ca_de_dispositivos():
+    assert not _referenciam(CA_DE_DISPOSITIVOS, ("comum", "analise", "flow_db"))
+
+
+def test_dentro_da_borda_so_const_e_emissao_conhecem_a_ca_de_dispositivos():
+    assert _referenciam(CA_DE_DISPOSITIVOS, ("borda",)) == {os.path.join("borda", "const.py"), os.path.join("borda", "emissao.py")}

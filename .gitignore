@@ -17,4 +17,6 @@ SensorServer/certs/
 # Backups do banco (dados pessoais): ficam fora do Git
 SensorServer/backups/
 SensorApp/app/src/main/res/raw/flow_cert.pem
+# Copia da CA para o firmware, gerada por instalacao (so o certificado publico)
+sketch/ca_flow.h
 *.key

@@ -11,7 +11,8 @@ wokwi ao mesmo tempo):
 Autenticacao e autorizacao: nenhuma rota de dados e aberta. O cliente faz login em POST /auth/login (identificador, segredo,
 fonte e device_id, cifrados com a mesma chave) e recebe, tambem cifrados, um access token e um refresh token (auth.py). O
 refresh e de uso unico: POST /auth/refresh devolve um par novo. Todas as demais rotas exigem "Authorization: Bearer <token>".
-Em cada uma, authz.py checa a permissao do papel da conta (estagio 1, antes de decifrar o corpo) e, nas rotas com corpo,
+POST /auth/certificado (app ou dispositivo logado) troca o CSR que ele gerou por um certificado de cliente de validade curta,
+assinado pela CA de dispositivos (emissao.py). Em cada rota, authz.py checa a permissao do papel da conta (estagio 1, antes de decifrar o corpo) e, nas rotas com corpo,
 que o user_id e a source declarados sao os do token (estagio 2). O que nao esta na politica e negado.
 
 Caminho de uma leitura (a borda NAO decide; quem decide e a analise, `python -m analise`, outro processo):
@@ -53,6 +54,7 @@ from borda import canal_wokwi
 from borda import cliente_analise
 from borda import const as const_borda
 from borda import efeitos
+from borda import emissao
 from borda import tempo
 from borda import validacao
 from comum import const as const_comum
@@ -436,6 +438,31 @@ def refresh():
     return _resposta_cifrada(tokens)
 
 
+@app.route("/auth/certificado", methods=["POST"])
+@exige("certificado:emitir", certificado=False)
+def emitir_certificado():
+    """Certificado de cliente de quem esta logado (app ou dispositivo): o corpo traz o CSR que o proprio cliente gerou (a chave
+    nao sai dele). A identidade do certificado (conta e device_id) vem do TOKEN, nunca do corpo (borda/emissao.py)."""
+    corpo = _decifrar_corpo()
+    if isinstance(corpo, tuple):
+        return corpo
+    if verificar_versao(corpo, const_comum.SCHEMA_VERSION_CERTIFICADO) is None:   # ausente aceito
+        return _versao_invalida_400(const_comum.SCHEMA_VERSION_CERTIFICADO)
+    if validacao.erros_pedido_certificado(corpo):
+        return jsonify({"status": "erro", "mensagem": "Corpo invalido: esperado {'csr': <PEM>}"}), 400
+    p = g.principal
+    try:
+        emitido = emissao.emitir_certificado(corpo["csr"], p.conta_id, p.device_id, tempo.agora_utc())
+    except emissao.CsrInvalido as e:
+        return negar(400, "csr_invalido", p.conta_id, mensagem=str(e))
+    except emissao.EmissaoIndisponivel as e:
+        _log_falha("emissao", f"emissao indisponivel: {e}", prefixo="certificado")
+        return negar(503, "emissao_indisponivel", p.conta_id, mensagem="emissao de certificado indisponivel")
+    print(f"  [certificado] emitido serial={emitido.serial} conta={p.conta_id} device_id={p.device_id} "
+          f"valido_ate={instante_para_json(emitido.valido_ate)}")
+    return _resposta_cifrada({"certificado": emitido.certificado_pem})
+
+
 @app.route("/eventos", methods=["POST"])
 @exige("eventos:enviar")
 def receber_evento():
@@ -672,7 +699,8 @@ if os.environ.get("FLOW_SEM_THREADS") != "1":
 if __name__ == "__main__":
     try:
         _contexto_tls = tls.contexto_servidor()
-    except tls.ConfigTls as e:
+        app.config["EXIGIR_CERTIFICADO"] = emissao.pedir_certificado_de_cliente(_contexto_tls)
+    except (tls.ConfigTls, emissao.EmissaoIndisponivel) as e:
         raise SystemExit(f"erro: {e}") from None
     print(f"Borda iniciando em https://{const_borda.HOST}:{const_borda.PORT} (modo de desenvolvimento; use 'python -m borda' para o desligamento ordenado)...")
     print(f"Configuracao (.env): {const_comum.DOTENV_ARQUIVO} " + ("carregado" if const_comum.DOTENV_CARREGADO
@@ -680,6 +708,8 @@ if __name__ == "__main__":
     print(f"Banco: {'banco falso em memoria (FLOW_DB_FAKE=1)' if os.environ.get('FLOW_DB_FAKE') == '1' else 'PostgreSQL'}"
           f" | analise: {const_comum.url_analise()}")
     print("Transporte: TLS (CA do projeto) + AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")
+    print("Certificado de cliente do app: " + ("exigido (CA de dispositivos carregada)" if app.config["EXIGIR_CERTIFICADO"]
+          else "NAO exigido (sem a CA de dispositivos; rode scripts/gerar_certificado.py e reinicie)"))
 
     # FLOW_BORDA_HOST (padrao 127.0.0.1): para aceitar outros dispositivos da rede, o IP do computador no .env
     app.run(host=const_borda.HOST, port=const_borda.PORT, threaded=True,   # threaded: uma thread por stream SSE

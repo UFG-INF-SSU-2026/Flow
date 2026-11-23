@@ -3,13 +3,14 @@ Autorizacao (Marco 3): papel -> permissoes, escopo por pessoa monitorada.
 Negar por padrao: o que nao esta em POLITICA e proibido.
 """
 import functools
-from flask import g, jsonify, request
+from flask import current_app, g, jsonify, request
 
-from borda import auth
+from borda import auth, emissao
+from borda import const as const_borda
 
 POLITICA: dict[str, set[str]] = {
-    "idoso":       {"dados:enviar", "eventos:enviar", "push:receber"},
-    "dispositivo": {"dados:enviar", "eventos:enviar", "push:receber"},
+    "idoso":       {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
+    "dispositivo": {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
     "cuidador":    set(),                      # reservado (futuro)
     "admin":       {"dados:ler", "estado:ler"},
 }
@@ -34,8 +35,16 @@ def negar(status: int, codigo: str, conta: str | None = None, mensagem: str | No
     return jsonify(corpo), status, headers
 
 
-def exige(permissao: str, fonte: str | None = None):
-    """Estagio 1: token valido + papel com a permissao + fonte exigida pela rota."""
+def _exige_certificado_de_cliente(p: auth.Principal) -> bool:
+    """O app (fonte que chega direto a borda) precisa apresentar o certificado emitido por /auth/certificado, quando a borda
+    subiu com a CA de dispositivos (config EXIGIR_CERTIFICADO, ligada por borda/servico.py)."""
+    return (bool(current_app.config.get("EXIGIR_CERTIFICADO")) and p.fonte == const_borda.FONTE_COM_CERTIFICADO_NA_BORDA
+            and "certificado:emitir" in POLITICA.get(p.papel, set()))
+
+
+def exige(permissao: str, fonte: str | None = None, certificado: bool = True):
+    """Estagio 1: token valido + papel com a permissao + fonte exigida pela rota + (so o app) certificado de cliente que bate
+    com o token. `certificado=False` e para a rota que EMITE o certificado: quem a chama ainda nao tem um."""
     def deco(f):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
@@ -52,6 +61,12 @@ def exige(permissao: str, fonte: str | None = None):
                 return negar(403, "fonte_invalida", p.conta_id)   # idoso so como 'app', dispositivo so como 'wokwi'
             if fonte is not None and p.fonte != fonte:
                 return negar(403, "fonte_invalida", p.conta_id)   # rota exige uma fonte especifica
+            if certificado and _exige_certificado_de_cliente(p):
+                identidade = emissao.identidade_do_cliente(request.environ)
+                if identidade is None:
+                    return negar(401, "certificado_ausente", p.conta_id)         # o cliente emite o seu e tenta de novo
+                if identidade != (p.conta_id, p.device_id):
+                    return negar(403, "certificado_incompativel", p.conta_id)    # certificado de outra conta ou dispositivo
             g.principal = p
             g.token = cab[7:]
             return f(*args, **kwargs)

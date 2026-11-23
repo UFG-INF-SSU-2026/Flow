@@ -88,3 +88,21 @@ def test_so_o_flow_db_recebe_a_credencial_administrativa_do_banco(tmp_path, monk
     finally:
         for nome in ("FLOW_DB_ADMIN_USER", "FLOW_DB_ADMIN_PASSWORD", "FLOW_DB_PASSWORD", "FLOW_ANALISE_TOKEN"):
             os.environ.pop(nome, None)
+
+
+@pytest.mark.parametrize("servico,recebe", [("borda", True), ("analise", False)])
+def test_a_ca_de_dispositivos_do_env_so_chega_a_borda(tmp_path, monkeypatch, servico, recebe):
+    """A analise le do .env so FLOW_ANALISE_* e FLOW_TLS_*: os nomes da CA de dispositivos nao comecam assim, de proposito."""
+    import os
+    nomes = ("FLOW_CA_DISPOSITIVOS_KEY", "FLOW_CA_DISPOSITIVOS_CERT", "FLOW_TLS_CA")
+    for nome in nomes:
+        monkeypatch.delenv(nome, raising=False)
+    arquivo = _env(tmp_path, "FLOW_CA_DISPOSITIVOS_KEY=x.key\nFLOW_CA_DISPOSITIVOS_CERT=x.crt\nFLOW_TLS_CA=ca.crt\n")
+    prefixo = ("FLOW_ANALISE_", "FLOW_TLS_") if servico == "analise" else None
+    try:
+        const_comum._carregar_dotenv(arquivo, prefixo, const_comum._prefixos_excluidos(servico))
+        assert ("FLOW_CA_DISPOSITIVOS_KEY" in os.environ and "FLOW_CA_DISPOSITIVOS_CERT" in os.environ) is recebe
+        assert os.environ.get("FLOW_TLS_CA") == "ca.crt"                       # o que a analise recebe segue igual
+    finally:
+        for nome in nomes:
+            os.environ.pop(nome, None)

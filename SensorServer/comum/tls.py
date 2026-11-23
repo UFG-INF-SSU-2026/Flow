@@ -10,7 +10,8 @@ TLS em todas as pontas, com a CA propria do projeto, gerada por `python scripts/
 
 Caminho relativo vale a partir de SensorServer/, e nao de onde o processo foi iniciado. Os padroes (certs/ca.crt,
 certs/<servico>.crt e certs/<servico>.key, com <servico> = borda ou analise) estao em comum/const.py. Escopo minimo: sem
-rotacao automatica e sem mTLS (o servidor nao pede certificado ao cliente; quem se autentica e a conta, por token).
+rotacao automatica. Este modulo nao pede certificado ao cliente; quem quiser (a borda, para o app) o faz sobre o contexto
+que ele devolve. A conta continua se autenticando por token.
 
 Este modulo so le o ambiente na hora do uso e nao importa nada do projeto alem de `comum.const`.
 """

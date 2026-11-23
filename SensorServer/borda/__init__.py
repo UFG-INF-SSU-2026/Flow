@@ -5,6 +5,7 @@ transporte (chave AES, segredo JWT) e as contas. NAO decide nada: aceita, valida
   server.py          rotas HTTP, fila e descarga de leituras, envio a analise, threads de fundo
   auth.py, authz.py  contas, login/refresh, autorizacao em dois estagios
   crypto_utils.py    envelope AES-GCM
+  emissao.py         valida o CSR de um dispositivo logado e emite o certificado de cliente (CA de dispositivos)
   validacao.py       validacao ESTRUTURAL dos corpos (contratos de schemas/)
   canal_*.py, sse_hub.py   canais de push (SSE para o app e para o bridge)
   cliente_analise.py chama a API da analise (HTTPS local), detecta que ela reiniciou e manda o estado de volta (/restaurar)

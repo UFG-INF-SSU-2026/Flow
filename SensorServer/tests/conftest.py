@@ -15,7 +15,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # SensorSer
 if RAIZ not in sys.path:
     sys.path.insert(0, RAIZ)
 
-from _apoio import SEGREDO, ClienteFlask, ClienteReal  # noqa: E402
+from _apoio import SEGREDO, ClienteFlask, ClienteReal, criar_ca_dispositivos  # noqa: E402
 
 # Antes de importar o servidor: segredo e ambiente isolados do .env real.
 os.environ["FLOW_SEM_DOTENV"] = "1"    # os testes nunca leem o SensorServer/.env real
@@ -81,6 +81,15 @@ def ambiente(monkeypatch):
     _limpar_estado()
     yield
     _limpar_estado()
+
+
+@pytest.fixture
+def ca_dispositivos(tmp_path, monkeypatch):
+    """CA de dispositivos de teste numa pasta temporaria, apontada pelas variaveis de ambiente da borda (nunca a de certs/)."""
+    ca = criar_ca_dispositivos(tmp_path)
+    monkeypatch.setenv("FLOW_CA_DISPOSITIVOS_CERT", str(ca.cert))
+    monkeypatch.setenv("FLOW_CA_DISPOSITIVOS_KEY", str(ca.chave))
+    return ca
 
 
 @pytest.fixture

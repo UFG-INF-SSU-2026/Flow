@@ -2,6 +2,7 @@
 Apoio dos testes (sem fixtures): clientes que montam envelopes cifrados como o app e o bridge fazem,
 e um leitor de SSE para o servidor real.
 """
+import base64
 import importlib.util
 import json
 import queue
@@ -9,8 +10,13 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import requests
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.x509.oid import NameOID
 
 from borda.crypto_utils import decrypt_payload, encrypt_payload
 from comum import const as const_comum
@@ -41,6 +47,48 @@ def gerar_par_tls(pasta: Path, prefixo: str = "flow") -> tuple[str, str, str]:
     cert, chave = pasta / f"{prefixo}.crt", pasta / f"{prefixo}.key"
     gerador.emitir(ca, ca_chave, cert, chave, prefixo, ["localhost"], ["127.0.0.1"], dias=2)
     return str(ca), str(cert), str(chave)
+
+
+class CaTeste(NamedTuple):
+    cert: Path
+    chave: Path
+
+    def certificado(self) -> x509.Certificate:
+        return x509.load_pem_x509_certificate(self.cert.read_bytes())
+
+
+def criar_ca_dispositivos(pasta: Path, dias: int = 30) -> CaTeste:
+    """Cria uma CA de dispositivos de teste em `pasta` (a mesma que o script cria, com validade de `dias`)."""
+    gerador = gerador_de_certificado()
+    cert, chave = pasta / "ca-dispositivos.crt", pasta / "ca-dispositivos.key"
+    gerador.criar_ca(cert, chave, dias=dias, nome=gerador.NOME_CA_DISPOSITIVOS)
+    return CaTeste(cert, chave)
+
+
+def montar_csr(chave=None, assunto: str = "esp32-teste", algoritmo=None, extensoes=()) -> str:
+    """CSR em PEM. Padrao: o que o firmware gera (EC P-256, ECDSA com SHA-256). `chave` e `algoritmo` permitem montar os que o
+    servidor deve recusar; `extensoes` e uma lista de (extensao, critica) que o dispositivo tenta pedir."""
+    chave = chave or ec.generate_private_key(ec.SECP256R1())
+    algoritmo = algoritmo or hashes.SHA256()
+    construtor = x509.CertificateSigningRequestBuilder().subject_name(
+        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, assunto)]))
+    for extensao, critica in extensoes:
+        construtor = construtor.add_extension(extensao, critical=critica)
+    csr = construtor.sign(chave, algoritmo)
+    return csr.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+def csr_rsa() -> str:
+    return montar_csr(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+
+
+def csr_com_assinatura_adulterada() -> str:
+    """CSR EC P-256 valido com o ultimo byte da assinatura trocado (a estrutura continua legivel)."""
+    csr = x509.load_pem_x509_csr(montar_csr().encode("ascii"))
+    der = bytearray(csr.public_bytes(serialization.Encoding.DER))
+    der[-1] ^= 0x01
+    corpo = base64.encodebytes(bytes(der)).decode("ascii")
+    return f"-----BEGIN CERTIFICATE REQUEST-----\n{corpo}-----END CERTIFICATE REQUEST-----\n"
 
 
 def ambiente_tls() -> dict:

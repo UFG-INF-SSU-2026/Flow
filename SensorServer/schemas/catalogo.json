@@ -55,6 +55,11 @@
       "rota": "POST /auth/refresh",
       "secao": "8"
     },
+    "auth-certificado": {
+      "versao_const": "SCHEMA_VERSION_CERTIFICADO",
+      "rota": "POST /auth/certificado",
+      "secao": "11"
+    },
     "alerta-luz": {
       "versao_const": null,
       "rota": "tabela alertas",

@@ -1,5 +1,6 @@
 """
-Constantes da BORDA (Servidor 1): rede, autenticacao, autorizacao, SSE, descarga de leituras e chamada a analise.
+Constantes da BORDA (Servidor 1): rede, autenticacao, autorizacao, SSE, descarga de leituras, chamada a analise e emissao
+de certificado de dispositivo.
 
 Este modulo so importa `comum.const`, e apenas para que o .env ja esteja carregado quando ele le o ambiente. Quem usa
 importa o modulo (`from borda import const as const_borda`) e le `const_borda.X` na hora do uso. As constantes comuns
@@ -138,3 +139,22 @@ RETENCAO_HISTORICO_DIAS = 90
 
 # Desligamento ordenado: tempo maximo (s) para a descarga final das leituras e para as threads terminarem.
 PRAZO_ENCERRAMENTO_S = 10
+
+# ===========================================================================
+# 7. EMISSAO DE CERTIFICADO DE DISPOSITIVO (POST /auth/certificado)
+# ===========================================================================
+
+# CA de dispositivos (gerada por scripts/gerar_certificado.py, independente da CA raiz): a borda a le a cada emissao, e so ela
+# le a chave. FLOW_CA_DISPOSITIVOS_CERT e FLOW_CA_DISPOSITIVOS_KEY trocam estes caminhos; caminho relativo vale a partir de
+# SensorServer/. Sem os arquivos, a rota responde 503 e o resto da borda segue funcionando.
+CA_DISPOSITIVOS_CERT_PADRAO = "certs/ca-dispositivos.crt"
+CA_DISPOSITIVOS_CHAVE_PADRAO = "certs/ca-dispositivos.key"
+
+# Validade (dias) do certificado de cliente de um app ou dispositivo: curta de proposito (nao ha revogacao) e nunca maior que a da CA.
+# O dispositivo pede um novo a cada partida.
+CERT_DISPOSITIVO_DIAS = 7
+
+# Fonte cujo trafego chega DIRETO a borda (o app, sem bridge): a borda confere o certificado de cliente dela. A outra fonte
+# (wokwi) passa pelo bridge, que confere o certificado do dispositivo antes de encaminhar. So vale para quem tem a permissao
+# `certificado:emitir` (borda/authz.py) e so quando a CA de dispositivos esta carregada na subida (borda/emissao.py).
+FONTE_COM_CERTIFICADO_NA_BORDA = "app"

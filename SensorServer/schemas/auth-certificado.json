@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow/auth-certificado",
+  "title": "Autenticacao: emissao de certificado do dispositivo (POST /auth/certificado)",
+  "description": "csr: pedido de certificado PEM (EC P-256, ECDSA com SHA-256). Assunto e extensoes pedidos sao ignorados.",
+  "x-versao": 1,
+  "type": "object",
+  "required": [
+    "csr"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "csr": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

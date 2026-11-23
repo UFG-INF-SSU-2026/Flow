@@ -71,6 +71,13 @@ def verificar_versao(payload: dict, versao_atual: int) -> int | None:
     return v
 
 
+# ---------------------------------------------------------------- emissao de certificado
+def erros_pedido_certificado(payload) -> list[str]:
+    """Estrutura do pedido de POST /auth/certificado (contrato auth-certificado). Vazia = valido. O CSR em si e conferido
+    por emissao.py."""
+    return contratos.validar("auth-certificado", payload)
+
+
 # ---------------------------------------------------------------- telemetria
 def erros_telemetria_wokwi(payload: dict) -> list[str]:
     """Estrutura de um evento de telemetria do Wokwi (contrato wokwi-telemetria). Vazia = valido."""

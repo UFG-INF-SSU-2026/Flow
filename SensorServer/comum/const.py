@@ -104,6 +104,10 @@ SCHEMA_VERSION_MENSAGEM = 3
 # por isso nao da para seguir APP ou WOKWI.
 SCHEMA_VERSION_AUTH = 3
 
+# Certificado: /auth/certificado (emissao do certificado de cliente). Usado pelo app e pelo firmware e o payload nao traz
+# `source`, pelo mesmo motivo de AUTH; evolui separado do login.
+SCHEMA_VERSION_CERTIFICADO = 1
+
 # Menor versao que o servidor ainda aceita (vale para app, wokwi e auth). Abaixo disso o payload e descartado.
 # Versao menor que a do contrato, mas >= esta, e aceita e usada.
 SCHEMA_VERSION_MINIMA = 1

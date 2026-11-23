@@ -7,6 +7,7 @@ import pytest
 MATRIZ = {
     ("POST", "/dados"):        {"idoso": 400, "dispositivo": 400, "admin": 403, "sem_token": 401, "invalido": 401},
     ("POST", "/eventos"):      {"idoso": 400, "dispositivo": 400, "admin": 403, "sem_token": 401, "invalido": 401},
+    ("POST", "/auth/certificado"): {"idoso": 400, "dispositivo": 400, "admin": 403, "sem_token": 401, "invalido": 401},
     ("GET", "/push/app"):      {"idoso": 200, "dispositivo": 403, "admin": 403, "sem_token": 401, "invalido": 401},
     ("GET", "/push/wokwi"):    {"idoso": 403, "dispositivo": 200, "admin": 403, "sem_token": 401, "invalido": 401},
     ("GET", "/dados"):         {"idoso": 403, "dispositivo": 403, "admin": 200, "sem_token": 401, "invalido": 401},

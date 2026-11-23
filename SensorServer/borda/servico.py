@@ -19,6 +19,7 @@ import threading
 from comum import const as const_comum
 from comum import tls
 from borda import const as const_borda
+from borda import emissao
 
 CODIGO_ERRO = 1
 
@@ -39,7 +40,8 @@ def main() -> int:
         return CODIGO_ERRO
     try:
         contexto = tls.contexto_servidor()     # antes de abrir banco e threads: sem certificado nada sobe
-    except tls.ConfigTls as e:
+        exige_certificado = emissao.pedir_certificado_de_cliente(contexto)    # sem a CA de dispositivos: so avisa
+    except (tls.ConfigTls, emissao.EmissaoIndisponivel) as e:
         print(f"erro: {e}", file=sys.stderr)
         return CODIGO_ERRO
     try:
@@ -48,6 +50,7 @@ def main() -> int:
         print(f"erro: {e}", file=sys.stderr)
         return CODIGO_ERRO
 
+    server.app.config["EXIGIR_CERTIFICADO"] = exige_certificado
     from werkzeug.serving import make_server
     try:
         srv = make_server(const_borda.HOST, const_borda.PORT, server.app, threaded=True,   # threaded: uma thread por stream SSE
@@ -69,6 +72,8 @@ def main() -> int:
 
     _instalar_sinais(pedir_parada)
     print(f"Borda iniciando em https://{const_borda.HOST}:{const_borda.PORT} (a analise e outro processo: 'python -m analise').")
+    print("Certificado de cliente do app: " + ("exigido (CA de dispositivos carregada)" if exige_certificado
+          else "NAO exigido (sem a CA de dispositivos; rode scripts/gerar_certificado.py e reinicie)"))
     print(f"Configuracao: {const_comum.DOTENV_ARQUIVO} "
           + ("carregado" if const_comum.DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente"))
     try:

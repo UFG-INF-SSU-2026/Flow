@@ -8,10 +8,10 @@ from borda import auth
 from borda import authz
 from borda import const as const_borda
 from flow_db import repositorios
-PERMISSOES = ["dados:enviar", "eventos:enviar", "push:receber", "dados:ler", "estado:ler"]
+PERMISSOES = ["dados:enviar", "eventos:enviar", "push:receber", "dados:ler", "estado:ler", "certificado:emitir"]
 ESPERADO = {
-    "idoso": {"dados:enviar", "eventos:enviar", "push:receber"},
-    "dispositivo": {"dados:enviar", "eventos:enviar", "push:receber"},
+    "idoso": {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
+    "dispositivo": {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
     "cuidador": set(),
     "admin": {"dados:ler", "estado:ler"},
 }
