@@ -3,7 +3,7 @@ Texto claro: nenhum literal `http://` nem `ws://` no codigo de producao, fora de
 
 A varredura cobre o repositorio inteiro (a pasta acima de SensorServer/): servidor, bridge, firmware e app. Entram os arquivos de
 texto com as extensoes de codigo e de configuracao de EXTENSOES. Ficam de fora os .md, as pastas de testes, de docs e de build, as
-pastas ocultas e os ambientes virtuais, e o `local.properties` (configuracao da maquina). `https://` e `wss://` nao contam.
+pastas ocultas e os ambientes virtuais, e o `local.properties` e o `sketch/segredos.h` (configuracao da maquina). `https://` e `wss://` nao contam.
 
 Toda ocorrencia aceita tem uma entrada em EXCECOES (arquivo, trecho exato na mesma linha, motivo) e esta descrita em
 docs/arquitetura.md. Entrada sem ocorrencia correspondente tambem falha: a lista nao guarda excecao que deixou de existir.
@@ -21,7 +21,9 @@ PASTAS_DO_REPO = ("SensorServer", "Bridge", "sketch", "SensorApp")
 EXTENSOES = (".py", ".ino", ".h", ".cpp", ".kt", ".kts", ".xml", ".toml", ".yml", ".yaml", ".json", ".html", ".sh", ".ps1",
              ".properties", ".txt", ".example")
 PASTAS_FORA = {"tests", "test", "host_test", "docs", "atividades", "build", "certs", "backups", "__pycache__"}
-ARQUIVOS_FORA = {"local.properties"}
+# Configuracao da maquina, fora do Git: o resultado nao pode depender de quem roda. segredos.h e a copia local de
+# sketch/segredos.h.example, que e varrido; uma URL http:// nele nem compila (static_assert em transporte_wifi.h).
+ARQUIVOS_FORA = {"local.properties", "segredos.h"}
 
 TEXTO_CLARO = re.compile(r"(?:http|ws)://", re.IGNORECASE)
 

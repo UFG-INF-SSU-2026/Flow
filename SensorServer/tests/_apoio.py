@@ -92,14 +92,18 @@ def csr_com_assinatura_adulterada() -> str:
 
 
 def ambiente_tls() -> dict:
-    """FLOW_TLS_CA, FLOW_TLS_CERT e FLOW_TLS_KEY de uma CA e um par de teste gerados uma vez por sessao: para os testes que
-    sobem `python -m borda`, `python -m analise` ou abrem o banco, que exigem TLS (os demais usam a analise em memoria,
-    sem TLS)."""
+    """FLOW_TLS_CA, FLOW_TLS_CERT e FLOW_TLS_KEY de uma CA e um par de teste, mais a CA de dispositivos
+    (FLOW_CA_DISPOSITIVOS_CERT e _KEY), gerados uma vez por sessao: para os testes que sobem `python -m borda`,
+    `python -m analise` ou abrem o banco, que exigem TLS (os demais usam a analise em memoria, sem TLS). A borda nao sobe sem
+    a CA de dispositivos."""
     if not _tls_da_sessao:
-        (_tls_da_sessao["ca"], _tls_da_sessao["cert"],
-         _tls_da_sessao["chave"]) = gerar_par_tls(Path(tempfile.mkdtemp(prefix="flow_tls_")))
+        pasta = Path(tempfile.mkdtemp(prefix="flow_tls_"))
+        _tls_da_sessao["ca"], _tls_da_sessao["cert"], _tls_da_sessao["chave"] = gerar_par_tls(pasta)
+        dispositivos = criar_ca_dispositivos(pasta)
+        _tls_da_sessao["ca_disp"], _tls_da_sessao["ca_disp_chave"] = str(dispositivos.cert), str(dispositivos.chave)
     return {"FLOW_TLS_CA": _tls_da_sessao["ca"], "FLOW_TLS_CERT": _tls_da_sessao["cert"],
-            "FLOW_TLS_KEY": _tls_da_sessao["chave"]}
+            "FLOW_TLS_KEY": _tls_da_sessao["chave"], "FLOW_CA_DISPOSITIVOS_CERT": _tls_da_sessao["ca_disp"],
+            "FLOW_CA_DISPOSITIVOS_KEY": _tls_da_sessao["ca_disp_chave"]}
 
 
 def aguardar(condicao, timeout: float = 3.0, passo: float = 0.02) -> bool:

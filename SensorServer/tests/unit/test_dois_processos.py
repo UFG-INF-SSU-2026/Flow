@@ -48,6 +48,13 @@ class TestProcessos:
         assert r.returncode == 1
         assert "banco" in r.stderr.lower() and "b" * 20 not in r.stderr
 
+    @pytest.mark.parametrize("modulo", ["borda", "borda.server"])
+    def test_a_borda_sem_a_ca_de_dispositivos_nao_sobe(self, tmp_path, modulo):
+        """Sem a CA de dispositivos nao ha como conferir o certificado de cliente: a borda recusa subir (nunca sobe aberta)."""
+        r = _rodar(["-m", modulo], tmp_path, FLOW_JWT_SECRET=SEGREDO, FLOW_ANALISE_TOKEN=TOKEN, FLOW_DB_FAKE="1",
+                   FLOW_CA_DISPOSITIVOS_CERT=str(tmp_path / "nada.crt"))
+        assert r.returncode != 0 and "CA de dispositivos" in r.stderr
+
     def test_a_borda_nunca_carrega_a_analise(self, tmp_path):
         """Importa o servidor da borda e confere que nenhum modulo `analise*` foi carregado."""
         sonda = ("import sys; from borda import server; "

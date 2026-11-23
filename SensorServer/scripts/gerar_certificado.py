@@ -7,7 +7,8 @@ requirements.txt).
     python scripts/gerar_certificado.py                      cria as CAs se faltarem e emite o que faltar; o que ja existe fica
     python scripts/gerar_certificado.py --ip 192.168.0.10    inclui o IP do computador na rede (o que o celular usa) na borda
     python scripts/gerar_certificado.py --forcar --ip ...    reemite os certificados de servico (a CA continua a mesma)
-    python scripts/gerar_certificado.py --nome bridge        emite tambem certs/bridge.crt (API HTTPS do bridge)
+    python scripts/gerar_certificado.py --nome bridge        emite tambem certs/bridge.crt (API HTTPS do bridge e, com
+                                                             clientAuth, a identidade dele na conexao com a borda)
     python scripts/gerar_certificado.py --forcar-ca          recria a CA e reemite tudo (o app precisa ser recompilado)
 
 Arquivos (SensorServer/certs/, fora do Git):
@@ -31,7 +32,7 @@ servidor por um endereco fora da lista do certificado recusa a conexao: reemita 
 
 A CA de dispositivos e criada quando faltar, em qualquer execucao, e nunca e recriada por --forcar nem por --forcar-ca (a raiz
 nao e tocada por ela, nem ela pela raiz). Para recria-la, apague ca-dispositivos.crt e ca-dispositivos.key e rode o script de
-novo. Sem rotacao automatica; quem se autentica no servidor e a conta, por token (o servidor nao verifica certificado de cliente).
+novo. Sem rotacao automatica; quem se autentica no servidor e a conta, por token (e o certificado de cliente, conferido pela borda).
 
 Depois de reemitir: `docker compose restart db` (o banco carrega o par ao subir) e reinicie borda e analise.
 """
@@ -59,6 +60,7 @@ NOME_CA = "flow-ca"
 NOME_CA_DISPOSITIVOS = "flow-ca-dispositivos"
 NOME_VALIDO = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SERVICOS_FIXOS = ("borda", "analise", "banco")
+NOME_BRIDGE = "bridge"           # o unico certificado da raiz que tambem serve de cliente (o bridge na borda)
 
 
 def _gravar_chave(chave: Path, par) -> None:
@@ -108,8 +110,9 @@ def criar_ca(cert: Path, chave: Path, dias: int = DIAS_CA, nome: str = NOME_CA) 
 
 
 def emitir(ca_cert: Path, ca_chave: Path, cert: Path, chave: Path, cn: str, nomes: list[str], ips: list[str],
-           dias: int = DIAS_PADRAO) -> None:
-    """Emite um certificado de servico (RSA 2048, SHA-256) assinado pela CA, com os SAN `nomes` e `ips`.
+           dias: int = DIAS_PADRAO, cliente: bool = False) -> None:
+    """Emite um certificado de servico (RSA 2048, SHA-256) assinado pela CA, com os SAN `nomes` e `ips`. Com `cliente`, o
+    certificado tambem serve para se autenticar como cliente (`clientAuth`), como o do bridge na borda.
     Escreve o certificado em `cert` e a chave privada em `chave` (0600 onde houver)."""
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -136,7 +139,8 @@ def emitir(ca_cert: Path, ca_chave: Path, cert: Path, chave: Path, cn: str, nome
         .add_extension(x509.KeyUsage(digital_signature=True, key_encipherment=True, key_cert_sign=False,
                                      content_commitment=False, data_encipherment=False, key_agreement=False,
                                      crl_sign=False, encipher_only=False, decipher_only=False), critical=True)
-        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]
+                                             + ([ExtendedKeyUsageOID.CLIENT_AUTH] if cliente else [])), critical=False)
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(publica), critical=False)
         .add_extension(x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ski_da_ca), critical=False)
         .sign(ca_par, hashes.SHA256())
@@ -249,7 +253,7 @@ def main(argv=None) -> int:
             cert, chave = PASTA / f"{nome}.crt", PASTA / f"{nome}.key"
             if cert.is_file() and chave.is_file() and not (a.forcar or recriar_ca):
                 continue
-            emitir(CA_CERT, CA_CHAVE, cert, chave, nome, nomes, ips, a.dias)
+            emitir(CA_CERT, CA_CHAVE, cert, chave, nome, nomes, ips, a.dias, cliente=nome == NOME_BRIDGE)
             emitidos.append(nome)
             print(f"certificado gerado: {cert.relative_to(RAIZ)} (valido por {a.dias} dias; "
                   f"vale para {', '.join(nomes + ips)})")

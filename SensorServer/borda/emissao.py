@@ -6,16 +6,26 @@ A identidade do certificado vem SO de quem chama (conta e device_id do token), n
 chave publica, depois de conferir que e EC P-256, que o CSR foi assinado com ECDSA e SHA-256 e que a assinatura confere (prova
 de que o cliente tem a chave). Assunto e extensoes pedidos no CSR sao ignorados.
 
-Tambem confere o certificado na volta: na subida a borda pede certificado de cliente (opcional) e confia so na CA de
-dispositivos (pedir_certificado_de_cliente); o TLS valida cadeia, validade e `clientAuth`, e authz.py compara a identidade
-do certificado (identidade_do_cliente) com a do token. Quem ainda nao tem certificado (login, refresh, emissao) passa sem ele.
+Tambem confere o certificado na volta (configurar_tls_de_cliente, identidade_do_cliente). Todo cliente com fonte (app e
+wokwi) apresenta o seu; authz.py compara a identidade dele com a do token. Dois caminhos:
 
-A CA de dispositivos (certs/ca-dispositivos.crt e .key, gerada por scripts/gerar_certificado.py) e lida a cada emissao, sem
-cache: a rota e rara (um pedido por partida do dispositivo). Caminhos: FLOW_CA_DISPOSITIVOS_CERT e FLOW_CA_DISPOSITIVOS_KEY, ou
-os padroes de borda/const.py; caminho relativo vale a partir de SensorServer/. So a borda le a chave desta CA. O servidor nao
-exige o certificado so do app, que fala direto com a borda; o do dispositivo (wokwi) e conferido pelo bridge.
-Nenhuma mensagem de erro traz o conteudo do CSR nem de arquivo de CA.
+    app -> borda             o app apresenta o certificado no TLS da propria borda (CA de dispositivos)
+    wokwi -> bridge -> borda o bridge termina o TLS do dispositivo e o confere; na conexao com a borda apresenta o PROPRIO
+                             certificado (certs/bridge.crt, CA raiz, com clientAuth) e repassa o do dispositivo no cabecalho
+                             CABECALHO_CERTIFICADO_REPASSADO (base64 do DER). A borda so aceita esse cabecalho numa conexao
+                             autenticada como o bridge e confere de novo o certificado repassado (emissor, assinatura,
+                             validade, clientAuth). Em qualquer outra conexao o cabecalho e ignorado.
+
+Quem ainda nao tem certificado (login, refresh, emissao) passa sem ele. A borda nao sobe sem o certificado da CA de
+dispositivos; sem a CHAVE dela so a emissao responde 503, e certificados ja emitidos continuam valendo.
+
+A CA de dispositivos (certs/ca-dispositivos.crt e .key, gerada por scripts/gerar_certificado.py) e lida a cada uso, sem
+cache. Caminhos: FLOW_CA_DISPOSITIVOS_CERT e FLOW_CA_DISPOSITIVOS_KEY, ou os padroes de borda/const.py; caminho relativo vale
+a partir de SensorServer/. So a borda le a chave desta CA. Nenhuma mensagem de erro traz o conteudo do CSR, de certificado
+nem de arquivo de CA.
 """
+import base64
+import binascii
 import os
 import ssl
 from dataclasses import dataclass
@@ -30,6 +40,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from borda import const as const_borda
 from comum import const as const_comum
+from comum import tls
 
 
 class CsrInvalido(Exception):
@@ -56,35 +67,77 @@ def _caminho(variavel: str, padrao: str) -> Path:
     return caminho if caminho.is_absolute() else const_comum.DOTENV_ARQUIVO.parent / caminho
 
 
-def pedir_certificado_de_cliente(contexto: ssl.SSLContext) -> bool:
-    """Faz o servidor TLS pedir certificado de cliente, opcional, e confiar so na CA de dispositivos. Quem apresenta um
-    certificado que nao e dela, vencido ou sem `clientAuth` tem o handshake recusado; quem nao apresenta nenhum conecta
-    (e a rota decide, ver authz.py). Devolve False, sem mexer no contexto, se a CA de dispositivos nao existe; levanta
-    EmissaoIndisponivel se existe e esta ilegivel."""
+def configurar_tls_de_cliente(contexto: ssl.SSLContext) -> None:
+    """Faz o servidor TLS pedir certificado de cliente, opcional, e confiar em duas CAs: a de dispositivos (app e, no bridge,
+    o dispositivo) e a raiz (so o certificado do bridge tem `clientAuth` emitido por ela). Certificado de outra CA, vencido
+    ou sem `clientAuth` tem o handshake recusado; quem nao apresenta nenhum conecta (e a rota decide, ver authz.py).
+    Levanta EmissaoIndisponivel se a CA de dispositivos falta ou esta ilegivel: a borda nao sobe sem ela."""
     cert = _caminho("FLOW_CA_DISPOSITIVOS_CERT", const_borda.CA_DISPOSITIVOS_CERT_PADRAO)
     if not cert.is_file():
-        return False
+        raise EmissaoIndisponivel(f"CA de dispositivos nao encontrada; sem ela a borda nao confere os clientes. {_COMO_GERAR}")
     try:
         contexto.load_verify_locations(cafile=str(cert))
     except (ssl.SSLError, OSError):
         raise EmissaoIndisponivel(f"CA de dispositivos ilegivel. {_COMO_GERAR}") from None
+    contexto.load_verify_locations(cafile=tls.ca())       # a raiz: o certificado de cliente do bridge
     contexto.verify_mode = ssl.CERT_OPTIONAL
-    return True
 
 
-def identidade_do_cliente(environ) -> tuple[str, str] | None:
-    """(conta, device_id) do certificado de cliente que o TLS DESTA conexao ja validou, ou None se ela nao trouxe um. Le o
-    `OU` e o `CN` que emitir_certificado grava (conta e device_id do token). Sem TLS (teste, desenvolvimento) devolve None."""
+def _ler_certificado(caminho: Path) -> x509.Certificate | None:
+    try:
+        return x509.load_pem_x509_certificate(caminho.read_bytes())
+    except (ValueError, OSError):
+        return None
+
+
+def _do_bridge(cert: x509.Certificate) -> bool:
+    """O certificado (ja validado pelo TLS) e o do bridge: emitido pela CA raiz, com o nome reservado do bridge."""
+    raiz = _ler_certificado(_caminho("FLOW_TLS_CA", const_comum.TLS_CA_PADRAO))
+    nomes = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    return (raiz is not None and cert.issuer == raiz.subject
+            and [n.value for n in nomes] == [const_borda.NOME_CERTIFICADO_BRIDGE])
+
+
+def _repassado(valor, ca: x509.Certificate, agora: datetime) -> x509.Certificate | None:
+    """O certificado do dispositivo que o bridge repassou, se for da CA de dispositivos, valido agora e com `clientAuth`."""
+    try:
+        cert = x509.load_der_x509_certificate(base64.b64decode(valor, validate=True))
+        cert.verify_directly_issued_by(ca)                    # emissor e assinatura
+        usos = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    except (ValueError, TypeError, binascii.Error, InvalidSignature, UnsupportedAlgorithm, x509.ExtensionNotFound):
+        return None
+    if ExtendedKeyUsageOID.CLIENT_AUTH not in usos or not cert.not_valid_before_utc <= agora <= cert.not_valid_after_utc:
+        return None
+    return cert
+
+
+def identidade_do_cliente(environ, agora: datetime) -> tuple[str, str] | None:
+    """(conta, device_id) do cliente desta conexao, ou None se nao houver um certificado de dispositivo valido.
+
+    Conexao com certificado da CA de dispositivos: a identidade e a dele (o TLS ja o validou). Conexao do bridge: a
+    identidade e a do certificado repassado no cabecalho, conferido aqui. Qualquer outro caso (sem TLS, sem certificado,
+    outro emissor, bridge sem cabecalho ou com um invalido): None. Le o `OU` e o `CN` que emitir_certificado grava."""
     pegar = getattr(environ.get("werkzeug.socket"), "getpeercert", None)
-    if pegar is None:
+    if pegar is None:                                         # sem TLS (teste, desenvolvimento)
         return None
     try:
-        certificado = pegar() or {}
-    except ValueError:                        # handshake ainda nao feito ou conexao sem TLS
+        der = pegar(binary_form=True)
+    except ValueError:                                        # handshake ainda nao feito ou conexao sem TLS
         return None
-    campos = {nome: valor for rdn in certificado.get("subject", ()) for nome, valor in rdn}
-    conta, device_id = campos.get("organizationalUnitName"), campos.get("commonName")
-    return (conta, device_id) if conta and device_id else None
+    ca = _ler_certificado(_caminho("FLOW_CA_DISPOSITIVOS_CERT", const_borda.CA_DISPOSITIVOS_CERT_PADRAO))
+    if not der or ca is None:
+        return None
+    cert = x509.load_der_x509_certificate(der)
+    if _do_bridge(cert):
+        valor = environ.get("HTTP_" + const_borda.CABECALHO_CERTIFICADO_REPASSADO.upper().replace("-", "_"))
+        cert = _repassado(valor, ca, agora) if valor else None
+    elif cert.issuer != ca.subject:
+        cert = None
+    if cert is None:
+        return None
+    conta = [a.value for a in cert.subject.get_attributes_for_oid(NameOID.ORGANIZATIONAL_UNIT_NAME)]
+    device = [a.value for a in cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)]
+    return (conta[0], device[0]) if len(conta) == 1 and len(device) == 1 and conta[0] and device[0] else None
 
 
 def _carregar_ca(agora: datetime) -> tuple[x509.Certificate, object]:

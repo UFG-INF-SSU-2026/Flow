@@ -180,54 +180,79 @@ class TestCaminhos:
 
 
 class _SocketFalso:
-    def __init__(self, certificado=None, erro=None):
-        self._certificado, self._erro = certificado, erro
+    """O `werkzeug.socket` de uma conexao TLS: getpeercert(binary_form=True) devolve o DER que o TLS ja validou."""
 
-    def getpeercert(self):
+    def __init__(self, der=None, erro=None):
+        self._der, self._erro = der, erro
+
+    def getpeercert(self, binary_form=False):
         if self._erro:
             raise self._erro
-        return self._certificado
+        return self._der
 
 
-def _assunto(conta, device):
-    return {"subject": ((("organizationalUnitName", conta),), (("commonName", device),))}
+def _der(emitido) -> bytes:
+    from cryptography.hazmat.primitives import serialization
+    return _cert(emitido).public_bytes(serialization.Encoding.DER)
 
 
 class TestIdentidadeDoCliente:
-    def test_le_conta_e_device_do_certificado_validado(self):
-        assert emissao.identidade_do_cliente({"werkzeug.socket": _SocketFalso(_assunto("idoso1", "cel1"))}) == ("idoso1", "cel1")
+    """Caminho direto (o app). O caminho do bridge, com TLS de verdade, esta em tests/integration/test_certificado_de_cliente.py."""
+
+    def test_le_conta_e_device_do_certificado_da_ca_de_dispositivos(self, ca_dispositivos, agora):
+        environ = {"werkzeug.socket": _SocketFalso(_der(_emitir(agora)))}
+        assert emissao.identidade_do_cliente(environ, agora) == (CONTA, DEVICE)
+
+    def test_cabecalho_de_repasse_numa_conexao_que_nao_e_do_bridge_e_ignorado(self, ca_dispositivos, agora):
+        import base64
+        outro = base64.b64encode(_der(emissao.emitir_certificado(montar_csr(), "outra", "outro", agora))).decode()
+        environ = {"werkzeug.socket": _SocketFalso(_der(_emitir(agora))),
+                   "HTTP_" + const_borda.CABECALHO_CERTIFICADO_REPASSADO.upper().replace("-", "_"): outro}
+        assert emissao.identidade_do_cliente(environ, agora) == (CONTA, DEVICE)
 
     @pytest.mark.parametrize("environ", [
         {},                                                                    # sem TLS (teste, desenvolvimento)
         {"werkzeug.socket": object()},                                         # socket sem getpeercert
-        {"werkzeug.socket": _SocketFalso({})},                                 # TLS sem certificado de cliente
-        {"werkzeug.socket": _SocketFalso(None)},
+        {"werkzeug.socket": _SocketFalso(None)},                               # TLS sem certificado de cliente
+        {"werkzeug.socket": _SocketFalso(b"")},
         {"werkzeug.socket": _SocketFalso(erro=ValueError("handshake"))},
-        {"werkzeug.socket": _SocketFalso({"subject": ((("commonName", "so-cn"),),)})},     # sem a conta
-        {"werkzeug.socket": _SocketFalso({"subject": ((("organizationalUnitName", "so-ou"),),)})},
-    ], ids=range(7))
-    def test_sem_identidade_completa_devolve_none(self, environ):
-        assert emissao.identidade_do_cliente(environ) is None
+    ], ids=range(5))
+    def test_sem_certificado_devolve_none(self, ca_dispositivos, agora, environ):
+        assert emissao.identidade_do_cliente(environ, agora) is None
+
+    def test_certificado_de_outro_emissor_devolve_none(self, ca_dispositivos, agora, tmp_path, monkeypatch):
+        """Na conexao direta vale so o certificado emitido pela CA de dispositivos (a raiz tambem e aceita no TLS, pelo bridge)."""
+        from _apoio import gerador_de_certificado
+        outra_cert, outra_chave = tmp_path / "outra.crt", tmp_path / "outra.key"
+        gerador_de_certificado().criar_ca(outra_cert, outra_chave, dias=2, nome="flow-ca")
+        monkeypatch.setenv("FLOW_CA_DISPOSITIVOS_CERT", str(outra_cert))
+        monkeypatch.setenv("FLOW_CA_DISPOSITIVOS_KEY", str(outra_chave))
+        der = _der(_emitir(agora))                                              # emitido pela "flow-ca"
+        monkeypatch.setenv("FLOW_CA_DISPOSITIVOS_CERT", str(ca_dispositivos.cert))
+        assert emissao.identidade_do_cliente({"werkzeug.socket": _SocketFalso(der)}, agora) is None
 
 
-class TestPedirCertificadoDeCliente:
-    def test_com_a_ca_pede_opcional_e_so_confia_nela(self, ca_dispositivos):
+class TestConfigurarTlsDeCliente:
+    def test_pede_opcional_e_confia_na_de_dispositivos_e_na_raiz(self, ca_dispositivos, monkeypatch):
         import ssl
+        from _apoio import ambiente_tls
+        monkeypatch.setenv("FLOW_TLS_CA", ambiente_tls()["FLOW_TLS_CA"])
         contexto = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        assert emissao.pedir_certificado_de_cliente(contexto) is True
+        emissao.configurar_tls_de_cliente(contexto)
         assert contexto.verify_mode == ssl.CERT_OPTIONAL
-        assert [c["subject"][0][0][1] for c in contexto.get_ca_certs()] == ["flow-ca-dispositivos"]
+        assert sorted(c["subject"][0][0][1] for c in contexto.get_ca_certs()) == ["flow-ca", "flow-ca-dispositivos"]
 
-    def test_sem_a_ca_nao_mexe_no_contexto(self, tmp_path, monkeypatch):
+    def test_sem_a_ca_de_dispositivos_nao_sobe(self, tmp_path, monkeypatch):
         import ssl
         monkeypatch.setenv("FLOW_CA_DISPOSITIVOS_CERT", str(tmp_path / "nada.crt"))
         contexto = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        assert emissao.pedir_certificado_de_cliente(contexto) is False
+        with pytest.raises(emissao.EmissaoIndisponivel):
+            emissao.configurar_tls_de_cliente(contexto)
         assert contexto.verify_mode == ssl.CERT_NONE
 
     def test_ca_ilegivel_nao_sobe(self, ca_dispositivos):
         import ssl
         ca_dispositivos.cert.write_text("SEGREDO-NO-ARQUIVO", encoding="utf-8")
         with pytest.raises(emissao.EmissaoIndisponivel) as erro:
-            emissao.pedir_certificado_de_cliente(ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER))
+            emissao.configurar_tls_de_cliente(ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER))
         assert "SEGREDO-NO-ARQUIVO" not in str(erro.value)

@@ -50,6 +50,10 @@ from comum import mensagens  # noqa: E402
 from flow_db import repositorios  # noqa: E402
 from _pipeline import Pipeline  # noqa: E402
 
+# O cliente do Flask e o ClienteReal falam sem TLS, entao nenhum certificado de cliente chega: desligado so aqui. Quem testa o
+# certificado liga de novo (fixtures `exigindo` e `borda_tls`, tests/integration/test_certificado_de_cliente.py).
+server.app.config["EXIGIR_CERTIFICADO"] = False
+
 
 def _limpar_estado() -> None:
     auth._falhas.clear()

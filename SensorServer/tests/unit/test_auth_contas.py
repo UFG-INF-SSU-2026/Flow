@@ -31,6 +31,16 @@ class TestValidas:
 
 
 class TestInvalidas:
+    @pytest.mark.parametrize("conta_id", ["", "x" * 65, None], ids=["vazio", "65", "nao_texto"])
+    def test_identificador_vazio_ou_maior_que_o_assunto_do_certificado(self, conta_id):
+        """O identificador vira o `OU` do certificado de cliente, que aceita ate 64 caracteres."""
+        with pytest.raises(ValueError, match="identificador"):
+            auth.criar_conta(conta_id, "idoso", [1], ["app"], "s")
+
+    def test_identificador_de_64_caracteres_e_aceito(self):
+        auth.criar_conta("x" * 64, "idoso", [1], ["app"], "s")
+        assert _conta("x" * 64) is not None
+
     def test_duplicada(self):
         auth.criar_conta("i", "idoso", [1], ["app"], "s")
         with pytest.raises(ValueError, match="ja existe"):

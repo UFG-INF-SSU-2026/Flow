@@ -40,7 +40,7 @@ def main() -> int:
         return CODIGO_ERRO
     try:
         contexto = tls.contexto_servidor()     # antes de abrir banco e threads: sem certificado nada sobe
-        exige_certificado = emissao.pedir_certificado_de_cliente(contexto)    # sem a CA de dispositivos: so avisa
+        emissao.configurar_tls_de_cliente(contexto)    # sem a CA de dispositivos a borda nao sobe
     except (tls.ConfigTls, emissao.EmissaoIndisponivel) as e:
         print(f"erro: {e}", file=sys.stderr)
         return CODIGO_ERRO
@@ -50,7 +50,6 @@ def main() -> int:
         print(f"erro: {e}", file=sys.stderr)
         return CODIGO_ERRO
 
-    server.app.config["EXIGIR_CERTIFICADO"] = exige_certificado
     from werkzeug.serving import make_server
     try:
         srv = make_server(const_borda.HOST, const_borda.PORT, server.app, threaded=True,   # threaded: uma thread por stream SSE
@@ -72,8 +71,7 @@ def main() -> int:
 
     _instalar_sinais(pedir_parada)
     print(f"Borda iniciando em https://{const_borda.HOST}:{const_borda.PORT} (a analise e outro processo: 'python -m analise').")
-    print("Certificado de cliente do app: " + ("exigido (CA de dispositivos carregada)" if exige_certificado
-          else "NAO exigido (sem a CA de dispositivos; rode scripts/gerar_certificado.py e reinicie)"))
+    print("Certificado de cliente: exigido do app e do wokwi (este pelo bridge)")
     print(f"Configuracao: {const_comum.DOTENV_ARQUIVO} "
           + ("carregado" if const_comum.DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente"))
     try:

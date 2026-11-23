@@ -68,6 +68,7 @@ from borda.sse_hub import HUB
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = const_borda.MAX_CONTENT_LENGTH   # corpo maior: 413 (ver errorhandler abaixo)
+app.config["EXIGIR_CERTIFICADO"] = True    # app e wokwi apresentam certificado de cliente (authz.py); so os testes desligam
 app.register_blueprint(canal_app.bp)
 app.register_blueprint(canal_wokwi.bp)
 
@@ -699,7 +700,7 @@ if os.environ.get("FLOW_SEM_THREADS") != "1":
 if __name__ == "__main__":
     try:
         _contexto_tls = tls.contexto_servidor()
-        app.config["EXIGIR_CERTIFICADO"] = emissao.pedir_certificado_de_cliente(_contexto_tls)
+        emissao.configurar_tls_de_cliente(_contexto_tls)        # sem a CA de dispositivos a borda nao sobe
     except (tls.ConfigTls, emissao.EmissaoIndisponivel) as e:
         raise SystemExit(f"erro: {e}") from None
     print(f"Borda iniciando em https://{const_borda.HOST}:{const_borda.PORT} (modo de desenvolvimento; use 'python -m borda' para o desligamento ordenado)...")
@@ -708,8 +709,7 @@ if __name__ == "__main__":
     print(f"Banco: {'banco falso em memoria (FLOW_DB_FAKE=1)' if os.environ.get('FLOW_DB_FAKE') == '1' else 'PostgreSQL'}"
           f" | analise: {const_comum.url_analise()}")
     print("Transporte: TLS (CA do projeto) + AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")
-    print("Certificado de cliente do app: " + ("exigido (CA de dispositivos carregada)" if app.config["EXIGIR_CERTIFICADO"]
-          else "NAO exigido (sem a CA de dispositivos; rode scripts/gerar_certificado.py e reinicie)"))
+    print("Certificado de cliente: exigido do app e do wokwi (este pelo bridge)")
 
     # FLOW_BORDA_HOST (padrao 127.0.0.1): para aceitar outros dispositivos da rede, o IP do computador no .env
     app.run(host=const_borda.HOST, port=const_borda.PORT, threaded=True,   # threaded: uma thread por stream SSE

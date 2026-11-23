@@ -148,3 +148,13 @@ class TestCabecalhoDoSketch:
         shutil.rmtree(gc.CABECALHO_NO_SKETCH.parent)
         assert _rodar(gc) == 0
         assert not gc.CABECALHO_NO_SKETCH.exists() and not gc.CABECALHO_NO_SKETCH.parent.exists()
+
+
+class TestCertificadoDoBridge:
+    def test_so_o_do_bridge_tambem_serve_de_cliente(self, gc):
+        from cryptography.x509.oid import ExtendedKeyUsageOID as Uso
+        assert _rodar(gc, "--nome", "bridge", "--nome", "outro") == 0
+        usos = {n: list(_certificado(gc.PASTA / f"{n}.crt").extensions.get_extension_for_class(x509.ExtendedKeyUsage).value)
+                for n in ("bridge", "outro", "borda", "analise", "banco")}
+        assert usos.pop("bridge") == [Uso.SERVER_AUTH, Uso.CLIENT_AUTH]
+        assert all(u == [Uso.SERVER_AUTH] for u in usos.values())

@@ -5,8 +5,7 @@ Negar por padrao: o que nao esta em POLITICA e proibido.
 import functools
 from flask import current_app, g, jsonify, request
 
-from borda import auth, emissao
-from borda import const as const_borda
+from borda import auth, emissao, tempo
 
 POLITICA: dict[str, set[str]] = {
     "idoso":       {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
@@ -36,15 +35,15 @@ def negar(status: int, codigo: str, conta: str | None = None, mensagem: str | No
 
 
 def _exige_certificado_de_cliente(p: auth.Principal) -> bool:
-    """O app (fonte que chega direto a borda) precisa apresentar o certificado emitido por /auth/certificado, quando a borda
-    subiu com a CA de dispositivos (config EXIGIR_CERTIFICADO, ligada por borda/servico.py)."""
-    return (bool(current_app.config.get("EXIGIR_CERTIFICADO")) and p.fonte == const_borda.FONTE_COM_CERTIFICADO_NA_BORDA
-            and "certificado:emitir" in POLITICA.get(p.papel, set()))
+    """Todo token com fonte (app ou wokwi) precisa vir com o certificado de cliente emitido por /auth/certificado. Um papel
+    com fonte que nao tenha a permissao `certificado:emitir` fica bloqueado (visivel), nunca liberado sem certificado.
+    EXIGIR_CERTIFICADO so e desligado pelos testes que usam o cliente do Flask, que nao tem TLS (tests/conftest.py)."""
+    return current_app.config.get("EXIGIR_CERTIFICADO", True) and p.fonte is not None      # ausente: exige (fecha)
 
 
 def exige(permissao: str, fonte: str | None = None, certificado: bool = True):
-    """Estagio 1: token valido + papel com a permissao + fonte exigida pela rota + (so o app) certificado de cliente que bate
-    com o token. `certificado=False` e para a rota que EMITE o certificado: quem a chama ainda nao tem um."""
+    """Estagio 1: token valido + papel com a permissao + fonte exigida pela rota + certificado de cliente que bate com o
+    token (direto, do app, ou repassado pelo bridge, do wokwi). `certificado=False` e para a rota que EMITE o certificado: quem a chama ainda nao tem um."""
     def deco(f):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
@@ -62,7 +61,7 @@ def exige(permissao: str, fonte: str | None = None, certificado: bool = True):
             if fonte is not None and p.fonte != fonte:
                 return negar(403, "fonte_invalida", p.conta_id)   # rota exige uma fonte especifica
             if certificado and _exige_certificado_de_cliente(p):
-                identidade = emissao.identidade_do_cliente(request.environ)
+                identidade = emissao.identidade_do_cliente(request.environ, tempo.agora_utc())
                 if identidade is None:
                     return negar(401, "certificado_ausente", p.conta_id)         # o cliente emite o seu e tenta de novo
                 if identidade != (p.conta_id, p.device_id):

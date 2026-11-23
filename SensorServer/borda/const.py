@@ -58,6 +58,9 @@ BLOQUEIO_S = 900
 # Papeis aceitos na criacao de contas. 'cuidador' e reservado (sem permissoes).
 PAPEIS_VALIDOS = {"idoso", "dispositivo", "cuidador", "admin"}
 
+# Tamanho maximo do identificador de uma conta: ele vira o `OU` do certificado de cliente, que aceita ate 64 caracteres.
+MAX_CONTA_ID_LEN = 64
+
 # Custo do hash de senha (scrypt). Aumentar N encarece o login e tambem o
 # ataque de forca bruta; mudar invalida a comparacao com hashes ja gravados
 # se os parametros nao forem os mesmos de quando a conta foi criada.
@@ -154,7 +157,9 @@ CA_DISPOSITIVOS_CHAVE_PADRAO = "certs/ca-dispositivos.key"
 # O dispositivo pede um novo a cada partida.
 CERT_DISPOSITIVO_DIAS = 7
 
-# Fonte cujo trafego chega DIRETO a borda (o app, sem bridge): a borda confere o certificado de cliente dela. A outra fonte
-# (wokwi) passa pelo bridge, que confere o certificado do dispositivo antes de encaminhar. So vale para quem tem a permissao
-# `certificado:emitir` (borda/authz.py) e so quando a CA de dispositivos esta carregada na subida (borda/emissao.py).
-FONTE_COM_CERTIFICADO_NA_BORDA = "app"
+# Todo cliente com fonte (app e wokwi) apresenta o certificado emitido por /auth/certificado, e authz.py o compara com o token.
+# O app o apresenta direto a borda. O wokwi o apresenta ao bridge, que termina o TLS do dispositivo e, na conexao com a borda,
+# se identifica com o PROPRIO certificado (emitido pela CA raiz, com clientAuth, com este nome no CN) e repassa o do
+# dispositivo neste cabecalho (base64 do DER, sem quebras de linha). A borda so le o cabecalho numa conexao do bridge.
+NOME_CERTIFICADO_BRIDGE = "bridge"
+CABECALHO_CERTIFICADO_REPASSADO = "X-Flow-Certificado-Cliente"

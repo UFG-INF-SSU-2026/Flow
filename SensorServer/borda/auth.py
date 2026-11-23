@@ -142,6 +142,8 @@ def _no_banco(operacao, *args):
 
 def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str], senha: str, repo=None,
                 device_ids: list[str] | None = None) -> None:
+    if not isinstance(conta_id, str) or not 1 <= len(conta_id) <= const_borda.MAX_CONTA_ID_LEN:
+        raise ValueError(f"identificador da conta invalido (texto de 1 a {const_borda.MAX_CONTA_ID_LEN} caracteres)")
     if papel not in const_borda.PAPEIS_VALIDOS:
         raise ValueError(f"papel invalido: {papel}")
     if not set(fontes) <= const_comum.FONTES_VALIDAS:

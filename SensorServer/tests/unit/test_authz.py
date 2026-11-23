@@ -79,6 +79,7 @@ class TestDispositivo:
 def mini(contas):
     """App Flask minimo so com rotas protegidas por exige, mais os tokens de cada conta."""
     app = Flask("mini")
+    app.config["EXIGIR_CERTIFICADO"] = False      # sem TLS no cliente do Flask (o certificado e testado em test_certificado_de_cliente)
 
     @app.route("/enviar")
     @authz.exige("dados:enviar")
@@ -143,6 +144,12 @@ class TestExige:
         c, tok = mini
         r = c.get("/so-wokwi", headers=_bearer(tok["idoso"]))
         assert r.status_code == 403 and r.get_json()["codigo"] == "fonte_invalida"
+
+    def test_sem_a_configuracao_o_certificado_e_exigido(self, mini):
+        c, tok = mini
+        c.application.config.pop("EXIGIR_CERTIFICADO")
+        r = c.get("/enviar", headers=_bearer(tok["idoso"]))
+        assert r.status_code == 401 and r.get_json()["codigo"] == "certificado_ausente"
 
     def test_caso_valido_expoe_o_principal(self, mini):
         c, tok = mini
