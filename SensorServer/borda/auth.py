@@ -243,27 +243,42 @@ def device_id_valido(device_id) -> bool:
     return device_id is None or (isinstance(device_id, str) and len(device_id) <= const_comum.MAX_DEVICE_ID_LEN)
 
 
+def _autenticar(r, identificador: str, segredo: str, fonte: str | None, agora: float) -> dict:
+    """Confere identificador, senha e fonte (com bloqueio por falhas) e devolve a conta. Chamar com `_lock` tomado."""
+    conta = _no_banco(r.buscar_conta, identificador)   # banco fora: 503, sem contar como falha de senha
+    existe = conta is not None
+    try:
+        _checar_bloqueio(identificador, agora)
+    except Bloqueado as e:
+        e.conta_existe = existe
+        raise
+    senha_ok = _verificar_senha(segredo, conta["hash"] if conta else _HASH_FALSO)
+    fonte_ok = existe and (fonte in conta["fontes"] or (conta["papel"] == "admin" and fonte is None))
+    if not (existe and senha_ok and fonte_ok):
+        _registrar_falha(identificador, agora)
+        erro = CredenciaisInvalidas()
+        erro.conta_existe = existe
+        raise erro
+    _falhas.pop(identificador, None)
+    return conta
+
+
+def verificar_credenciais(identificador: str, segredo: str, fonte: str | None, repo=None) -> dict:
+    """So confere as credenciais (mesmas regras e mesmo bloqueio do login), sem emitir token nem criar sessao. Serve a rota
+    que entrega a CA a um app que ainda nao confia no servidor. Devolve a conta."""
+    agora = time.time()
+    r = _repo(repo)
+    with _lock:
+        return _autenticar(r, identificador, segredo, fonte, agora)
+
+
 def login(identificador: str, segredo: str, fonte: str | None, device_id: str | None, repo=None) -> dict:
     if not device_id_valido(device_id):   # defesa; server.login ja responde 400 antes de chegar aqui
         raise ValueError("device_id invalido")
     agora = time.time()
     r = _repo(repo)
     with _lock:
-        conta = _no_banco(r.buscar_conta, identificador)   # banco fora: 503, sem contar como falha de senha
-        existe = conta is not None
-        try:
-            _checar_bloqueio(identificador, agora)
-        except Bloqueado as e:
-            e.conta_existe = existe
-            raise
-        senha_ok = _verificar_senha(segredo, conta["hash"] if conta else _HASH_FALSO)
-        fonte_ok = existe and (fonte in conta["fontes"] or (conta["papel"] == "admin" and fonte is None))
-        if not (existe and senha_ok and fonte_ok):
-            _registrar_falha(identificador, agora)
-            erro = CredenciaisInvalidas()
-            erro.conta_existe = existe
-            raise erro
-        _falhas.pop(identificador, None)
+        conta = _autenticar(r, identificador, segredo, fonte, agora)
         # So depois de a credencial estar certa (quem erra a senha nao descobre o que a conta exige). Nenhum dos dois
         # conta como falha de senha.
         if conta["papel"] in FONTE_DO_PAPEL:      # idoso, dispositivo e cuidador: o device_id vai no certificado de cliente

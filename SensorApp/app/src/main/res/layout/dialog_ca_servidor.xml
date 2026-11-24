@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Endereco IP do servidor"
+        android:textSize="14sp" />
+
+    <EditText
+        android:id="@+id/etCaIp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="ex: 192.168.0.10"
+        android:inputType="text"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Porta"
+        android:textSize="14sp" />
+
+    <EditText
+        android:id="@+id/etCaPorta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="ex: 5000"
+        android:inputType="number"
+        android:layout_marginBottom="16dp" />
+
+    <EditText
+        android:id="@+id/etCaUsuario"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Usuário (ex: idoso1)"
+        android:inputType="text"
+        android:autofillHints="username" />
+
+    <EditText
+        android:id="@+id/etCaSenha"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Senha"
+        android:inputType="textPassword"
+        android:autofillHints="password" />
+
+</LinearLayout>

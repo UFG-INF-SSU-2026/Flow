@@ -439,6 +439,38 @@ def refresh():
     return _resposta_cifrada(tokens)
 
 
+@app.route("/auth/ca", methods=["POST"])
+def entregar_ca():
+    """Entrega a CA do projeto (certs/ca.crt, so o certificado publico) a quem prova ter conta, para o app trocar a CA em que
+    confia. O corpo vai cifrado (AES-GCM) e traz identificador, segredo e fonte; a resposta tambem: so quem tem a chave do
+    envelope le (e forja) a resposta. Nao emite token nem sessao e conta no mesmo bloqueio de falhas do login. Passa sem token
+    e sem certificado de cliente: quem a chama ainda nao confia no servidor."""
+    corpo = _decifrar_corpo()
+    if isinstance(corpo, tuple):
+        return corpo
+    if verificar_versao(corpo, const_comum.SCHEMA_VERSION_CA) is None:   # ausente aceito
+        return _versao_invalida_400(const_comum.SCHEMA_VERSION_CA)
+    ident = corpo.get("identificador")
+    segredo = corpo.get("segredo")
+    if not isinstance(ident, str) or not isinstance(segredo, str) or not ident or not segredo:
+        return jsonify({"status": "erro", "mensagem": "Corpo invalido: esperado {'identificador', 'segredo'}"}), 400
+    try:
+        auth.verificar_credenciais(ident, segredo, corpo.get("fonte", "app"))
+    except auth.Bloqueado as e:
+        return negar(429, "bloqueado", ident if e.conta_existe else None)
+    except auth.ServicoIndisponivel as e:
+        return _login_sem_banco(e)
+    except auth.AuthError as e:
+        return negar(401, e.codigo, ident if e.conta_existe else None)
+    try:
+        with open(tls.ca(), "r", encoding="ascii") as f:      # so o certificado; a chave da CA nunca e lida por servico
+            pem = f.read()
+    except (tls.ConfigTls, OSError, UnicodeDecodeError):
+        return negar(503, "ca_indisponivel", ident, mensagem="CA indisponivel no servidor")
+    print(f"  [ca] entregue conta={ident} ip={request.remote_addr}")
+    return _resposta_cifrada({"ca": pem})
+
+
 @app.route("/auth/certificado", methods=["POST"])
 @exige("certificado:emitir", certificado=False)
 def emitir_certificado():

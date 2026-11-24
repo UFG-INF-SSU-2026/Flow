@@ -107,6 +107,7 @@ SCHEMA_VERSION_AUTH = 3
 # Certificado: /auth/certificado (emissao do certificado de cliente). Usado pelo app e pelo firmware e o payload nao traz
 # `source`, pelo mesmo motivo de AUTH; evolui separado do login.
 SCHEMA_VERSION_CERTIFICADO = 1
+SCHEMA_VERSION_CA = 1       # /auth/ca (entrega da CA do projeto ao app)
 
 # Menor versao que o servidor ainda aceita (vale para app, wokwi e auth). Abaixo disso o payload e descartado.
 # Versao menor que a do contrato, mas >= esta, e aceita e usada.
