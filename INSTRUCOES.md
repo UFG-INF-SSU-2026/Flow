@@ -26,7 +26,6 @@ Flow/
 ├── atividades/         # entregas das atividades da disciplina
 ├── INSTRUCOES.md       # este arquivo
 └── README.md           # análise e resumo do projeto
-```
 
 ## Como as peças se falam
 
