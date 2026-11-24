@@ -4,7 +4,8 @@ Gera a CA PROPRIA do Flow, os certificados TLS de cada servico, assinados por el
 raiz), que so assina certificados de cliente. Roda de qualquer pasta; so precisa do pacote `cryptography` (ja esta em
 requirements.txt).
 
-    python scripts/gerar_certificado.py                      cria as CAs se faltarem e emite o que faltar; o que ja existe fica
+    python scripts/gerar_certificado.py                      cria as CAs se faltarem e emite o que faltar; o que ja existe fica,
+                                                             menos o da borda quando o IP da rede mudou (ver abaixo)
     python scripts/gerar_certificado.py --ip 192.168.0.10    inclui o IP do computador na rede (o que o celular usa) na borda
     python scripts/gerar_certificado.py --forcar --ip ...    reemite os certificados de servico (a CA continua a mesma)
     python scripts/gerar_certificado.py --nome bridge        emite tambem certs/bridge.crt (API HTTPS do bridge e, com
@@ -25,6 +26,10 @@ Arquivos (SensorServer/certs/, fora do Git):
     <nome>.crt / .key       um por --nome (mesmos nomes e IPs da borda)
     SensorApp/app/src/main/res/raw/flow_cert.pem   copia de ca.crt (publico) que o app embute como unica confianca
     sketch/ca_flow.h        cabecalho C++ com ca.crt (publico) em FLOW_CA_PEM, a CA em que o firmware confia (fora do Git)
+
+IP da rede mudou (outra rede Wi-Fi, roteamento do celular): se o IP detectado ou um --ip nao estiver no certificado da borda,
+so ele e reemitido, como `--forcar --ip <IP>` faria para ela. Os demais certificados e as CAs ficam. Como scripts/preparar.*
+(e scripts/tudo.*) rodam este script, basta subir o servidor de novo; o app e o bridge nao mudam (a CA e a mesma).
 
 Renovar um certificado de servico (--forcar) NAO troca a CA: app e bridge continuam confiando sem recompilar. So a troca da
 CA (--forcar-ca) exige recompilar o app e o firmware e reemitir tambem os `--nome` que existirem. Um cliente que acesse o
@@ -160,6 +165,17 @@ def _ip_da_rede() -> str | None:
     return None if ip.startswith("127.") or ip == "0.0.0.0" else ip
 
 
+def _ips_do_certificado(cert: Path) -> set[str]:
+    """IPs listados no certificado (SAN). Certificado ilegivel: nenhum (sera reemitido)."""
+    from cryptography import x509
+
+    try:
+        san = x509.load_pem_x509_certificate(cert.read_bytes()).extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    except (ValueError, OSError, x509.ExtensionNotFound):
+        return set()
+    return {str(ip) for ip in san.value.get_values_for_type(x509.IPAddress)}
+
+
 def _sem_repeticao(itens: list[str]) -> list[str]:
     return list(dict.fromkeys(itens))
 
@@ -251,12 +267,14 @@ def main(argv=None) -> int:
         emitidos = []
         for nome, (nomes, ips) in pedidos.items():
             cert, chave = PASTA / f"{nome}.crt", PASTA / f"{nome}.key"
-            if cert.is_file() and chave.is_file() and not (a.forcar or recriar_ca):
+            existe = cert.is_file() and chave.is_file()
+            ip_novo = existe and nome == "borda" and not {str(ipaddress.ip_address(i)) for i in ips} <= _ips_do_certificado(cert)
+            if existe and not (a.forcar or recriar_ca or ip_novo):
                 continue
             emitir(CA_CERT, CA_CHAVE, cert, chave, nome, nomes, ips, a.dias, cliente=nome == NOME_BRIDGE)
             emitidos.append(nome)
-            print(f"certificado gerado: {cert.relative_to(RAIZ)} (valido por {a.dias} dias; "
-                  f"vale para {', '.join(nomes + ips)})")
+            print(f"certificado {'reemitido (IP da rede mudou)' if ip_novo else 'gerado'}: {cert.relative_to(RAIZ)} "
+                  f"(valido por {a.dias} dias; vale para {', '.join(nomes + ips)})")
     except (ValueError, OSError) as e:
         print(f"erro: {e}", file=sys.stderr)
         return 1

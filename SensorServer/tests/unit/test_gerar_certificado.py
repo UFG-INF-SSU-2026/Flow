@@ -158,3 +158,46 @@ class TestCertificadoDoBridge:
                 for n in ("bridge", "outro", "borda", "analise", "banco")}
         assert usos.pop("bridge") == [Uso.SERVER_AUTH, Uso.CLIENT_AUTH]
         assert all(u == [Uso.SERVER_AUTH] for u in usos.values())
+
+
+class TestIpDaRedeMudou:
+    """O IP da rede muda (outra rede, roteamento do celular): so o certificado da borda acompanha, sem --forcar."""
+
+    def _ips(self, gc):
+        san = _certificado(gc.PASTA / "borda.crt").extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        return {str(ip) for ip in san.get_values_for_type(x509.IPAddress)}
+
+    def test_ip_novo_reemite_so_a_borda(self, gc, monkeypatch, capsys):
+        monkeypatch.setattr(gc, "_ip_da_rede", lambda: "192.168.30.20")
+        _rodar(gc)
+        intocados = [gc.CA_CERT, gc.CA_CHAVE, gc.CA_DISPOSITIVOS_CERT, gc.CA_DISPOSITIVOS_CHAVE, gc.CERT_NO_APP,
+                     gc.CABECALHO_NO_SKETCH, *(gc.PASTA / f"{n}.{e}" for n in ("analise", "banco") for e in ("crt", "key"))]
+        antes = _bytes(*intocados)
+        monkeypatch.setattr(gc, "_ip_da_rede", lambda: "10.114.192.202")
+        capsys.readouterr()
+        assert _rodar(gc) == 0
+        assert "10.114.192.202" in self._ips(gc) and "192.168.30.20" not in self._ips(gc)
+        assert _bytes(*intocados) == antes                   # CAs, analise, banco, app e sketch intocados
+        assert "reemitido (IP da rede mudou)" in capsys.readouterr().out
+
+    def test_mesmo_ip_nao_reemite(self, gc, monkeypatch, capsys):
+        monkeypatch.setattr(gc, "_ip_da_rede", lambda: "10.114.192.202")
+        _rodar(gc)
+        borda = [gc.PASTA / "borda.crt", gc.PASTA / "borda.key"]
+        antes = _bytes(*borda)
+        capsys.readouterr()
+        assert _rodar(gc) == 0
+        assert _bytes(*borda) == antes and "nada a fazer" in capsys.readouterr().out
+
+    def test_ip_pedido_com_ip_que_falta_reemite_a_borda(self, gc):
+        _rodar(gc)
+        assert _rodar(gc, "--ip", "10.0.0.7") == 0
+        assert "10.0.0.7" in self._ips(gc)
+
+    def test_sem_rede_nao_reemite(self, gc, monkeypatch):
+        monkeypatch.setattr(gc, "_ip_da_rede", lambda: "10.114.192.202")
+        _rodar(gc)
+        antes = _bytes(gc.PASTA / "borda.crt")
+        monkeypatch.setattr(gc, "_ip_da_rede", lambda: None)            # sem rede: nada a acrescentar
+        assert _rodar(gc) == 0
+        assert _bytes(gc.PASTA / "borda.crt") == antes
