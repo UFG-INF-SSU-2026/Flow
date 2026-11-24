@@ -15,9 +15,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <!-- Vibracao do alerta com o app aberto (permissao normal, sem pedido em tempo de execucao). A lanterna nao pede permissao. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- Localizacao (opcional, desligada por padrao, pedida na hora). Sem ACCESS_BACKGROUND_LOCATION. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Android 11 ou superior: sem isto o app nao enxerga o servico de voz e a fala do alerta falha em silencio -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
 
     <application
         android:name=".FlowApp"

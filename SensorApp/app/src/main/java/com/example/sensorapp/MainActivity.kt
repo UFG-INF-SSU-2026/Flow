@@ -12,9 +12,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.EditText
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -153,6 +156,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
+    // Importar a CA do servidor (ca.crt): arquivo escolhido pela pessoa, conferido antes de ser guardado
+    private val importarCa = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) importarCaDe(uri)
+    }
+    private var caNoDialogo: TextView? = null
+
     // O servico de monitoramento avisa a tela (sempre na thread principal)
     private val ouvinteServico = object : MonitorService.Ouvinte {
         override fun aoEstadoPush(texto: String) {
@@ -205,7 +214,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
         app.eventos.aoFalhar = { texto -> atualizarStatus(texto, false) }
         alerta = AlertaController(this, binding.painelAlerta, binding.tvAlerta, binding.btnEstouBem) {
-            MonitorService.responder("ESTOU_BEM")
+            // Sem episodio (aviso de teste), o botao so encerra o aviso; nada e enviado ao servidor
+            if (MonitorService.episodio == null) alerta.esconder() else MonitorService.responder("ESTOU_BEM")
         }
         MonitorService.ouvinte = ouvinteServico
         atualizarTextoServidor()
@@ -231,6 +241,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             abrirDialogoSocket()
         }
 
+        // Aciona o aviso por 10 s sem servidor (painel vermelho, alarme, vibracao, lanterna e fala); ignorado se ha episodio real
+        binding.btnTestarAlerta.setOnClickListener {
+            if (MonitorService.episodio == null) alerta.exibir(SystemClock.elapsedRealtime() + 10_000L)
+        }
+
         atualizarStatus("Parado", false)
     }
 
@@ -247,6 +262,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         etIp.setText(serverIp)
         etPorta.setText(serverPort)
+        val tvCa = dialogView.findViewById<TextView>(R.id.tvCa)
+        tvCa.text = textoCa()
+        caNoDialogo = tvCa
+        dialogView.findViewById<Button>(R.id.btnImportarCa).setOnClickListener {
+            importarCa.launch(arrayOf("*/*"))       // o ca.crt nao tem tipo MIME conhecido em todos os aparelhos
+        }
         // Usuario e senha ficam em branco: preencha so para (re)fazer o login. A senha nao e guardada.
 
         AlertDialog.Builder(this)
@@ -278,6 +299,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     // login e uma chamada de rede bloqueante: fora da thread principal
                     Thread {
                         val r = auth.login(usuario, senha)
+                        if (r.ok) app.emissor.garantir()      // certificado de cliente: emite se faltar ou for de outra conta
                         runOnUiThread {
                             atualizarTextoServidor()
                             Toast.makeText(this, r.mensagem, Toast.LENGTH_LONG).show()
@@ -288,12 +310,38 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
             }
             .setNegativeButton("Cancelar", null)
+            .setOnDismissListener { caNoDialogo = null }
             .show()
+    }
+
+    private fun textoCa(): String = CaProjeto.descricao(CaProjeto.carregar(this))
+
+    /** Confere o arquivo escolhido; so uma CA valida substitui a atual. A confianca nova vale para as proximas conexoes. */
+    private fun importarCaDe(uri: android.net.Uri) {
+        val bytes = try {
+            contentResolver.openInputStream(uri)?.use { lerLimitado(it, LIMITE_BYTES) }
+        } catch (e: Exception) {
+            null
+        }
+        if (bytes == null) {
+            Toast.makeText(this, "Não foi possível ler o arquivo", Toast.LENGTH_LONG).show()
+            return
+        }
+        when (val r = CaProjeto.importar(this, bytes)) {
+            is ResultadoCa.Erro -> Toast.makeText(this, "CA não importada: ${r.motivo}", Toast.LENGTH_LONG).show()
+            is ResultadoCa.Ok -> {
+                if (isRunning) pararEnvio()          // o canal de push em curso usa a confianca antiga
+                FlowHttp.recarregarTls()
+                caNoDialogo?.text = textoCa()
+                atualizarTextoServidor()
+                Toast.makeText(this, "CA importada. Toque em Iniciar para reconectar", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun atualizarTextoServidor() {
         val pessoa = auth.userId?.let { "pessoa $it" } ?: "sem login"
-        binding.tvServidor.text = "Servidor: $serverIp:$serverPort | $pessoa"
+        binding.tvServidor.text = "Servidor: $serverIp:$serverPort | $pessoa\n${textoCa()}"
     }
 
     // ---------------------------------------------------------------------------------------
@@ -525,6 +573,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             return
         }
         atualizarIndicadorLocalizacao()
+
+        // Falta certificado de cliente ou restam menos da metade da validade: emite em segundo plano (sem travar o envio)
+        if (app.emissor.precisaEmitir()) app.emissor.renovarEmSegundoPlano(descartar = false)
 
         // Cifra o JSON inteiro (Marco 2) antes de enviar. O servidor decifra
         // o envelope e recupera o payload original (ver CryptoUtils.kt).

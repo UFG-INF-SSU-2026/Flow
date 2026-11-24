@@ -162,6 +162,7 @@ class AuthClient(
     val authenticator: Authenticator = object : Authenticator {
         override fun authenticate(route: Route?, response: Response): Request? {
             if (ehRotaDeAuth(response.request)) return null
+            if (response.certificadoRecusado() != null) return null     // problema do certificado: renovar o token nao resolve
             if (response.request.header("X-Retry-Auth") != null) return null
             val usado = response.request.header("Authorization")?.removePrefix("Bearer ")
             if (!renovar(usado)) return null
