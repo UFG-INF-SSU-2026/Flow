@@ -105,6 +105,30 @@ class Pg(PgBase, Repo):
             return conn.execute("SELECT id, episodio_id, message_id, tipo, criado_em, expira_em FROM comandos_push"
                                 " WHERE episodio_id = ANY(%s) ORDER BY id", (ids,)).fetchall()
 
+    def ultimas_comunicacoes(self, user_id: int, desde: datetime) -> list[dict]:
+        with self._cx() as conn:
+            linhas = conn.execute(
+                "SELECT DISTINCT ON (device_id) device_id, fonte, instante_ingestao AS instante FROM leituras"
+                " WHERE user_id = %s AND instante_ingestao >= %s ORDER BY device_id, instante_ingestao DESC, id DESC",
+                (user_id, desde)).fetchall()
+        return sorted(linhas, key=lambda c: c["instante"], reverse=True)
+
+    def historico_do_usuario(self, user_id: int, desde: datetime, limite: int) -> dict[str, list[dict]]:
+        with self._cx() as conn:
+            alertas = conn.execute(
+                "SELECT instante, device_id, tipo, mensagem, episodio_id FROM alertas"
+                " WHERE user_id = %s AND instante >= %s ORDER BY instante DESC, id DESC LIMIT %s",
+                (user_id, desde, limite)).fetchall()
+            confirmacoes = conn.execute(
+                "SELECT instante, tipo, episodio_id, dados FROM confirmacoes"
+                " WHERE user_id = %s AND instante >= %s ORDER BY instante DESC, id DESC LIMIT %s",
+                (user_id, desde, limite)).fetchall()
+            episodios = conn.execute(
+                "SELECT episodio_id, device_id, tipo, estado, aberto_em, atualizado_em, encerrado_em, motivo_encerramento"
+                " FROM episodios WHERE user_id = %s AND (estado <> 'encerrado' OR atualizado_em >= %s)"
+                " ORDER BY atualizado_em DESC LIMIT %s", (user_id, desde, limite)).fetchall()
+        return {"alertas": alertas, "confirmacoes": confirmacoes, "episodios": episodios}
+
     def criar_conta(self, c: dict) -> bool:
         with self._cx() as conn:
             linha = conn.execute(

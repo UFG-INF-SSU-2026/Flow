@@ -174,14 +174,15 @@ class ClienteFlask(Cliente):
 
 
 class ClienteReal(Cliente):
-    """Usa HTTP de verdade contra o servidor numa porta efemera."""
+    """Usa HTTPS de verdade contra o servidor numa porta efemera, confiando so na CA `ca` (a de teste)."""
 
-    def __init__(self, base: str):
+    def __init__(self, base: str, ca: str | None = None):
         self.base = base
+        self.ca = ca
         self.apos_postar = None     # idem ClienteFlask: roda depois de a resposta HTTP voltar
 
     def _enviar(self, metodo, rota, corpo, headers):
-        resp = requests.request(metodo, self.base + rota, json=corpo, headers=headers, timeout=10)
+        resp = requests.request(metodo, self.base + rota, json=corpo, headers=headers, timeout=10, verify=self.ca)
         if metodo == "POST" and rota in ROTAS_QUE_ALIMENTAM_A_ANALISE and self.apos_postar is not None:
             self.apos_postar()
         return resp
@@ -190,16 +191,16 @@ class ClienteReal(Cliente):
         return resp.json()
 
     def sse(self, rota: str, token, headers=None) -> "LeitorSSE":
-        return LeitorSSE(self.base + rota, token, headers)
+        return LeitorSSE(self.base + rota, token, headers, self.ca)
 
 
 class LeitorSSE:
     """Abre um stream SSE e le os quadros numa thread. Comentarios (': ...') e eventos ficam numa fila."""
 
-    def __init__(self, url: str, token, headers=None):
+    def __init__(self, url: str, token, headers=None, ca: str | None = None):
         cab = {"Authorization": f"Bearer {token}"}
         cab.update(headers or {})
-        self.resp = requests.get(url, headers=cab, stream=True, timeout=(5, 30))
+        self.resp = requests.get(url, headers=cab, stream=True, timeout=(5, 30), verify=ca)
         self.status = self.resp.status_code
         self.headers = self.resp.headers
         self.ultimo_id: int | None = None

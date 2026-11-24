@@ -165,8 +165,31 @@ def podar_historico_apaga_so_o_velho_e_nunca_episodio_aberto(repo):
     assert len(repo.ler_leituras_recentes(T0)) == 1                       # `leituras` nao e tocada por este metodo
 
 
+def historico_e_ultimas_comunicacoes_do_usuario(repo):
+    repo.gravar_leituras([leitura(0), leitura(5), {**leitura(3), "device_id": "esp32"}, leitura(9, user_id=2)])
+    com = repo.ultimas_comunicacoes(1, T0)
+    assert [(c["device_id"], c["instante"]) for c in com] == [("cel1", _t(5)), ("esp32", _t(3))]
+    assert set(com[0]) == {"device_id", "fonte", "instante"}                         # nunca o payload
+    assert repo.ultimas_comunicacoes(1, _t(6)) == []
+    for seg in (10, 20, 30):
+        repo.gravar_alerta({"instante": _t(seg), "user_id": 1, "device_id": "cel1", "tipo": "luz", "mensagem": f"m{seg}",
+                            "dados": {"segredo": 1}, "episodio_id": None, "schema_version": 3})
+    repo.gravar_alerta({"instante": _t(40), "user_id": 2, "device_id": None, "tipo": "luz", "mensagem": "outro",
+                        "dados": {}, "episodio_id": None, "schema_version": 3})
+    repo.gravar_confirmacao({"instante": _t(15), "user_id": 1, "tipo": "episodio.encerrado",
+                             "dados": {"resultado": "EXPIRADO"}, "episodio_id": "e1", "message_id": None, "schema_version": 3})
+    repo.gravar_episodio(episodio(episodio_id="velho-aberto", estado="aberto", atualizado_em=T0 - timedelta(days=200)))
+    repo.gravar_episodio(episodio(episodio_id="e1", estado="encerrado", atualizado_em=_t(15), encerrado_em=_t(15),
+                                  motivo_encerramento="EXPIRADO"))
+    h = repo.historico_do_usuario(1, T0, 2)
+    assert [a["mensagem"] for a in h["alertas"]] == ["m30", "m20"] and "dados" not in h["alertas"][0]
+    assert h["confirmacoes"][0]["dados"] == {"resultado": "EXPIRADO"}
+    assert [e["episodio_id"] for e in h["episodios"]] == ["e1", "velho-aberto"]          # aberto de qualquer idade
+    assert repo.historico_do_usuario(3, T0, 10) == {"alertas": [], "confirmacoes": [], "episodios": []}
+
+
 TODOS = [leituras_em_lote_e_recentes, listar_leituras_mais_recentes_primeiro_com_filtro_e_limite,
          comando_e_idempotente_pelo_message_id, alerta_e_confirmacao_voltam_com_id,
          episodio_upsert_preserva_encerramento_e_funde_dados, episodios_recentes_incluem_os_abertos_de_qualquer_idade,
          estado_do_dispositivo_upsert_e_leitura_por_device, transacao_e_tudo_ou_nada, contas_e_sessoes,
-         podar_historico_apaga_so_o_velho_e_nunca_episodio_aberto]
+         podar_historico_apaga_so_o_velho_e_nunca_episodio_aberto, historico_e_ultimas_comunicacoes_do_usuario]

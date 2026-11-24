@@ -74,12 +74,24 @@ def test_ca_assina_o_servico_e_so_a_ca_e_confianca(monkeypatch, tmp_path):
         srv.server_close()
 
 
-def test_borda_escuta_so_no_loopback_por_padrao(monkeypatch):
+def test_borda_escuta_em_todas_as_interfaces_por_padrao(monkeypatch):
     monkeypatch.delenv("FLOW_BORDA_HOST", raising=False)
     monkeypatch.delenv("FLOW_BORDA_PORT", raising=False)
     try:
         importlib.reload(const_borda)
-        assert const_borda.HOST == "127.0.0.1" and const_borda.PORT == 5000
+        assert const_borda.HOST == "0.0.0.0" and const_borda.PORT == 5000
     finally:
         monkeypatch.undo()
         importlib.reload(const_borda)
+
+
+def test_a_borda_mostra_os_ips_de_rede_do_proprio_certificado(tmp_path):
+    """Com 0.0.0.0, a borda imprime o IP que vai no app: os do certificado dela, sem os de loopback."""
+    from _apoio import gerador_de_certificado
+    from borda import servico
+    g = gerador_de_certificado()
+    ca, ca_chave, cert, chave = (tmp_path / n for n in ("ca.crt", "ca.key", "borda.crt", "borda.key"))
+    g.criar_ca(ca, ca_chave, dias=2)
+    g.emitir(ca, ca_chave, cert, chave, "borda", ["localhost"], ["127.0.0.1", "::1", "10.114.192.202"], dias=2)
+    assert servico.enderecos_de_rede(str(cert)) == ["10.114.192.202"]
+    assert servico.enderecos_de_rede(str(tmp_path / "nada.crt")) == []

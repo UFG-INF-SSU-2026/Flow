@@ -5,6 +5,7 @@ Estado global do servidor (episodios, hub SSE, falhas de login, filas...) e limp
 Constantes de tempo sao ajustadas com monkeypatch.setattr(const, ...) em cada teste que precisa.
 """
 import logging
+import ssl
 import os
 import sys
 import threading
@@ -15,7 +16,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # SensorSer
 if RAIZ not in sys.path:
     sys.path.insert(0, RAIZ)
 
-from _apoio import SEGREDO, ClienteFlask, ClienteReal, criar_ca_dispositivos  # noqa: E402
+from _apoio import SEGREDO, ClienteFlask, ClienteReal, ambiente_tls, criar_ca_dispositivos  # noqa: E402
 
 # Antes de importar o servidor: segredo e ambiente isolados do .env real.
 os.environ["FLOW_SEM_DOTENV"] = "1"    # os testes nunca leem o SensorServer/.env real
@@ -212,7 +213,10 @@ def servidor_real(contas, monkeypatch, pipeline):
     monkeypatch.setattr(const_borda, "KEEPALIVE_S", 0.3)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-    srv = make_server("127.0.0.1", 0, server.app, threaded=True)
+    env = ambiente_tls()                 # TLS de verdade, com a CA e o par de teste da sessao (nunca o certs/ do projeto)
+    contexto = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    contexto.load_cert_chain(env["FLOW_TLS_CERT"], env["FLOW_TLS_KEY"])
+    srv = make_server("127.0.0.1", 0, server.app, threaded=True, ssl_context=contexto)
     parar = threading.Event()
 
     def ciclos():
@@ -224,7 +228,7 @@ def servidor_real(contas, monkeypatch, pipeline):
     for t in threads:
         t.start()
     try:
-        cliente = ClienteReal(f"http://127.0.0.1:{srv.server_port}")
+        cliente = ClienteReal(f"https://127.0.0.1:{srv.server_port}", env["FLOW_TLS_CA"])
         cliente.apos_postar = pipeline.drenar
         yield cliente
     finally:

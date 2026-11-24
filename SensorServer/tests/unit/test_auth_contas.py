@@ -25,9 +25,14 @@ class TestValidas:
         auth.criar_conta("a", "admin", [], [], "s")
         assert _conta("a")["user_ids"] == []
 
-    def test_cuidador_reservado_e_criavel(self):
-        auth.criar_conta("c", "cuidador", [1, 2], [], "s")
-        assert _conta("c")["user_ids"] == [1, 2]
+    def test_cuidador_acompanha_varias_pessoas_pelo_app(self):
+        auth.criar_conta("c", "cuidador", [1, 2], ["app"], "s")
+        assert (_conta("c")["user_ids"], _conta("c")["fontes"]) == ([1, 2], ["app"])
+
+    @pytest.mark.parametrize("user_ids,fontes", [([], ["app"]), ([1], []), ([1], ["wokwi"])])
+    def test_cuidador_sem_pessoa_ou_fora_do_app_e_recusado(self, user_ids, fontes):
+        with pytest.raises(ValueError):
+            auth.criar_conta("c", "cuidador", user_ids, fontes, "s")
 
 
 class TestInvalidas:

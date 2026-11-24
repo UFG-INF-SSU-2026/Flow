@@ -15,10 +15,11 @@ from comum import const as _comum  # noqa: F401  (efeito colateral: o .env e car
 # 1. SERVIDOR E AGREGACAO
 # ===========================================================================
 
-# Onde a borda escuta (so HTTPS). Padrao: 127.0.0.1, ou seja, so este computador. Para o app e o bridge em outra maquina,
-# defina FLOW_BORDA_HOST com o IP do computador na rede (o mesmo que esta no certificado da borda; ver .env.example) e
-# libere a ENTRADA na porta no firewall. FLOW_BORDA_PORT troca a porta (padrao 5000).
-HOST = os.environ.get("FLOW_BORDA_HOST") or "127.0.0.1"
+# Onde a borda escuta (so HTTPS). Padrao: 0.0.0.0, todas as interfaces, para o app e o bridge alcancarem a borda em
+# qualquer rede sem configuracao (o IP da rede entra sozinho no certificado: scripts/gerar_certificado.py). Continua exigindo
+# TLS e login em tudo; numa rede publica a porta fica visivel. FLOW_BORDA_HOST=127.0.0.1 restringe a este computador.
+# Libere a ENTRADA na porta no firewall. FLOW_BORDA_PORT troca a porta (padrao 5000).
+HOST = os.environ.get("FLOW_BORDA_HOST") or "0.0.0.0"
 PORT = int(os.environ.get("FLOW_BORDA_PORT") or 5000)
 
 # Quantas leituras o GET /dados (rota de depuracao, so admin; le a tabela `leituras`) devolve por padrao e no maximo.
@@ -135,6 +136,11 @@ INTERVALO_LOG_FALHA_S = 10
 # tolerado (a restauracao da analise olha so RETENCAO_EPISODIOS_S). `leituras` tem retencao propria no banco (14 dias, migracao 0002).
 INTERVALO_RETENCAO_S = 3600
 RETENCAO_HISTORICO_DIAS = 90
+
+# Rotas do cuidador: o historico alcanca RETENCAO_HISTORICO_DIAS (o que o banco guarda) e traz ate HISTORICO_CUIDADOR_MAX
+# itens de cada lista (alertas, confirmacoes, episodios); o estado traz os ULTIMOS_ALERTAS_CUIDADOR alertas mais recentes.
+HISTORICO_CUIDADOR_MAX = 150
+ULTIMOS_ALERTAS_CUIDADOR = 3
 
 # ===========================================================================
 # 6. DESLIGAMENTO ORDENADO

@@ -159,6 +159,28 @@ class BancoFalso(Repo):
                        for l in achados), key=lambda l: l["id"])
 
     # ---- contas e sessoes de login ----
+    def ultimas_comunicacoes(self, user_id, desde):
+        ultima: dict[str, dict] = {}
+        for l in self._selecionar("leituras", lambda l: l["user_id"] == user_id and l["instante_ingestao"] >= desde):
+            if l["device_id"] not in ultima or l["instante_ingestao"] > ultima[l["device_id"]]["instante"]:
+                ultima[l["device_id"]] = {"device_id": l["device_id"], "fonte": l["fonte"], "instante": l["instante_ingestao"]}
+        return sorted(ultima.values(), key=lambda c: c["instante"], reverse=True)
+
+    def historico_do_usuario(self, user_id, desde, limite):
+        def recentes(tabela, filtro, ordem, colunas):
+            linhas = sorted(self._selecionar(tabela, lambda l: l["user_id"] == user_id and filtro(l)),
+                            key=lambda l: (l[ordem], l.get("id", 0)), reverse=True)
+            return [{c: l.get(c) for c in colunas} for l in linhas[:limite]]
+        return {
+            "alertas": recentes("alertas", lambda l: l["instante"] >= desde, "instante",
+                                ("instante", "device_id", "tipo", "mensagem", "episodio_id")),
+            "confirmacoes": recentes("confirmacoes", lambda l: l["instante"] >= desde, "instante",
+                                     ("instante", "tipo", "episodio_id", "dados")),
+            "episodios": recentes("episodios", lambda l: l["estado"] != "encerrado" or l["atualizado_em"] >= desde,
+                                  "atualizado_em", ("episodio_id", "device_id", "tipo", "estado", "aberto_em",
+                                                    "atualizado_em", "encerrado_em", "motivo_encerramento")),
+        }
+
     def criar_conta(self, c: dict) -> bool:
         with self._lock:
             if any(l["id"] == c["id"] for l in self.tabelas["contas"]):

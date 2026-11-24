@@ -12,6 +12,8 @@ MATRIZ = {
     ("GET", "/push/wokwi"):    {"idoso": 403, "dispositivo": 200, "admin": 403, "sem_token": 401, "invalido": 401},
     ("GET", "/dados"):         {"idoso": 403, "dispositivo": 403, "admin": 200, "sem_token": 401, "invalido": 401},
     ("GET", "/estado/nada"):   {"idoso": 403, "dispositivo": 403, "admin": 404, "sem_token": 401, "invalido": 401},
+    ("GET", "/cuidador/1/estado"):    {"idoso": 403, "dispositivo": 403, "admin": 403, "sem_token": 401, "invalido": 401},
+    ("GET", "/cuidador/1/historico"): {"idoso": 403, "dispositivo": 403, "admin": 403, "sem_token": 401, "invalido": 401},
     ("GET", "/"):              {"idoso": 200, "dispositivo": 200, "admin": 200, "sem_token": 200, "invalido": 200},
     ("GET", "/health"):        {"idoso": 200, "dispositivo": 200, "admin": 200, "sem_token": 200, "invalido": 200},
 }

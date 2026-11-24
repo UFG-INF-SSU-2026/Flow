@@ -594,6 +594,74 @@ def obter_estado_imobilidade(device_id):
     return jsonify(linha["estado"])
 
 
+# ---------------------------------------------------------------- cuidador (so leitura)
+def _iso(instante) -> str | None:
+    return None if instante is None else instante.isoformat()
+
+
+def _alerta_para_cuidador(a: dict) -> dict:
+    return {"instante": _iso(a["instante"]), "deviceId": a["device_id"], "tipo": a["tipo"], "mensagem": a["mensagem"],
+            "episodioId": a["episodio_id"]}
+
+
+def _episodio_para_cuidador(e: dict) -> dict:
+    return {"episodioId": e["episodio_id"], "deviceId": e["device_id"], "tipo": e["tipo"], "estado": e["estado"],
+            "abertoEm": _iso(e["aberto_em"]), "atualizadoEm": _iso(e["atualizado_em"]),
+            "encerradoEm": _iso(e["encerrado_em"]), "resultado": e["motivo_encerramento"]}
+
+
+def _confirmacao_para_cuidador(c: dict) -> dict:
+    """So o resumo: o `dados` gravado traz o evento do dispositivo inteiro, entao sai so o que o cuidador precisa."""
+    dados = c.get("dados") or {}
+    return {"instante": _iso(c["instante"]), "tipo": c["tipo"], "episodioId": c["episodio_id"],
+            **{chave: dados[campo] for chave, campo in (("resultado", "resultado"), ("estado", "state"), ("motivo", "motivo"))
+               if isinstance(dados.get(campo), str)}}
+
+
+def _leitura_do_cuidador(user_id: int, ler):
+    """Comum as duas rotas: escopo (so os user_ids do token), banco (503 curto se fora) e resposta cifrada, com `geradoEm`
+    para o app mostrar a idade do dado. A localizacao nunca entra: as consultas nao trazem o payload das leituras."""
+    if user_id not in g.principal.user_ids:
+        return negar(403, "fora_de_escopo", g.principal.conta_id)
+    agora = tempo.agora_utc()
+    try:
+        repo = repositorios.repo()
+        if repo is None:
+            raise RuntimeError("sem banco")
+        corpo = ler(repo, agora - timedelta(days=const_borda.RETENCAO_HISTORICO_DIAS))
+    except Exception as e:  # noqa: BLE001  (o banco nunca derruba a borda)
+        print(f"  [cuidador] banco indisponivel: {type(e).__name__}")
+        return jsonify({"status": "erro", "mensagem": "banco indisponivel"}), 503
+    return _resposta_cifrada({"schemaVersion": 1, "userId": user_id, "geradoEm": agora.isoformat(), **corpo})
+
+
+@app.route("/cuidador/<int:user_id>/estado", methods=["GET"])
+@exige("cuidador:ler")
+def estado_para_cuidador(user_id):
+    """Ultima comunicacao de cada dispositivo, episodio em aberto (ou null) e os alertas mais recentes."""
+    def ler(repo, desde):
+        h = repo.historico_do_usuario(user_id, desde, const_borda.ULTIMOS_ALERTAS_CUIDADOR)
+        abertos = [e for e in h["episodios"] if e["estado"] != "encerrado"]
+        return {"comunicacoes": [{"deviceId": c["device_id"], "fonte": c["fonte"], "instante": _iso(c["instante"])}
+                                 for c in repo.ultimas_comunicacoes(user_id, desde)],
+                "episodioAberto": _episodio_para_cuidador(abertos[0]) if abertos else None,
+                "alertas": [_alerta_para_cuidador(a) for a in h["alertas"]]}
+    return _leitura_do_cuidador(user_id, ler)
+
+
+@app.route("/cuidador/<int:user_id>/historico", methods=["GET"])
+@exige("cuidador:ler")
+def historico_para_cuidador(user_id):
+    """Alertas, confirmacoes e episodios dos ultimos RETENCAO_HISTORICO_DIAS dias, mais recentes primeiro. Leituras brutas
+    nao sao expostas."""
+    def ler(repo, desde):
+        h = repo.historico_do_usuario(user_id, desde, const_borda.HISTORICO_CUIDADOR_MAX)
+        return {"alertas": [_alerta_para_cuidador(a) for a in h["alertas"]],
+                "confirmacoes": [_confirmacao_para_cuidador(c) for c in h["confirmacoes"]],
+                "episodios": [_episodio_para_cuidador(e) for e in h["episodios"]]}
+    return _leitura_do_cuidador(user_id, ler)
+
+
 @app.route("/health", methods=["GET"])
 def health():
     """Disponibilidade da borda (`status`, como sempre) e a saude da analise: `analise.estado` e "degradado" quando a ultima
@@ -711,6 +779,6 @@ if __name__ == "__main__":
     print("Transporte: TLS (CA do projeto) + AES-256-GCM (chave compartilhada fixa, ver crypto_utils.py)")
     print("Certificado de cliente: exigido do app e do wokwi (este pelo bridge)")
 
-    # FLOW_BORDA_HOST (padrao 127.0.0.1): para aceitar outros dispositivos da rede, o IP do computador no .env
+    # FLOW_BORDA_HOST (padrao 0.0.0.0, todas as interfaces); 127.0.0.1 restringe a este computador
     app.run(host=const_borda.HOST, port=const_borda.PORT, threaded=True,   # threaded: uma thread por stream SSE
             ssl_context=_contexto_tls)

@@ -36,7 +36,7 @@ _bloqueado_ate: dict[str, float] = {}
 
 
 # Fonte que cada papel pode usar (authz.py reexporta). Mora aqui porque criar_conta valida e authz importa auth.
-FONTE_DO_PAPEL = {"idoso": "app", "dispositivo": "wokwi"}
+FONTE_DO_PAPEL = {"idoso": "app", "dispositivo": "wokwi", "cuidador": "app"}
 
 
 class AuthError(Exception):
@@ -151,9 +151,11 @@ def criar_conta(conta_id: str, papel: str, user_ids: list[int], fontes: list[str
     for uid in user_ids:
         if isinstance(uid, bool) or not isinstance(uid, int) or uid < 0:
             raise ValueError(f"user_id invalido (esperado inteiro nao negativo): {uid!r}")
-    if papel in ("idoso", "dispositivo"):
-        if len(user_ids) != 1:
-            raise ValueError("papeis 'idoso' e 'dispositivo' exigem exatamente um --user-id")
+    if papel in ("idoso", "dispositivo") and len(user_ids) != 1:
+        raise ValueError("papeis 'idoso' e 'dispositivo' exigem exatamente um --user-id")
+    if papel == "cuidador" and not user_ids:
+        raise ValueError("papel 'cuidador' exige ao menos um --user-id (as pessoas que ele acompanha)")
+    if papel in FONTE_DO_PAPEL:
         permitida = FONTE_DO_PAPEL[papel]
         if not fontes or set(fontes) != {permitida}:
             raise ValueError(f"papel '{papel}' exige fontes == ['{permitida}'], recebeu {fontes}")
@@ -264,7 +266,7 @@ def login(identificador: str, segredo: str, fonte: str | None, device_id: str | 
         _falhas.pop(identificador, None)
         # So depois de a credencial estar certa (quem erra a senha nao descobre o que a conta exige). Nenhum dos dois
         # conta como falha de senha.
-        if conta["papel"] in ("idoso", "dispositivo"):
+        if conta["papel"] in FONTE_DO_PAPEL:      # idoso, dispositivo e cuidador: o device_id vai no certificado de cliente
             if not device_id:
                 erro = DeviceIdObrigatorio()
                 erro.conta_existe = True

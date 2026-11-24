@@ -103,12 +103,19 @@ def _repassado(valor, ca: x509.Certificate, agora: datetime) -> x509.Certificate
     try:
         cert = x509.load_der_x509_certificate(base64.b64decode(valor, validate=True))
         cert.verify_directly_issued_by(ca)                    # emissor e assinatura
-        usos = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
-    except (ValueError, TypeError, binascii.Error, InvalidSignature, UnsupportedAlgorithm, x509.ExtensionNotFound):
+    except (ValueError, TypeError, binascii.Error, InvalidSignature, UnsupportedAlgorithm):
         return None
-    if ExtendedKeyUsageOID.CLIENT_AUTH not in usos or not cert.not_valid_before_utc <= agora <= cert.not_valid_after_utc:
+    if not _uso_de_cliente(cert) or not cert.not_valid_before_utc <= agora <= cert.not_valid_after_utc:
         return None
     return cert
+
+
+def _uso_de_cliente(cert: x509.Certificate) -> bool:
+    """`clientAuth` declarado. O TLS aceita no handshake um certificado SEM a extensao de uso, entao isto e conferido aqui."""
+    try:
+        return ExtendedKeyUsageOID.CLIENT_AUTH in cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    except x509.ExtensionNotFound:
+        return False
 
 
 def identidade_do_cliente(environ, agora: datetime) -> tuple[str, str] | None:
@@ -131,7 +138,7 @@ def identidade_do_cliente(environ, agora: datetime) -> tuple[str, str] | None:
     if _do_bridge(cert):
         valor = environ.get("HTTP_" + const_borda.CABECALHO_CERTIFICADO_REPASSADO.upper().replace("-", "_"))
         cert = _repassado(valor, ca, agora) if valor else None
-    elif cert.issuer != ca.subject:
+    elif cert.issuer != ca.subject or not _uso_de_cliente(cert):
         cert = None
     if cert is None:
         return None

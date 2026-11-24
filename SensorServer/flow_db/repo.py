@@ -66,6 +66,19 @@ class Repo(ABC):
         """Comandos de push dos episodios dados, em ordem de id (campos: id, episodio_id, message_id, tipo, criado_em,
         expira_em). Devolve os `message_id` que ligam a resposta do dispositivo ao episodio."""
 
+    @abstractmethod
+    def ultimas_comunicacoes(self, user_id: int, desde: datetime) -> list[dict]:
+        """A leitura mais recente de cada dispositivo do `user_id` com instante_ingestao >= desde: so device_id, fonte e
+        instante (o de ingestao), nunca o payload (a localizacao do app vai nele). Mais recente primeiro."""
+
+    @abstractmethod
+    def historico_do_usuario(self, user_id: int, desde: datetime, limite: int) -> dict[str, list[dict]]:
+        """{"alertas", "confirmacoes", "episodios"} do `user_id`, cada lista com ate `limite` itens, mais recentes primeiro:
+        alertas e confirmacoes com instante >= desde; episodios abertos (de qualquer idade) ou atualizados desde `desde`.
+        So as colunas de resumo: alertas (instante, device_id, tipo, mensagem, episodio_id), confirmacoes (instante, tipo,
+        episodio_id, dados) e episodios (episodio_id, device_id, tipo, estado, aberto_em, atualizado_em, encerrado_em,
+        motivo_encerramento)."""
+
     # ---- contas e sessoes de login ----
     @abstractmethod
     def criar_conta(self, conta: dict) -> bool:

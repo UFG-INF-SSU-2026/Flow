@@ -220,6 +220,20 @@ class TestIdentidadeDoCliente:
     def test_sem_certificado_devolve_none(self, ca_dispositivos, agora, environ):
         assert emissao.identidade_do_cliente(environ, agora) is None
 
+    def test_certificado_sem_uso_de_cliente_devolve_none(self, ca_dispositivos, agora):
+        """O handshake aceita certificado sem a extensao de uso; a borda confere o clientAuth."""
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+        ca = ca_dispositivos.certificado()
+        nome = x509.Name([x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, CONTA), x509.NameAttribute(NameOID.COMMON_NAME, DEVICE)])
+        cert = (x509.CertificateBuilder().subject_name(nome).issuer_name(ca.subject)
+                .public_key(ec.generate_private_key(ec.SECP256R1()).public_key()).serial_number(1)
+                .not_valid_before(agora).not_valid_after(agora + timedelta(days=1))
+                .sign(serialization.load_pem_private_key(ca_dispositivos.chave.read_bytes(), None), hashes.SHA256()))
+        der = cert.public_bytes(serialization.Encoding.DER)
+        assert emissao.identidade_do_cliente({"werkzeug.socket": _SocketFalso(der)}, agora) is None
+
     def test_certificado_de_outro_emissor_devolve_none(self, ca_dispositivos, agora, tmp_path, monkeypatch):
         """Na conexao direta vale so o certificado emitido pela CA de dispositivos (a raiz tambem e aceita no TLS, pelo bridge)."""
         from _apoio import gerador_de_certificado

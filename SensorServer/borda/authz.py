@@ -10,7 +10,7 @@ from borda import auth, emissao, tempo
 POLITICA: dict[str, set[str]] = {
     "idoso":       {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
     "dispositivo": {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
-    "cuidador":    set(),                      # reservado (futuro)
+    "cuidador":    {"cuidador:ler", "certificado:emitir"},   # so le estado e historico dos user_ids do token
     "admin":       {"dados:ler", "estado:ler"},
 }
 FONTE_DO_PAPEL = auth.FONTE_DO_PAPEL     # definida em auth.py (criar_conta tambem a usa)

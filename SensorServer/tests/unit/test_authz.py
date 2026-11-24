@@ -8,11 +8,11 @@ from borda import auth
 from borda import authz
 from borda import const as const_borda
 from flow_db import repositorios
-PERMISSOES = ["dados:enviar", "eventos:enviar", "push:receber", "dados:ler", "estado:ler", "certificado:emitir"]
+PERMISSOES = ["dados:enviar", "eventos:enviar", "push:receber", "dados:ler", "estado:ler", "certificado:emitir", "cuidador:ler"]
 ESPERADO = {
     "idoso": {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
     "dispositivo": {"dados:enviar", "eventos:enviar", "push:receber", "certificado:emitir"},
-    "cuidador": set(),
+    "cuidador": {"cuidador:ler", "certificado:emitir"},
     "admin": {"dados:ler", "estado:ler"},
 }
 
@@ -26,11 +26,8 @@ class TestPolitica:
     def test_papel_x_permissao(self, papel, permissao):
         assert (permissao in authz.POLITICA[papel]) is (permissao in ESPERADO[papel])
 
-    def test_cuidador_nao_tem_nada(self):
-        assert authz.POLITICA["cuidador"] == set()
-
     def test_fonte_do_papel(self):
-        assert authz.FONTE_DO_PAPEL == {"idoso": "app", "dispositivo": "wokwi"}
+        assert authz.FONTE_DO_PAPEL == {"idoso": "app", "dispositivo": "wokwi", "cuidador": "app"}
 
 
 class TestEscopo:

@@ -74,8 +74,8 @@ class ClienteTls(ClienteReal):
     o cabecalho com o certificado repassado."""
 
     def __init__(self, base, ca, cert=None, extras=None):
-        super().__init__(base)
-        self.ca, self.cert, self.extras = ca, cert, extras or {}
+        super().__init__(base, ca)
+        self.cert, self.extras = cert, extras or {}
 
     def _enviar(self, metodo, rota, corpo, headers):
         return requests.request(metodo, self.base + rota, json=corpo, headers={**headers, **self.extras}, verify=self.ca,
