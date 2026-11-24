@@ -20,3 +20,9 @@ SensorApp/app/src/main/res/raw/flow_cert.pem
 # Copia da CA para o firmware, gerada por instalacao (so o certificado publico)
 sketch/ca_flow.h
 *.key
+
+
+# Android: configuracao de cada maquina (caminho do SDK) e saidas do build
+**/local.properties
+SensorApp/build/
+*.iml

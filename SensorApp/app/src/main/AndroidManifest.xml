@@ -53,6 +53,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Tela de leitura da conta de cuidador: so o app a abre. Sem sensores, localizacao nem servico. -->
+        <activity
+            android:name=".CuidadorActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+
         <!-- Mantem o canal de push (SSE) com o app em segundo plano; so o servidor fala com o aparelho (sem FCM). -->
         <service
             android:name=".MonitorService"
