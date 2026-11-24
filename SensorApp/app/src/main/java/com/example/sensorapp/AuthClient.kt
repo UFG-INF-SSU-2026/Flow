@@ -16,18 +16,22 @@ import org.json.JSONObject
  * - O corpo de /auth/login e /auth/refresh vai CIFRADO (mesmo envelope AES-GCM do resto do sistema):
  *   a senha nunca trafega em claro.
  * - A senha NAO e guardada no aparelho; so os tokens (SharedPreferences privado).
- * - O papel e o user_id vem do servidor. Este app so aceita o papel "idoso".
+ * - O papel e os user_ids vem do servidor. Este app aceita os papeis "idoso" e "cuidador".
  *
  * login() e renovar() sao BLOQUEANTES: chame fora da thread principal.
- * As chamadas saem pelo cliente unico [FlowHttp]; o interceptor e o autenticador abaixo ignoram rotas de autenticacao (/auth/...)
- * (que nao leva Authorization nem pode disparar renovacao dentro da propria renovacao).
+ * As rotas /auth/... saem por [FlowHttp.semCertificado]: nenhuma exige certificado de cliente, e um certificado guardado
+ * e recusado pelo servidor nao pode impedir o login nem a renovacao do token. O interceptor e o autenticador abaixo
+ * ignoram essas rotas (que nao levam Authorization nem podem disparar renovacao dentro da propria renovacao).
  */
 class AuthClient(
     private val prefs: SharedPreferences,
     private val baseUrl: () -> String,
     private val deviceId: String
 ) {
-    data class Sessao(val accessToken: String, val refreshToken: String, val papel: String, val userId: Int)
+    /** [userIds]: as pessoas da conta (o idoso tem uma; o cuidador, uma ou mais). [userId] e a primeira. */
+    data class Sessao(val accessToken: String, val refreshToken: String, val papel: String, val userIds: List<Int>) {
+        val userId: Int get() = userIds.first()
+    }
     class LoginResult(val ok: Boolean, val mensagem: String)
 
     private val jsonType = "application/json; charset=utf-8".toMediaType()
@@ -46,8 +50,8 @@ class AuthClient(
         val a = prefs.getString("auth_access", null) ?: return null
         val r = prefs.getString("auth_refresh", null) ?: return null
         val p = prefs.getString("auth_papel", null) ?: return null
-        val u = prefs.getInt("auth_user_id", -1)
-        return if (u >= 0) Sessao(a, r, p, u) else null
+        val ids = (prefs.getString("auth_user_ids", null) ?: return null).split(",").map { it.toIntOrNull() ?: return null }
+        return if (ids.all { it >= 0 }) Sessao(a, r, p, ids) else null
     }
 
     private fun salvar(s: Sessao) {
@@ -55,13 +59,13 @@ class AuthClient(
             .putString("auth_access", s.accessToken)
             .putString("auth_refresh", s.refreshToken)
             .putString("auth_papel", s.papel)
-            .putInt("auth_user_id", s.userId)
+            .putString("auth_user_ids", s.userIds.joinToString(","))
             .apply()
         sessao = s
     }
 
     fun sair() {
-        prefs.edit().remove("auth_access").remove("auth_refresh").remove("auth_papel").remove("auth_user_id").apply()
+        prefs.edit().remove("auth_access").remove("auth_refresh").remove("auth_papel").remove("auth_user_ids").apply()
         sessao = null
     }
 
@@ -74,7 +78,7 @@ class AuthClient(
             .url(baseUrl() + path)
             .post(envelope.toString().toRequestBody(jsonType))
             .build()
-        FlowHttp.cliente.newCall(req).execute().use { resp ->
+        FlowHttp.semCertificado.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return Pair(resp.code, null)
             val e = JSONObject(resp.body?.string().orEmpty())
             val claro = CryptoUtils.decrypt(e.getString("nonce"), e.getString("ciphertext"))
@@ -94,15 +98,18 @@ class AuthClient(
             if (codigo == 429) return LoginResult(false, "Muitas tentativas. Aguarde alguns minutos.")
             if (codigo >= 500) return LoginResult(false, "Servidor indisponível. Tente de novo em instantes.")
             if (resp == null) return LoginResult(false, "Usuário ou senha inválidos.")
-            if (resp.getString("papel") != "idoso") {
+            val papel = resp.getString("papel")
+            if (papel != "idoso" && papel != "cuidador") {
                 return LoginResult(false, "Tipo de conta ainda não suportado neste app.")
             }
+            val ids = resp.getJSONArray("user_ids").let { arr -> (0 until arr.length()).map { arr.getInt(it) } }
+            if (ids.isEmpty()) return LoginResult(false, "Conta sem pessoa vinculada.")
             salvar(
                 Sessao(
                     accessToken = resp.getString("access_token"),
                     refreshToken = resp.getString("refresh_token"),
-                    papel = resp.getString("papel"),
-                    userId = resp.getJSONArray("user_ids").getInt(0)
+                    papel = papel,
+                    userIds = ids
                 )
             )
             return LoginResult(true, "Login realizado.")
@@ -134,7 +141,7 @@ class AuthClient(
                 salvar(
                     Sessao(
                         resp.getString("access_token"), resp.getString("refresh_token"),
-                        atual.papel, atual.userId
+                        atual.papel, atual.userIds
                     )
                 )
                 true

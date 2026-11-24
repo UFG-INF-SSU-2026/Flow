@@ -3,6 +3,7 @@ package com.example.sensorapp
 import android.Manifest
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -186,8 +187,21 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
+    private val aoExpirarSessao: () -> Unit = {
+        runOnUiThread {
+            if (isRunning) pararEnvio()
+            atualizarStatus("Sessão expirada: faça login em Configurações", false)
+            atualizarTextoServidor()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (auth.sessao?.papel == "cuidador") {      // o cuidador so le: nada de sensores, localizacao nem servico
+            if (app.emissor.precisaEmitir()) app.emissor.renovarEmSegundoPlano()
+            abrirCuidador()
+            return
+        }
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -205,13 +219,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         serverPort = prefs.getString("server_port", DEFAULT_SERVER_PORT) ?: DEFAULT_SERVER_PORT
 
         // Marco 3: sessao expirada, falha de retorno e alerta de confirmacao (o canal de push vive no MonitorService)
-        app.aoSessaoExpirada = {
-            runOnUiThread {
-                if (isRunning) pararEnvio()
-                atualizarStatus("Sessão expirada: faça login em Configurações", false)
-                atualizarTextoServidor()
-            }
-        }
+        app.aoSessaoExpirada = aoExpirarSessao
         app.eventos.aoFalhar = { texto -> atualizarStatus(texto, false) }
         alerta = AlertaController(this, binding.painelAlerta, binding.tvAlerta, binding.btnEstouBem) {
             // Sem episodio (aviso de teste), o botao so encerra o aviso; nada e enviado ao servidor
@@ -303,6 +311,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                         runOnUiThread {
                             atualizarTextoServidor()
                             Toast.makeText(this, r.mensagem, Toast.LENGTH_LONG).show()
+                            if (r.ok && auth.sessao?.papel == "cuidador") abrirCuidador()
                         }
                     }.start()
                 } else {
@@ -415,9 +424,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onDestroy() {
         if (isRunning) pararEnvio()
         if (MonitorService.ouvinte === ouvinteServico) MonitorService.ouvinte = null
-        app.aoSessaoExpirada = null
+        if (app.aoSessaoExpirada === aoExpirarSessao) app.aoSessaoExpirada = null     // a tela do cuidador pode ter registrado o seu
         app.eventos.aoFalhar = null
         super.onDestroy()
+    }
+
+    /** Conta de cuidador: abre a tela de leitura e fecha esta (a tela de coleta e do idoso). */
+    private fun abrirCuidador() {
+        startActivity(Intent(this, CuidadorActivity::class.java))
+        finish()
     }
 
     // ---------------------------------------------------------------------------------------
@@ -575,7 +590,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         atualizarIndicadorLocalizacao()
 
         // Falta certificado de cliente ou restam menos da metade da validade: emite em segundo plano (sem travar o envio)
-        if (app.emissor.precisaEmitir()) app.emissor.renovarEmSegundoPlano(descartar = false)
+        if (app.emissor.precisaEmitir()) app.emissor.renovarEmSegundoPlano()
 
         // Cifra o JSON inteiro (Marco 2) antes de enviar. O servidor decifra
         // o envelope e recupera o payload original (ver CryptoUtils.kt).
