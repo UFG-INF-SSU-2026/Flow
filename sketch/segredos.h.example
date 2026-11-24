@@ -2,10 +2,15 @@
 // Copie este arquivo para "segredos.h" (na mesma pasta) e preencha. O "segredos.h" NAO vai para o Git.
 //
 // Conta do tipo "dispositivo" criada no servidor para ESTE firmware (uma por dispositivo, fonte "wokwi"). O firmware e o dono
-// do segredo: ele o entrega ao bridge no login (por HTTPS) e o bridge o repassa ao servidor sem guardar. Sem aspas nem barra
-// invertida.
+// do segredo: faz o proprio login no servidor (pelo bridge, sempre por HTTPS) e o bridge so repassa, sem guardar nada.
+// (O login e montado com JSON de verdade: aspas e barras no segredo sao escapadas.)
 #define FLOW_IDENTIFICADOR "bridge1"
 #define FLOW_SEGREDO       "troque-pela-senha-da-conta"
+
+// Chave AES-256 do envelope (a MESMA do servidor e do app): copie o valor de SHARED_KEY_B64 em
+// SensorServer/borda/crypto_utils.py. Em base64; precisa decodificar para 32 bytes (senao o firmware avisa na Serial e nao envia).
+// Chave fixa e compartilhada: limitacao assumida da arquitetura (ver o proprio crypto_utils.py).
+#define FLOW_CHAVE_AES_B64 "cole-aqui-o-valor-de-SHARED_KEY_B64"
 
 // URL do bridge. Precisa ser https:// (uma URL http:// nao compila). host.wokwi.internal e o PC visto de dentro da simulacao
 // (gateway de rede do Wokwi; ver sketch/wokwi.toml) e precisa constar no certificado da API do bridge:
@@ -13,10 +18,5 @@
 // Se omitida, vale este mesmo padrao.
 #define FLOW_BRIDGE_URL "https://host.wokwi.internal:5443"
 
-// Chave PUBLICA da CA do projeto (SensorServer/certs/ca.crt): e o unico certificado em que o firmware confia. Cole o conteudo
-// de ca.crt (nunca o de ca.key).
-static const char FLOW_CA_PEM[] = R"PEM(
------BEGIN CERTIFICATE-----
-...cole aqui o conteudo de ca.crt...
------END CERTIFICATE-----
-)PEM";
+// A CA do projeto (a unica confianca do firmware) NAO se cola mais aqui: o script gerar_certificado.py gera sketch/ca_flow.h
+// (so o certificado publico) a cada vez que a CA nasce ou muda. Rode o script antes de compilar.

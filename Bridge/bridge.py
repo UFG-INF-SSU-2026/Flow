@@ -1,13 +1,13 @@
 """
 Bridge: porta de entrada HTTPS dos dispositivos simples (ESP32, Arduino, Wokwi, simuladores) para o servidor.
 
-O bridge nao conhece Wokwi nem placa: recebe eventos pela API local (api.py), repassa o login do dispositivo ao servidor,
-carimba o que o dispositivo nao conhece e devolve os comandos do servidor, ja traduzidos. O ESP32 do Wokwi fala HTTPS direto
-com esta API (sketch/transporte_wifi.h); nao ha serial. Dispositivos simulados em software usam adaptadores/software.py.
+O bridge e um repassador FINO: o ESP32 do Wokwi fala HTTPS direto com esta API (sketch/transporte_wifi.h), faz o proprio login,
+cifra o que envia e guarda os proprios tokens; o bridge so encaminha as rotas permitidas (api.py) e, nas rotas protegidas, exige
+o certificado de cliente que o dispositivo obteve da borda (conferido contra a CA de dispositivos). Nao ha serial nem estado.
 
 Configuracao: Bridge/.env (modelo: .env.example) ou variaveis de ambiente (ver config.py).
-Pre-requisitos: servidor no ar, conta de papel 'dispositivo' (fonte 'wokwi') criada por dispositivo, e os certificados
-gerados em SensorServer/ (python scripts/gerar_certificado.py --nome bridge).
+Pre-requisitos: servidor no ar e os certificados gerados em SensorServer/ (python scripts/gerar_certificado.py --nome bridge
+--dns host.wokwi.internal; cria tambem a CA de dispositivos, cujo certificado publico o bridge precisa ler).
 
 Uso:
   pip install -r requirements.txt
@@ -24,8 +24,10 @@ from cheroot.ssl.builtin import BuiltinSSLAdapter
 from cheroot.wsgi import Server
 
 import config
-from api import criar_app
-from sessao import log
+from cryptography import x509
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+from api import criar_app, log
 
 DOTENV_CARREGADO = config.carregar_dotenv(config.DOTENV_ARQUIVO)    # antes de ler as variaveis
 
@@ -34,7 +36,7 @@ DOTENV_CARREGADO = config.carregar_dotenv(config.DOTENV_ARQUIVO)    # antes de l
 # simulado e para o laco do firmware). Ociosa por mais que isso, a conexao e fechada e a chamada seguinte paga um handshake.
 CONEXAO_OCIOSA_S = 10
 
-# O long-poll de /comandos e as chamadas em andamento seguram uma thread cada; conexao ociosa nao segura.
+# O push (SSE) e as chamadas em andamento seguram uma thread cada; conexao ociosa nao segura.
 THREADS_MINIMAS = 16
 THREADS_POR_DISPOSITIVO = 2
 THREADS_FOLGA = 4
@@ -52,10 +54,14 @@ class AdaptadorSoTls(BuiltinSSLAdapter):
 
 
 def contexto_tls(cfg: config.Config) -> ssl.SSLContext:
-    """TLS 1.2 ou superior, com o certificado da API emitido pela CA do projeto."""
+    """TLS 1.2 ou superior, com o certificado da API emitido pela CA do projeto. Certificado de cliente OPCIONAL, conferido SO
+    contra a CA de dispositivos: sem certificado passa (login e emissao); de outra CA (inclusive a raiz), vencido ou sem uso
+    clientAuth derruba a conexao no handshake. Quem decide por rota e a api.py. Nunca CERT_NONE."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cfg.api_cert, cfg.api_chave)
+    ctx.verify_mode = ssl.CERT_OPTIONAL
+    ctx.load_verify_locations(cafile=cfg.ca_dispositivos)
     return ctx
 
 
@@ -118,10 +124,33 @@ def verificar(cfg: config.Config) -> str | None:
     if not cfg.servidor.lower().startswith("https://"):
         return f"FLOW_SERVIDOR precisa comecar com https:// (toda ponta fala TLS); recebido: {cfg.servidor}"
     for caminho, o_que in ((cfg.ca, "certificado da CA (FLOW_TLS_CA)"), (cfg.api_cert, "certificado da API (FLOW_BRIDGE_API_CERT)"),
-                           (cfg.api_chave, "chave da API (FLOW_BRIDGE_API_KEY)")):
+                           (cfg.api_chave, "chave da API (FLOW_BRIDGE_API_KEY)"),
+                           (cfg.ca_dispositivos, "certificado da CA de dispositivos (FLOW_CA_DISPOSITIVOS_CERT)")):
         if not Path(caminho).is_file():
             return (f"{o_que} nao encontrado: {caminho}. Gere em SensorServer/ com "
-                    f"'python scripts/gerar_certificado.py --nome bridge'.")
+                    f"'python scripts/gerar_certificado.py --nome bridge --dns host.wokwi.internal'.")
+    return _problema_do_certificado_proprio(cfg)
+
+
+NOME_NA_BORDA = "bridge"            # o CN que a borda exige do bridge (SensorServer/borda/const.py, NOME_CERTIFICADO_BRIDGE)
+
+
+def _problema_do_certificado_proprio(cfg: config.Config) -> str | None:
+    """O certificado da API e tambem a identidade do bridge na borda: precisa ter clientAuth e CN `bridge`. Um bridge.crt antigo
+    (so serverAuth) sobe sem erro mas e recusado no handshake da borda, com uma mensagem obscura; melhor falhar aqui, dizendo o remedio."""
+    remedio = "Reemita com: python scripts/gerar_certificado.py --forcar --nome bridge --dns host.wokwi.internal (em SensorServer/)."
+    try:
+        cert = x509.load_pem_x509_certificate(Path(cfg.api_cert).read_bytes())
+        nomes = [a.value for a in cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)]
+        usos = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    except x509.ExtensionNotFound:
+        return f"o certificado da API ({cfg.api_cert}) nao declara usos (precisa de serverAuth e clientAuth). {remedio}"
+    except (ValueError, OSError):
+        return f"o certificado da API ({cfg.api_cert}) esta ilegivel. {remedio}"
+    if ExtendedKeyUsageOID.CLIENT_AUTH not in usos or ExtendedKeyUsageOID.SERVER_AUTH not in usos:
+        return f"o certificado da API ({cfg.api_cert}) precisa de serverAuth e clientAuth: o bridge o usa tambem para se identificar na borda. {remedio}"
+    if nomes != [NOME_NA_BORDA]:
+        return f"o certificado da API ({cfg.api_cert}) precisa ter CN={NOME_NA_BORDA} (a borda so aceita o bridge com esse nome). {remedio}"
     return None
 
 
@@ -139,13 +168,13 @@ def main() -> None:
         sys.exit(motivo)
     log(f"Configuracao (.env): {config.DOTENV_ARQUIVO} "
         + ("carregado" if DOTENV_CARREGADO else "nao encontrado; usando so as variaveis de ambiente"))
-    log(f"Servidor: {cfg.servidor} | API: https://{cfg.host}:{cfg.porta} | limite: {cfg.max_simulacoes} dispositivos")
+    log(f"Servidor: {cfg.servidor} | API: https://{cfg.host}:{cfg.porta} | dispositivos esperados: {cfg.max_simulacoes}")
     if not _so_loopback(cfg.host):
         log(f"AVISO: a API escuta fora do loopback ({cfg.host}); o certificado da API precisa ter esse endereco "
             f"(gerar_certificado.py --nome bridge --ip ...), e os dispositivos da rede so devem usar HTTPS.")
     servidor = criar_servidor(cfg, acesso_logado(criar_app(cfg)))
     servidor.prepare()                                    # bind: erro de porta em uso chega aqui, com a mensagem do sistema
-    log("Pronto. Os dispositivos (firmware no Wokwi, adaptador em software) fazem login em POST /v1/login, sempre por HTTPS.")
+    log("Pronto. O firmware faz login em POST /auth/login e, com o certificado emitido, usa as rotas protegidas; sempre HTTPS.")
     try:
         servidor.serve()
     finally:
