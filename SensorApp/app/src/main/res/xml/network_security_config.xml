@@ -1,15 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    TLS: o app so fala HTTPS e so confia na CA do projeto (res/raw/flow_cert.pem, copia do SensorServer/certs/ca.crt gerada
-    por "python scripts/gerar_certificado.py" ANTES de compilar). Nao confia nas autoridades do sistema nem do usuario, nem
-    aceita HTTP em texto claro, e a verificacao do nome do servidor continua ligada. O IP do servidor precisa estar nos
-    nomes do certificado dele; se mudar, reemita com as opcoes forcar e ip do script: a CA nao muda, entao o app nao precisa ser recompilado.
-    So a recriacao da CA (opcao forcar-ca do script) exige recompilar.
+    TLS: o app so fala HTTPS e nao aceita HTTP em texto claro. A confianca NAO vem daqui: o cliente HTTP do app (FlowHttp)
+    confia so na CA do projeto, importada pela pessoa em Configuracoes (ou, se houver, a copia res/raw/flow_cert.pem), e
+    nao nas autoridades do sistema nem do usuario. A verificacao do nome do servidor continua ligada: o IP do servidor
+    precisa estar nos nomes do certificado dele. Reemitir o certificado do servidor (a CA nao muda) nao exige novo
+    APK nem nova importacao; uma CA nova exige importar de novo o ca.crt.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false">
-        <trust-anchors>
-            <certificates src="@raw/flow_cert" />
-        </trust-anchors>
-    </base-config>
+    <base-config cleartextTrafficPermitted="false" />
 </network-security-config>

@@ -30,11 +30,14 @@ class FlowApp : Application() {
         }
     }
 
+    /** Certificado de cliente do app (emitido pela borda depois do login). */
+    val emissor: EmissorCertificado by lazy { EmissorCertificado(this, prefs, auth, { baseUrl() }, deviceId) }
+
     val eventos: EventosRetorno by lazy { EventosRetorno(auth, { baseUrl() }, deviceId) }
 
     val localizacao: Localizacao by lazy { Localizacao(this) }
 
-    /** URL base do servidor (IP e porta vem das preferencias). So HTTPS (res/xml/network_security_config.xml). */
+    /** URL base do servidor (IP e porta vem das preferencias). So HTTPS (sem texto claro: res/xml/network_security_config.xml; a confianca e a CA de CaProjeto). */
     fun baseUrl(): String {
         val ip = prefs.getString("server_ip", null) ?: "localhost"
         val porta = prefs.getString("server_port", null) ?: "5000"
@@ -44,7 +47,7 @@ class FlowApp : Application() {
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences("sensor_app_prefs", MODE_PRIVATE)
-        FlowHttp.iniciar(auth)
+        FlowHttp.iniciar(auth, this) { emissor }
         Notificacoes.criarCanais(this)
     }
 }

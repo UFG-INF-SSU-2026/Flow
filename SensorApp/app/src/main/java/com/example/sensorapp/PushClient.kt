@@ -27,9 +27,6 @@ class PushClient(
 ) {
     private val main = Handler(Looper.getMainLooper())
 
-    // Variante SSE do cliente unico (readTimeout > keepalive do servidor, sem prazo total de chamada).
-    private val client = FlowHttp.sse()
-
     private var eventSource: EventSource? = null
 
     @Volatile private var ativo = false
@@ -68,9 +65,11 @@ class PushClient(
             }
         }
         estado("conectando")
+        // A variante SSE e pedida a cada conexao: depois de emitir o certificado de cliente, o cliente muda e a conexao
+        // nova ja o apresenta (readTimeout > keepalive do servidor, sem prazo total de chamada).
         val b = Request.Builder().url(urlPush()).header("Accept", "text/event-stream")
         if (lastEventId > 0) b.header("Last-Event-ID", lastEventId.toString())
-        eventSource = EventSources.createFactory(client).newEventSource(b.build(), listener)
+        eventSource = EventSources.createFactory(FlowHttp.sse()).newEventSource(b.build(), listener)
     }
 
     private fun reconectar(atrasoMs: Long) {
@@ -133,7 +132,8 @@ class PushClient(
                     // fora do ar, por exemplo): falha transitoria, segue para o backoff abaixo e reconecta sozinho.
                     if (auth.sessao == null) { ativo = false; estado("sessão expirada"); return }
                 }
-                403 -> { ativo = false; estado("sem permissão"); return }     // nao adianta insistir
+                // 403 de certificado_incompativel e transitorio: o app emite outro certificado e a reconexao sai com ele
+                403 -> if (response.certificadoRecusado() == null) { ativo = false; estado("sem permissão"); return }
             }
             val atraso = backoffMs
             backoffMs = minOf(backoffMs * 2, 30_000L)

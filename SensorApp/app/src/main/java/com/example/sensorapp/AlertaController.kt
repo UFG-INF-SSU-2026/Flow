@@ -14,8 +14,9 @@ import android.widget.Button
 import android.widget.TextView
 
 /**
- * Aviso do pedido de confirmacao de queda DENTRO da tela (Marco 3): painel, botao "Estou bem", contagem regressiva e
- * alarme (stream de ALARME).
+ * Aviso do pedido de confirmacao de queda DENTRO da tela (Marco 3): painel, botao "Estou bem", contagem regressiva,
+ * alarme (stream de ALARME) e os atuadores (estado visual vermelho, vibracao, lanterna e fala), todos ligados e
+ * desligados junto com o alarme.
  *
  * Quem decide e o [MonitorService] (dono do episodio: push.ack, resposta e prazo); aqui so ha a apresentacao. [exibir]
  * recebe o prazo absoluto (base de SystemClock.elapsedRealtime) e [esconder] silencia tudo. O botao nao envia nada:
@@ -37,6 +38,18 @@ class AlertaController(
     private var volumeOriginal = -1
     private var prazoExibido = -1L
 
+    // Ordem de acionamento: visual, vibracao, lanterna, fala. A falha de um nao impede os demais nem o alarme.
+    private val atuadores = Atuadores(
+        listOf(
+            AtuadorVisual(painel, tvAlerta),
+            AtuadorVibracao(context),
+            AtuadorLanterna(context),
+            AtuadorFala(context, PERGUNTA)
+        )
+    ) { atuador, e ->
+        Log.w("AlertaController", "atuador ${atuador.javaClass.simpleName} falhou: ${e.javaClass.simpleName}")
+    }
+
     init {
         btnEstouBem.setOnClickListener { aoTocarEstouBem() }
     }
@@ -46,6 +59,7 @@ class AlertaController(
         timer?.cancel()
         timer = null
         silenciar()
+        atuadores.desligar()
         painel.visibility = View.GONE
         prazoExibido = -1L
     }
@@ -59,17 +73,18 @@ class AlertaController(
 
             prazoExibido = prazoElapsedMs
             painel.visibility = View.VISIBLE
-            tvAlerta.text = "Você está bem?"
+            tvAlerta.text = PERGUNTA
             tocarAlarme(restanteMs)
             timer = object : CountDownTimer(restanteMs, 250) {
                 override fun onTick(restanteMs: Long) {
-                    tvAlerta.text = "Você está bem?\nToque no botão (${(restanteMs + 999) / 1000}s)"
+                    tvAlerta.text = "$PERGUNTA\nToque no botão (${(restanteMs + 999) / 1000}s)"
                 }
 
                 override fun onFinish() {
                     esconder()      // o servico envia o SEM_RESPOSTA no prazo
                 }
             }.start()
+            atuadores.ligar()       // depois do painel, do alarme e do timer: nenhum atuador atrasa nem impede o aviso
         } catch (e: Exception) {
             Log.w("AlertaController", "alerta nao exibido: ${e.javaClass.simpleName}")
         }
@@ -123,5 +138,10 @@ class AlertaController(
             try { audio.setStreamVolume(AudioManager.STREAM_ALARM, volumeOriginal, 0) } catch (e: Exception) { }
             volumeOriginal = -1
         }
+    }
+
+    private companion object {
+        /** A pergunta do painel e da fala: definida uma vez. */
+        const val PERGUNTA = "Você está bem?"
     }
 }

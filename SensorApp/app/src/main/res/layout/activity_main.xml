@@ -60,6 +60,14 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Configurações"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Aciona o aviso por 10 s sem servidor: mostra o painel vermelho, o alarme, a vibracao, a lanterna e a fala -->
+    <Button
+        android:id="@+id/btnTestarAlerta"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Testar alerta"
         android:layout_marginBottom="24dp" />
 
     <TextView
