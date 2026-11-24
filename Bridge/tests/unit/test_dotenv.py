@@ -56,7 +56,8 @@ def test_flow_sem_dotenv_desliga_a_leitura(tmp_path, monkeypatch):
 
 
 def test_ler_config_usa_padroes_e_valida_numeros(monkeypatch):
-    for v in ("FLOW_SERVIDOR", "FLOW_BRIDGE_HOST", "FLOW_BRIDGE_PORT", "FLOW_BRIDGE_MAX_SIMULACOES", "FLOW_TLS_CA"):
+    for v in ("FLOW_SERVIDOR", "FLOW_BRIDGE_HOST", "FLOW_BRIDGE_PORT", "FLOW_BRIDGE_MAX_SIMULACOES", "FLOW_TLS_CA",
+              "FLOW_CA_DISPOSITIVOS_CERT"):
         monkeypatch.delenv(v, raising=False)
     cfg = config.ler_config()
     assert (cfg.servidor, cfg.host, cfg.porta, cfg.max_simulacoes) == ("https://127.0.0.1:5000", "127.0.0.1", 5443, 8)
@@ -64,3 +65,9 @@ def test_ler_config_usa_padroes_e_valida_numeros(monkeypatch):
     monkeypatch.setenv("FLOW_BRIDGE_PORT", "abc")
     with pytest.raises(SystemExit):
         config.ler_config()
+    assert cfg.ca_dispositivos.endswith("ca-dispositivos.crt")
+
+
+def test_ca_de_dispositivos_vem_da_variavel_e_caminho_relativo_vale_a_partir_do_bridge(monkeypatch):
+    monkeypatch.setenv("FLOW_CA_DISPOSITIVOS_CERT", "x/outra.crt")
+    assert config.ler_config().ca_dispositivos == str(config.PASTA / "x" / "outra.crt")

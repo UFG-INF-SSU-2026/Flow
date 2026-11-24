@@ -26,3 +26,6 @@ sketch/ca_flow.h
 **/local.properties
 SensorApp/build/
 *.iml
+# Artefatos do teste do firmware no PC (sketch/host_test/README.md)
+sketch/host_test/harness
+sketch/host_test/sketch_host.cpp

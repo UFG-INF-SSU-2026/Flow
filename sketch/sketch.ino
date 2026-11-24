@@ -14,8 +14,10 @@
   Leitura baseada no exemplo oficial do Wokwi (Koepel, 2021)
   Wire.begin() sem pinos → usa padrão ESP32: SDA=GPIO21, SCL=GPIO22
 
-  Comunicação: somente HTTPS (TLS 1.2+) com a API do bridge, pelo WiFi (transporte_wifi.h). A Serial serve só a mensagens
-  de diagnóstico para quem olha o monitor do simulador; nenhum evento, comando nem credencial passa por ela.
+  Comunicação: somente HTTPS (TLS 1.2+) com a API do bridge, pelo WiFi (transporte_wifi.h). O firmware é dono do protocolo:
+  faz o próprio login (sessao.h), gera a chave e pede o certificado de cliente (mTLS), cifra cada mensagem (envelope.h) e recebe
+  o push do servidor por SSE (push.h). O bridge só repassa. A Serial serve só a mensagens de diagnóstico para quem olha o
+  monitor do simulador; nenhum evento, push, token, chave nem credencial passa por ela.
 
   Limitações:
   - MPU6050 simulado não replica ruído real nem deriva térmica.
@@ -26,8 +28,12 @@
 */
 
 #include <Wire.h>
-#include "segredos.h"          // FLOW_IDENTIFICADOR, FLOW_SEGREDO e FLOW_CA_PEM (nao vai para o Git; modelo: segredos.h.example)
+#include "segredos.h"          // FLOW_IDENTIFICADOR, FLOW_SEGREDO e FLOW_CHAVE_AES_B64 (nao vai para o Git; modelo: segredos.h.example)
+#include "envelope.h"          // AES-256-GCM no formato do servidor
 #include "transporte_wifi.h"   // unico transporte: HTTPS direto com o bridge (WiFi do Wokwi); nao ha serial para a rede
+#include "certificado.h"       // chave EC P-256 e CSR gerados no dispositivo
+#include "sessao.h"            // login, tokens, emissao do certificado e envio cifrado
+#include "push.h"              // push do servidor por SSE
 
 // ---- MPU6050 ----
 const int MPU_ADDR = 0x68;
@@ -104,6 +110,8 @@ bool pendingBuzzerConfirm = false;   // clique em "Estou bem" enquanto o buzzer 
 
 // ---- Buzzer / comandos recebidos do bridge (Marco 3) ----
 bool buzzerAtivo = false;
+int mpuErro = 0;                      // != 0: o MPU nao respondeu no setup (codigo do Wire)
+unsigned long tProximoErro = 0;
 
 // LEDs exclusivos: AMARELO = suspeita (a maquina local esta fora de NORMAL), VERMELHO = certeza (o servidor pediu a confirmacao
 // e o buzzer toca). Com o vermelho aceso o amarelo apaga; um "Estou bem" ja pressionado e ainda nao consumido pela maquina
@@ -114,7 +122,6 @@ void atualizarLedAmarelo() {
 unsigned long tBuzzerInicio = 0;
 unsigned long buzzerTimeoutMs = 0;
 char buzzerMsgId[40] = "";
-const size_t CMD_MAX = 96;   // linha de comando (com o '\0'); o maior comando legitimo tem ~60 bytes
 
 // ---- Pico de aceleracao entre ciclos (valueMax) ----
 unsigned long tUltimaAmostra = 0;
@@ -150,43 +157,36 @@ float calcMagnitude() {
   return sqrt(ax*ax + ay*ay + az*az);
 }
 
-// Todo evento de saida passa por aqui e vai, e so, para a API HTTPS do bridge (transporte_wifi.h).
-void enviarLinha(const char* json) {
-  wifiEnviarEvento(json);
+// Todo evento de saida passa por aqui: cifrado e enviado pelo HTTPS do bridge (sessao.h). Sem sessao e sem certificado nada sai
+// (sem fila: a leitura seguinte prevalece). `retorno` = push.ack e confirmacao.resposta (vao para /eventos; o resto, para /dados).
+void enviarLinha(const char* json, bool retorno = false) {
+  sessaoEnviar(json, retorno);
 }
 
 // valueMax < 0 = nao incluir o campo (so imobilidade.leitura envia o pico do ciclo)
 void emitirEvento(const char* eventType, const char* estadoTexto, float value, float valueMax = -1.0) {
   sequence++;
-  char buf[256];
+  char buf[320];
   int n = snprintf(buf, sizeof(buf),
     "{\"schemaVersion\":%d,\"eventType\":\"%s\",\"deviceId\":\"%s\",\"entityId\":\"%s\",\"eventTimeMs\":%lu,"
     "\"sequence\":%lu,\"value\":%.2f,", SCHEMA_VERSION, eventType, DEVICE_ID, ENTITY_ID, (unsigned long)millis(),
     (unsigned long)sequence, value);
   if (valueMax >= 0.0) n += snprintf(buf + n, sizeof(buf) - n, "\"valueMax\":%.2f,", valueMax);
-  snprintf(buf + n, sizeof(buf) - n, "\"unit\":\"m/s2\",\"state\":\"%s\"}", estadoTexto);
+  // "user_id" (da sessao) e "source" sao do firmware agora: o bridge nao carimba mais nada (docs/schemas.md, secao 1)
+  snprintf(buf + n, sizeof(buf) - n, "\"unit\":\"m/s2\",\"state\":\"%s\",\"user_id\":%ld,\"source\":\"wokwi\"}", estadoTexto,
+           sessaoUserId());
   enviarLinha(buf);
 }
 
-// Evento de retorno (push.ack / confirmacao.resposta): o bridge o encaminha ao servidor em POST /eventos.
+// Evento de retorno (push.ack / confirmacao.resposta): vai ao servidor em POST /eventos.
 void emitirEventoRetorno(const char* eventType, const char* estadoTexto, const char* messageId) {
   sequence++;
-  char buf[256];
+  char buf[320];
   snprintf(buf, sizeof(buf),
     "{\"schemaVersion\":%d,\"eventType\":\"%s\",\"deviceId\":\"%s\",\"entityId\":\"%s\",\"eventTimeMs\":%lu,"
-    "\"sequence\":%lu,\"messageId\":\"%s\",\"state\":\"%s\"}", SCHEMA_VERSION, eventType, DEVICE_ID, ENTITY_ID,
-    (unsigned long)millis(), (unsigned long)sequence, messageId, estadoTexto);
-  enviarLinha(buf);
-}
-
-// Login: o bridge repassa estas credenciais ao servidor, que decide (o firmware e o dono do segredo; o bridge nao guarda
-// nada). Enviado no inicio e de novo sempre que a sessao se perde (transporte_wifi.h). FLOW_SEGREDO nao pode ter aspas nem
-// barra invertida (nao ha escape aqui). O segredo vai direto para a conexao HTTPS: nunca e escrito na serial.
-void emitirLogin() {
-  char buf[256];
-  snprintf(buf, sizeof(buf), "{\"eventType\":\"login\",\"identificador\":\"%s\",\"segredo\":\"%s\",\"deviceId\":\"%s\"}",
-           FLOW_IDENTIFICADOR, FLOW_SEGREDO, DEVICE_ID);
-  wifiLogin(buf);
+    "\"sequence\":%lu,\"messageId\":\"%s\",\"state\":\"%s\",\"user_id\":%ld,\"source\":\"wokwi\"}", SCHEMA_VERSION, eventType,
+    DEVICE_ID, ENTITY_ID, (unsigned long)millis(), (unsigned long)sequence, messageId, estadoTexto, sessaoUserId());
+  enviarLinha(buf, true);
 }
 
 void desligarBuzzer() {
@@ -220,35 +220,18 @@ void ligarBuzzer(const char* messageId, long timeoutMs) {
   emitirEventoRetorno("push.ack", "ATIVADO", messageId);
 }
 
-// Linha de comando do bridge (texto dentro da resposta HTTPS de /comandos):
-//   CMD;BUZZER_ON;<messageId>;<timeoutMs>   |   CMD;BUZZER_OFF;<messageId>;<motivo>
-void processarComando(char* linha) {
-  char* ctx = nullptr;
-  char* t0 = strtok_r(linha, ";", &ctx);
-  char* t1 = strtok_r(nullptr, ";", &ctx);
-  char* t2 = strtok_r(nullptr, ";", &ctx);
-  char* t3 = strtok_r(nullptr, ";", &ctx);
-  if (!t0 || strcmp(t0, "CMD") != 0 || !t1 || !t2) return;   // linha que nao e comando: ignora
-  if (strcmp(t1, "BUZZER_ON") == 0 && t3) {
-    ligarBuzzer(t2, atol(t3));
-  } else if (strcmp(t1, "BUZZER_OFF") == 0) {
-    if (buzzerAtivo) {                                       // encerrado pelo servidor: desliga sem evento
-      desligarBuzzer();
-      // Confirmado por outro dispositivo (o app): vale como o "Estou bem" daqui. So com o buzzer tocando: um BUZZER_OFF
-      // reenviado na reconexao nao pode apagar um alerta local sem relacao com ele.
-      if (t3 && strcmp(t3, "CONFIRMADO") == 0) { pendingConfirm = true; atualizarLedAmarelo(); }
-    }
-  }
+// Push do servidor (push.h ja decifrou e validou a mensagem). Pedido de confirmacao: liga o buzzer (ver ligarBuzzer).
+void aoPushSolicitado(const char* messageId, long timeoutMs) {
+  ligarBuzzer(messageId, timeoutMs);
 }
 
-// Entrada unica dos comandos: transporte_wifi.h entrega aqui cada linha que veio do bridge. Linha vazia ou longa demais
-// (maior que o buffer) e descartada, nunca truncada: um comando cortado no meio poderia virar outro.
-void receberComando(const char* texto, size_t tamanho) {
-  if (tamanho == 0 || tamanho >= CMD_MAX) return;
-  char linha[CMD_MAX];
-  memcpy(linha, texto, tamanho);
-  linha[tamanho] = '\0';
-  processarComando(linha);
+// Encerramento (CONFIRMADO, EXPIRADO ou CANCELADO): desliga o buzzer sem emitir evento (o servidor ja encerrou o episodio).
+void aoPushEncerrado(const char* resultado) {
+  if (!buzzerAtivo) return;
+  desligarBuzzer();
+  // Confirmado por outro dispositivo (o app): vale como o "Estou bem" daqui. So com o buzzer tocando: um encerramento reenviado na
+  // reconexao nao pode apagar um alerta local sem relacao com ele.
+  if (strcmp(resultado, "CONFIRMADO") == 0) { pendingConfirm = true; atualizarLedAmarelo(); }
 }
 
 // Resposta do idoso / fim do tempo, avaliado a cada volta do loop (nao espera o ciclo de 1 s).
@@ -288,9 +271,9 @@ void setup() {
   digitalWrite(PIN_LED_SUSPEITA, LOW);
   digitalWrite(PIN_LED_ALERTA,   LOW);
 
-  // Rede primeiro: com a sessao aberta, ate a falha do sensor (abaixo) chega ao servidor.
+  // Rede primeiro: a sessao se abre sozinha, em segundo plano, nas voltas do loop() (sessao.h); ate a falha do sensor chega ao servidor.
+  envelopeIniciar();
   wifiIniciar();
-  emitirLogin();
 
   // Inicializa I2C com pinos padrão do ESP32 (SDA=21, SCL=22)
   Wire.begin();
@@ -310,12 +293,9 @@ void setup() {
   }
 
   if (err != 0) {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "{\"schemaVersion\":%d,\"eventType\":\"sistema.erro\",\"state\":\"MPU_NAO_ENCONTRADO\",\"code\":%d}",
-             SCHEMA_VERSION, err);
+    mpuErro = err;                                           // firmware "parado": so a rede segue, para avisar o servidor
     Serial.println("MPU6050 NAO encontrado: firmware parado");
-    enviarLinha(buf);                                        // diagnostico para o servidor (descartado e logado la)
-    while (1) delay(100);
+    return;
   }
 
   Serial.println("MPU6050 encontrado e iniciado!");
@@ -323,7 +303,24 @@ void setup() {
   Serial.println("Repouso = sliders zerados. Movimento = qualquer slider acima de 3 m/s²");
 }
 
+// Rede em segundo plano: uma operacao BLOQUEANTE por volta (login, chave, emissao, renovacao OU abrir/ler o push).
+void servirRede() {
+  if (!sessaoAvancar()) pushAvancar();
+}
+
 void loop() {
+  if (mpuErro != 0) {                                        // firmware parado: so a rede, e o aviso (descartado e logado no servidor)
+    servirRede();
+    if (sessaoOnline() && millis() >= tProximoErro) {
+      tProximoErro = millis() + 10000;
+      char buf[200];
+      snprintf(buf, sizeof(buf), "{\"schemaVersion\":%d,\"eventType\":\"sistema.erro\",\"state\":\"MPU_NAO_ENCONTRADO\",\"code\":%d,"
+               "\"user_id\":%ld,\"source\":\"wokwi\"}", SCHEMA_VERSION, mpuErro, sessaoUserId());
+      enviarLinha(buf);
+    }
+    delay(20);
+    return;
+  }
   // --- Leitura dos botões a cada volta do loop (rápida, sem delay) ---
   // Garante que um único clique seja capturado, sem precisar segurar o botão.
   bool bordaConfirm = debounceRead(PIN_BTN_CONFIRM, lastRawConfirm, stableConfirm, lastChangeConfirm);
@@ -336,8 +333,8 @@ void loop() {
   bool bordaRearm = debounceRead(PIN_BTN_REARM, lastRawRearm, stableRearm, lastChangeRearm);
   if (bordaRearm && stableRearm == LOW) pendingRearm = true;
 
-  // --- Marco 3: comandos do servidor (via bridge) e buzzer, a cada volta do loop ---
-  wifiBuscarComandos();
+  // --- Marco 3: rede (sessao e push do servidor) e buzzer, a cada volta do loop ---
+  servirRede();
   atenderBuzzer();
 
   // --- Marco 3: amostragem rapida do MPU para capturar o PICO entre ciclos (valueMax) ---

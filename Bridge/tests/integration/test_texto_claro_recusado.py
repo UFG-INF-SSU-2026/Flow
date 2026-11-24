@@ -6,8 +6,8 @@ O HTTPS (confiando so na CA de teste) responde; uma requisicao HTTP em texto cla
 e recusada (conexao fechada, reset ou alerta TLS; qualquer resposta `HTTP/` ou estouro de prazo reprova); e depois da recusa o
 HTTPS continua respondendo.
 
-A sonda e a rota de login, que passa sem certificado de cliente e e recusada pelo proprio bridge (400) antes de tocar no
-servidor; por isso o teste nao precisa de servidor no ar (o bridge nao o contata ao subir). Tudo em loopback, sem ler `.env` e
+A sonda e uma rota desconhecida, que o proprio bridge recusa (404) antes de tocar no servidor; por isso o teste nao precisa
+de servidor no ar (o bridge nao o contata ao subir). Tudo em loopback, sem ler `.env` e
 com certificados so em pasta temporaria. O processo e sempre encerrado, mesmo se o teste falhar.
 """
 import importlib.util
@@ -21,30 +21,20 @@ from pathlib import Path
 import pytest
 import requests
 
-PASTA_BRIDGE = Path(__file__).resolve().parents[1]
-GERADOR = PASTA_BRIDGE.parent / "SensorServer" / "scripts" / "gerar_certificado.py"
+from apoio import criar_pki
+
+PASTA_BRIDGE = Path(__file__).resolve().parents[2]
 
 # Rota-sonda: metodo, rota e corpo. Tem de passar sem certificado de cliente (o handshake falharia antes de qualquer resposta).
-SONDA = ("POST", "/v1/login", b"{}")
+SONDA = ("POST", "/nao-existe", b"{}")        # o proprio bridge responde 404, sem tocar na borda (que nem esta no ar)
 
 HOST = "127.0.0.1"
 PRAZO_SUBIDA_S = 15
 
-pytestmark = pytest.mark.skipif(
-    not GERADOR.is_file(),
-    reason="SensorServer/scripts/gerar_certificado.py nao encontrado ao lado de Bridge/ (gera o certificado de teste)")
-
-
-def _gerar_certificados(pasta: Path) -> tuple[str, str, str]:
-    """CA de teste de poucos dias e um certificado de API para localhost e 127.0.0.1, em `pasta`. Devolve (ca, cert, chave)."""
-    spec = importlib.util.spec_from_file_location("gerar_certificado", GERADOR)    # scripts/ nao e um pacote
-    gerador = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gerador)
-    ca, ca_chave = pasta / "ca.crt", pasta / "ca.key"
-    gerador.criar_ca(ca, ca_chave, dias=2)
-    cert, chave = pasta / "bridge.crt", pasta / "bridge.key"
-    gerador.emitir(ca, ca_chave, cert, chave, "bridge", ["localhost"], [HOST], dias=2)
-    return str(ca), str(cert), str(chave)
+def _gerar_certificados(pasta: Path) -> tuple[str, str, str, str]:
+    """PKI de teste (so cryptography) em `pasta`. Devolve (ca raiz, cert da API, chave da API, ca de dispositivos)."""
+    pki = criar_pki(pasta)
+    return str(pki.ca_raiz.arquivo), pki.servidor_cert, pki.servidor_chave, str(pki.ca_disp.arquivo)
 
 
 def _porta_livre() -> int:
@@ -84,7 +74,7 @@ def _encerrar(proc: subprocess.Popen) -> None:
             proc.wait(timeout=5)
 
 
-def _subir_bridge(pasta: Path, ca: str, cert: str, chave: str):
+def _subir_bridge(pasta: Path, ca: str, cert: str, chave: str, ca_disp: str):
     """Sobe `python bridge.py` numa porta livre. Devolve (processo, porta). Se a porta escolhida for tomada no intervalo entre
     escolher e abrir, repete uma vez com outra. Saida (padrao e de erro) em arquivo: nunca em PIPE sem leitura."""
     for tentativa in (1, 2):
@@ -92,7 +82,7 @@ def _subir_bridge(pasta: Path, ca: str, cert: str, chave: str):
         # sem FLOW_* herdado; FLOW_SERVIDOR aponta para uma porta onde nada escuta (o bridge nao contata o servidor ao subir)
         env = {k: v for k, v in os.environ.items() if not k.startswith("FLOW_")}
         env.update({"FLOW_SEM_DOTENV": "1", "FLOW_SERVIDOR": f"https://{HOST}:{_porta_livre()}", "FLOW_TLS_CA": ca,
-                    "FLOW_BRIDGE_API_CERT": cert, "FLOW_BRIDGE_API_KEY": chave, "FLOW_BRIDGE_PORT": str(porta)})
+                    "FLOW_CA_DISPOSITIVOS_CERT": ca_disp, "FLOW_BRIDGE_API_CERT": cert, "FLOW_BRIDGE_API_KEY": chave, "FLOW_BRIDGE_PORT": str(porta)})
         log = pasta / f"bridge{tentativa}.log"
         with open(log, "wb") as saida:
             proc = subprocess.Popen([sys.executable, str(PASTA_BRIDGE / "bridge.py")], cwd=PASTA_BRIDGE, env=env,
@@ -141,13 +131,23 @@ def _sonda_https(porta: int, ca: str) -> int:
 
 
 def test_bridge_real_so_abre_tls_e_recusa_texto_claro(tmp_path):
-    ca, cert, chave = _gerar_certificados(tmp_path)
-    proc, porta = _subir_bridge(tmp_path, ca, cert, chave)
+    ca, cert, chave, ca_disp = _gerar_certificados(tmp_path)
+    proc, porta = _subir_bridge(tmp_path, ca, cert, chave, ca_disp)
     try:
-        assert _sonda_https(porta, ca) < 500        # o handshake TLS completou e a API respondeu (hoje, 400)
+        assert _sonda_https(porta, ca) == 404        # o handshake TLS completou e o proprio bridge respondeu
 
         _texto_claro_e_recusado(porta)
 
-        assert _sonda_https(porta, ca) < 500        # a recusa nao derruba a API
+        assert _sonda_https(porta, ca) == 404        # a recusa nao derruba a API
     finally:
         _encerrar(proc)
+
+
+def test_bridge_nao_sobe_sem_a_ca_de_dispositivos(tmp_path):
+    ca, cert, chave, ca_disp = _gerar_certificados(tmp_path)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FLOW_")}
+    env.update({"FLOW_SEM_DOTENV": "1", "FLOW_TLS_CA": ca, "FLOW_BRIDGE_API_CERT": cert, "FLOW_BRIDGE_API_KEY": chave,
+                "FLOW_CA_DISPOSITIVOS_CERT": str(tmp_path / "nao-existe.crt"), "FLOW_BRIDGE_PORT": str(_porta_livre())})
+    r = subprocess.run([sys.executable, str(PASTA_BRIDGE / "bridge.py")], cwd=PASTA_BRIDGE, env=env, capture_output=True, text=True,
+                       timeout=20)
+    assert r.returncode != 0 and "FLOW_CA_DISPOSITIVOS_CERT" in (r.stderr + r.stdout)

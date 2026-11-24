@@ -26,4 +26,4 @@ a secao do `docs/schemas.md`.
 
 ## Fora desta pasta
 
-O comando bridge -> firmware (texto dentro do HTTPS) (`CMD;BUZZER_ON;...`, secao 3 do `docs/schemas.md`) nao e JSON e nao tem schema.
+O push entregue ao firmware (secao 3 do `docs/schemas.md`) reusa o contrato `push` e nao tem arquivo proprio.

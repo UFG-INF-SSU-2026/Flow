@@ -13,7 +13,7 @@ Cada schema evolui de forma independente: a versão atual de cada um fica na tab
 | --- | --- | --- |
 | 1 | Wokwi → servidor: telemetria | 3 |
 | 2 | Wokwi → servidor: eventos de retorno | 3 |
-| 3 | Servidor → firmware: comando (texto, dentro do HTTPS) | 3 |
+| 3 | Servidor → firmware: push entregue por SSE (mensagem da seção 6) | 3 |
 | 4 | App Android → servidor: telemetria | 3 |
 | 4.2 | App: `leitura_ambiente` (bloco aninhado, versão própria) | 3 |
 | 4.3 | App: `localizacao` (bloco aninhado, versão própria) | 3 |
@@ -68,7 +68,7 @@ Exceções de `value`: `LEITURA_INVALIDA` → exatamente `-1.0`; `LEITURA_FORA_D
 
 Versões 1 e 2 não trazem `valueMax`: a leitura entra na regra de queda com o pico igual a `value`, marcada como degradada.
 
-> O bridge acrescenta `"user_id": <int>` e `"source": "wokwi"` antes de cifrar, **tanto na telemetria quanto nos eventos de retorno (seção 2)**. O `user_id` vem do login do bridge, não de configuração manual; o servidor confere ambos contra o token.
+> O **firmware** inclui `"user_id": <int>` e `"source": "wokwi"` antes de cifrar, **tanto na telemetria quanto nos eventos de retorno (seção 2)**. O `user_id` vem da resposta do próprio login (`user_ids[0]`), não de configuração manual; o servidor confere ambos contra o token. O bridge **não carimba nem lê** nada: só repassa o envelope.
 
 ### Backlog de mudanças
 
@@ -83,7 +83,7 @@ Versões 1 e 2 não trazem `valueMax`: a leitura entra na regra de queda com o p
 
 `POST /eventos` · **Versão atual: 3**
 
-Emitidos pelo firmware como JSON, por HTTPS, para a API do bridge (`POST /v1/dispositivos/<id>/eventos`); o bridge os roteia para `/eventos`.
+Emitidos pelo firmware como JSON, cifrados no envelope (seção 0) e enviados por HTTPS ao bridge em `POST /eventos` (o bridge só repassa à borda, que exige o certificado do dispositivo, seção 11).
 
 | Campo | Tipo | Regra |
 | --- | --- | --- |
@@ -95,8 +95,8 @@ Emitidos pelo firmware como JSON, por HTTPS, para a API do bridge (`POST /v1/dis
 | `sequence` | inteiro | mesmo contador da seção 1 |
 | `messageId` | string | `messageId` da mensagem de push a que se refere |
 | `state` | string | depende do `eventType` (abaixo) |
-| `user_id` | inteiro | acrescentado pelo bridge (ver nota da seção 1); deve estar em `token.user_ids` |
-| `source` | string | acrescentado pelo bridge; `"wokwi"` |
+| `user_id` | inteiro | incluído pelo firmware (ver nota da seção 1); deve estar em `token.user_ids` |
+| `source` | string | incluído pelo firmware; `"wokwi"` |
 
 | `eventType` | `state` | Significado |
 | --- | --- | --- |
@@ -113,22 +113,24 @@ Emitidos pelo firmware como JSON, por HTTPS, para a API do bridge (`POST /v1/dis
 
 ---
 
-## 3. Servidor → firmware: comando do bridge
+## 3. Servidor → firmware: push entregue por SSE
 
-Via bridge, texto dentro da resposta HTTPS de `GET /v1/dispositivos/<id>/comandos` (`{"comandos":["CMD;...", ...]}`) · **Versão atual: 3**
+`GET /push/wokwi` (SSE, pelo bridge; exige o certificado do dispositivo, seção 11) · **Versão atual: 3**
 
-A linha não é JSON (o ESP32 não usa biblioteca JSON), portanto não carrega `schemaVersion`; a versão é a do contrato. Cada comando é uma linha de texto, com menos de 96 bytes (o firmware descarta, sem truncar, a que for maior):
+O firmware abre o stream com `Authorization: Bearer <access token>` e, ao reconectar, `Last-Event-ID` com o `id` do último evento **processado**. Cada evento `push` leva em `data:` um envelope AES (seção 0) cujo texto é a **mensagem da seção 6** (a mesma do app, sem tradução e sem o bridge no meio). O evento `reautenticar` pede ao firmware que renove os tokens e reabra o stream. Linhas que começam com `:` são keepalive.
 
-| Linha | Campos |
-| --- | --- |
-| `CMD;BUZZER_ON;<messageId>;<timeoutMs>` | `timeoutMs` inteiro, `0 < t <= BUZZER_MAX_MS` (teto do firmware, hoje 30 s); fora disso o firmware responde `push.ack` `REJEITADO` (seção 2) |
-| `CMD;BUZZER_OFF;<messageId>;<motivo>` | `motivo`: `CONFIRMADO`, `EXPIRADO` ou `CANCELADO` |
+O firmware **age** só depois de validar. Descarta (log curto, sem conteúdo): `schemaVersion` diferente de 3; `userId` diferente do da sessão; campo ausente ou de tipo errado (`messageId`, `messageType`, `episodeId`, `issuedAt`, `expiresAt`, `userId`, `payload`); `messageId` fora de `A-Z a-z 0-9 -` ou com mais de 39 caracteres; tipo desconhecido; `payload.timeoutMs` que não é inteiro; `payload.resultado` fora de `CONFIRMADO`, `EXPIRADO` e `CANCELADO`; evento acima de 2048 bytes (descartado inteiro, nunca truncado); envelope ou JSON inválido; pedido já vencido (`expiresAt`, só com o relógio válido). `messageId` repetido é ignorado sem log.
+
+| `messageType` | `payload` | Efeito no firmware |
+| --- | --- | --- |
+| `queda.confirmacao_solicitada` | `timeoutMs` inteiro, `motivo` | liga o buzzer e responde `push.ack` `ATIVADO`; `timeoutMs` fora de `0 < t <= BUZZER_MAX_MS` (teto do firmware, hoje 30 s) responde `push.ack` `REJEITADO` (seção 2) |
+| `queda.confirmacao_encerrada` | `resultado`: `CONFIRMADO`, `EXPIRADO` ou `CANCELADO` | desliga o buzzer, sem evento de retorno; `CONFIRMADO` com o buzzer tocando vale como o "Estou bem" local |
 
 ### Backlog de mudanças
 
 | Versão | Mudança |
 | --- | --- |
-| v3 (criação) | Contrato criado (comandos `BUZZER_ON` e `BUZZER_OFF`). |
+| v3 | O canal deixa de ser linhas de texto `CMD;BUZZER_ON;...`/`CMD;BUZZER_OFF;...` lidas do bridge em `GET /v1/dispositivos/<id>/comandos`: o firmware recebe a própria mensagem da seção 6 por SSE (envelope AES), validada por ele. Sem mudança de `schemaVersion`: a mensagem da seção 6 já era v3. |
 
 ---
 
@@ -406,7 +408,7 @@ Certificado emitido:
 
 Falhas: `400` com `codigo: csr_invalido` (CSR recusado: texto que não é um único PEM de pedido, chave que não é EC P-256, assinatura que não é ECDSA com SHA-256 ou que não confere) ou corpo fora do contrato ou `schemaVersion` inválido ou maior que a atual; `401` sem token ou token inválido; `403` papel sem a permissão (`sem_permissao`); `503` com `codigo: emissao_indisponivel` (CA de dispositivos ausente, ilegível, vencida ou com chave que não corresponde ao certificado; as demais rotas seguem funcionando). Nenhuma resposta nem mensagem de erro traz o conteúdo do CSR.
 
-**Uso do certificado pelo app (a borda confere).** O app fala direto com a borda, sem bridge. Se a borda subiu com a CA de dispositivos (`certs/ca-dispositivos.crt`), o TLS passa a pedir certificado de cliente de forma opcional e a confiar só nessa CA: certificado de outra CA, vencido ou sem `clientAuth` tem o handshake recusado. Para um token com fonte `app`, toda rota protegida, exceto esta, exige que a conexão traga um certificado cujo `OU` e `CN` sejam a conta e o `device_id` do token: sem certificado, `401` com `codigo: certificado_ausente` (o app emite o seu e repete); certificado de outra conta ou de outro `device_id`, `403` com `codigo: certificado_incompativel`. Login, refresh e esta rota passam sem certificado, porque quem as chama ainda não tem um. Sem a CA na subida, nada é exigido e a borda avisa no console. O certificado vale por conexão: o app precisa abrir uma conexão nova depois de receber o certificado. O Wokwi (fonte `wokwi`) passa pelo bridge, que confere o certificado do dispositivo antes de encaminhar; a borda não o exige dele.
+**Uso do certificado pelo app (a borda confere).** O app fala direto com a borda, sem bridge. Se a borda subiu com a CA de dispositivos (`certs/ca-dispositivos.crt`), o TLS passa a pedir certificado de cliente de forma opcional e a confiar só nessa CA: certificado de outra CA, vencido ou sem `clientAuth` tem o handshake recusado. Para um token com fonte `app`, toda rota protegida, exceto esta, exige que a conexão traga um certificado cujo `OU` e `CN` sejam a conta e o `device_id` do token: sem certificado, `401` com `codigo: certificado_ausente` (o app emite o seu e repete); certificado de outra conta ou de outro `device_id`, `403` com `codigo: certificado_incompativel`. Login, refresh e esta rota passam sem certificado, porque quem as chama ainda não tem um. Sem a CA na subida, nada é exigido e a borda avisa no console. O certificado vale por conexão: o app precisa abrir uma conexão nova depois de receber o certificado. O Wokwi (fonte `wokwi`) passa pelo bridge, e a borda **também** exige dele o certificado: o bridge termina o TLS do dispositivo, o confere no handshake e, na conexão com a borda, se identifica com o próprio certificado (`certs/bridge.crt`, CA raiz, `clientAuth`, `CN=bridge`) e repassa o do dispositivo no cabeçalho `X-Flow-Certificado-Cliente` (DER em base64, sem quebras de linha). A borda só lê esse cabeçalho numa conexão do bridge, confere o certificado repassado de novo (CA de dispositivos, validade, `clientAuth`) e compara conta e `device_id` com o token, com os mesmos `401 certificado_ausente` e `403 certificado_incompativel`. Um token `wokwi` que fale direto com a borda, sem certificado, leva `401`.
 
 A emissão é registrada no log da borda (serial, conta, `device_id` e fim da validade), nunca o CSR, o certificado, o token nem chave. Não há tabela, consulta nem revogação: a validade curta é a única proteção. A resposta não tem schema próprio, como nas demais rotas de `/auth`.
 
