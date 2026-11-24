@@ -8,11 +8,16 @@ arquivo. Caminho relativo vale a partir de Bridge/. Este modulo nao abre rede ne
                            para falar com o servidor. A verificacao de certificado e de nome nunca e desligada.
   FLOW_BRIDGE_HOST         onde a API do bridge escuta (padrao 127.0.0.1)
   FLOW_BRIDGE_PORT         porta da API do bridge (padrao 5443)
-  FLOW_BRIDGE_API_CERT     certificado da API do bridge, emitido pela CA (padrao ../SensorServer/certs/bridge.crt)
+  FLOW_BRIDGE_API_CERT     certificado da API do bridge, emitido pela CA (padrao ../SensorServer/certs/bridge.crt). Serve tambem de
+                           identidade do bridge na borda: precisa de serverAuth E clientAuth e CN=bridge (gerar_certificado.py --nome bridge)
   FLOW_BRIDGE_API_KEY      chave privada desse certificado (padrao ../SensorServer/certs/bridge.key)
-  FLOW_BRIDGE_MAX_SIMULACOES  teto de dispositivos logados ao mesmo tempo (padrao 8)
+  FLOW_CA_DISPOSITIVOS_CERT  certificado PUBLICO da CA que assina os certificados dos dispositivos (padrao
+                           ../SensorServer/certs/ca-dispositivos.crt): com ele o bridge confere o certificado de cliente que o
+                           dispositivo apresenta. A chave dessa CA nunca passa por aqui (so a borda a le)
+  FLOW_BRIDGE_MAX_SIMULACOES  quantos dispositivos se espera ao mesmo tempo (padrao 8); so dimensiona as threads do servidor
+                           (cada dispositivo pode prender uma no push e outra numa chamada). O bridge nao conhece sessoes
 
-O bridge nao tem conta nem senha: o segredo de cada dispositivo mora no firmware e so passa por aqui no login.
+O bridge nao tem conta, senha nem token: repassa o que o dispositivo manda, sem guardar nem ler o conteudo.
 """
 import os
 from dataclasses import dataclass
@@ -42,10 +47,11 @@ class Config:
     porta: int = 5443
     api_cert: str = ""
     api_chave: str = ""
+    ca_dispositivos: str = ""           # caminho do certificado publico da CA de dispositivos
     max_simulacoes: int = 8
 
     def __post_init__(self):
-        # Garantia no proprio objeto: nenhuma Config (e portanto nenhuma Sessao) nasce apontando para texto claro.
+        # Garantia no proprio objeto: nenhuma Config nasce apontando para texto claro.
         if not self.servidor.lower().startswith("https://"):
             raise ValueError(f"FLOW_SERVIDOR precisa comecar com https:// (toda ponta fala TLS); recebido: {self.servidor}")
 
@@ -78,6 +84,7 @@ def ler_config() -> Config:
             porta=_inteiro("FLOW_BRIDGE_PORT", 5443, 1, 65535),
             api_cert=_caminho(os.environ.get("FLOW_BRIDGE_API_CERT"), _CERTS / "bridge.crt"),
             api_chave=_caminho(os.environ.get("FLOW_BRIDGE_API_KEY"), _CERTS / "bridge.key"),
+            ca_dispositivos=_caminho(os.environ.get("FLOW_CA_DISPOSITIVOS_CERT"), _CERTS / "ca-dispositivos.crt"),
             max_simulacoes=_inteiro("FLOW_BRIDGE_MAX_SIMULACOES", 8, 1, 64),
         )
     except ValueError as e:

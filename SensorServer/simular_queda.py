@@ -1,19 +1,29 @@
 """
 Simula um 'wokwi' que sofre um impacto e fica imovel, para testar o push de confirmacao SEM Wokwi nem celular.
 
+<<<<<<< Updated upstream
 Faz login com a conta do dispositivo, pede o certificado de cliente (gera a chave EC e o CSR em memoria; a chave nunca sai
 daqui), envia telemetria 1x/s com ele (como o ESP32 faria) e, apos o impacto, 5 s de repouso. O par fica em arquivos
 temporarios (o requests so aceita certificado de cliente por arquivo), apagados ao terminar.
+=======
+Faz como o firmware: login (sem certificado de cliente), gera uma chave EC P-256 em memoria, pede o certificado de dispositivo
+(POST /auth/certificado) e envia telemetria 1x/s com ele, e, apos o impacto, 5 s de repouso.
+>>>>>>> Stashed changes
 A analise (python -m analise) deve concluir 'queda provavel' e gravar o pedido; a borda (python -m borda) o empurra para os
 canais conectados (app e/ou bridge). Os DOIS processos precisam estar no ar.
 
 Uso (na pasta SensorServer, com a borda e a analise rodando):
     pip install requests
     FLOW_BRIDGE_ID=bridge1 FLOW_BRIDGE_SECRET=<senha> python simular_queda.py [URL_BASE]
-URL_BASE e https://127.0.0.1:5000 por padrao; a confianca e a CA do projeto (comum/tls.py).
+URL_BASE e https://127.0.0.1:5000 por padrao (a borda); a confianca e a CA do projeto (comum/tls.py). Para passar pelo bridge,
+use https://127.0.0.1:5443 (o certificado do bridge precisa listar o endereco usado): so ele confere o certificado de cliente;
+direto na borda o certificado e ignorado. Chave e certificado ficam em arquivos temporarios (0600) so durante a execucao e nada
+sensivel e impresso.
 """
+import atexit
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -23,6 +33,10 @@ import requests
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+<<<<<<< Updated upstream
+=======
+from cryptography.x509.oid import NameOID
+>>>>>>> Stashed changes
 
 from comum import const as const_comum
 from comum import tls
@@ -46,6 +60,33 @@ j = r.json()
 tok = json.loads(decrypt_payload(j["nonce"], j["ciphertext"]))
 H = {"Authorization": f"Bearer {tok['access_token']}"}
 user_id = tok["user_ids"][0]
+
+
+def obter_certificado():
+    """Chave EC P-256 em memoria + CSR; pede o certificado e grava o par em arquivos temporarios (o requests so aceita arquivos),
+    apagados ao terminar, inclusive em erro. Devolve (certificado, chave)."""
+    chave = ec.generate_private_key(ec.SECP256R1())
+    csr = (x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "simulador-queda")]))
+           .sign(chave, hashes.SHA256()))
+    resp = requests.post(f"{BASE}/auth/certificado", verify=CA, headers=H,
+                         json=env({"schemaVersion": 1, "csr": csr.public_bytes(serialization.Encoding.PEM).decode("ascii")}))
+    resp.raise_for_status()
+    j = resp.json()
+    pem = json.loads(decrypt_payload(j["nonce"], j["ciphertext"]))["certificado"]
+    pasta = tempfile.mkdtemp(prefix="flow_sim_")
+    atexit.register(shutil.rmtree, pasta, True)
+    os.chmod(pasta, 0o700)
+    cert_arq, chave_arq = os.path.join(pasta, "cliente.crt"), os.path.join(pasta, "cliente.key")
+    with open(cert_arq, "w", encoding="ascii") as f:
+        f.write(pem)
+    fd = os.open(chave_arq, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(chave.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    return cert_arq, chave_arq
+
+
+CERT = obter_certificado()
+print("certificado de dispositivo emitido")
 seq = int(time.time())
 
 

@@ -1,189 +1,186 @@
 """
-API local do bridge (HTTPS). Os dispositivos simples a usam direto (o ESP32 do Wokwi, pelo WiFi) ou por um adaptador em software.
+API HTTPS do bridge: repassador FINO entre o ESP32 (Wokwi) e a borda do servidor. Nao faz login, nao guarda token, nao cifra, nao
+traduz, nao le o conteudo e NAO decide quem precisa de certificado: o firmware fala o protocolo da borda (envelope AES, login,
+refresh, emissao do certificado) e o bridge so encaminha. Quem exige o certificado do dispositivo, por rota, e a BORDA.
 
-  POST   /v1/login                           repassa o login ao servidor; devolve o token de sessao LOCAL
-  POST   /v1/dispositivos/<id>/eventos       evento do dispositivo -> servidor (carimba user_id e source)
-  GET    /v1/dispositivos/<id>/comandos      comandos ja traduzidos (?espera=<s>: espera ate esse tempo por um comando)
-  GET    /v1/dispositivos/<id>/estado        saude da sessao, sem tokens nem dados pessoais
-  DELETE /v1/dispositivos/<id>               encerra a sessao
+Rotas (mesmo metodo e caminho da borda; qualquer outra coisa e 404 e nem chega a borda):
 
-Autenticacao e autorizacao sao do servidor: o bridge nao tem contas. O token local so amarra a chamada a sessao do
-dispositivo que fez o login (sem ele, qualquer processo que alcance a API agiria em nome de um dispositivo ja logado). Nao e
-credencial do servidor e nao vale fora daqui. O token de um dispositivo nas rotas de outro leva 403.
+  POST /auth/login          POST /auth/refresh        POST /auth/certificado
+  POST /dados               POST /eventos             GET  /push/wokwi   (SSE repassado como fluxo continuo)
 
-Erros: 401 sem token (ou {"codigo": "relogin"} quando a sessao nao pode ser renovada), 403 token de outro dispositivo,
-400 evento invalido, 429 limite de dispositivos, 502 servidor indisponivel; um 4xx do servidor volta com o mesmo codigo.
+Certificado do dispositivo (mTLS). O ESP32 comeca SEM certificado (login e emissao) e depois passa a apresentar o emitido por
+POST /auth/certificado. O TLS do dispositivo termina aqui, e o handshake (bridge.py) pede o certificado de cliente de forma
+OPCIONAL e o confere SO contra a CA de dispositivos: sem certificado conecta; de outra CA (inclusive a raiz), vencido ou so com
+serverAuth derruba a conexao no handshake, sem resposta HTTP. Para a borda o bridge:
+
+  1. se identifica em TODA chamada, inclusive na abertura do SSE, com o PROPRIO certificado (certs/bridge.crt, emitido pela CA
+     raiz, com clientAuth e CN "bridge"): e assim que a borda sabe que o cabecalho abaixo e confiavel;
+  2. APAGA sempre o cabecalho X-Flow-Certificado-Cliente que veio do dispositivo (sem isso, um ESP32 sem certificado poderia
+     mandar o certificado, que e publico, de outro) e so entao, se o handshake do dispositivo trouxe certificado valido,
+     acrescenta o verdadeiro: o DER dele em base64, sem quebras de linha.
+
+A borda confere o certificado repassado de novo e o compara com o token (conta e device_id). O bridge nao extrai identidade do
+certificado e nao liga certificado a token.
+
+Erros do proprio bridge (JSON com status "erro" e mensagem): 404 rota desconhecida, 413 corpo acima de CORPO_MAX_BYTES, 502 borda
+fora ou com erro 5xx, 504 borda lenta. 2xx e 4xx da borda voltam como vieram (inclusive WWW-Authenticate e o codigo, p.ex.
+certificado_ausente e certificado_incompativel). Sem retentativa, sem fila, sem estado entre chamadas.
+
+Log: uma linha por requisicao (bridge.py), sem corpo, sem Authorization, sem query string, sem o certificado.
 """
-import hmac
-import queue
-import secrets
+import base64
 import threading
+import time
+from datetime import datetime
 
+import requests
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from flask import Flask, Response, jsonify, request
 
 from config import Config
-from sessao import ErroServidor, Relogin, ServidorIndisponivel, Sessao, log
-from traducao import DEVICE_ID_RE, rota_do_evento
 
-ESPERA_MAX_S = 25                # teto da espera por comando (o cliente nao fica pendurado)
-CORPO_MAX_BYTES = 16 * 1024
+CORPO_MAX_BYTES = 16 * 1024             # a telemetria e o maior corpo legitimo (poucas centenas de bytes cifrados)
+TIMEOUT_S = 5                           # conexao e leitura de uma chamada comum a borda
+LEITURA_SSE_S = 40                      # leitura parada no push: maior que o keepalive de 15 s da borda; detecta conexao morta
+INTERVALO_LOG_FALHA_S = 10              # falha repetida contra a borda: no maximo uma linha de log neste intervalo
+
+# Metodo e caminho exatos que o bridge repassa -> a resposta e um stream SSE. Sem curinga e sem normalizacao de caminho. Esta lista so
+# limita o que chega a borda; nao decide nada sobre certificado (quem decide e a borda).
+ROTAS: dict[tuple[str, str], bool] = {
+    ("POST", "/auth/login"):       False,
+    ("POST", "/auth/refresh"):     False,
+    ("POST", "/auth/certificado"): False,
+    ("POST", "/dados"):            False,
+    ("POST", "/eventos"):          False,
+    ("GET", "/push/wokwi"):        True,
+}
+# Combinado com a borda (SensorServer/borda/const.py, CABECALHO_CERTIFICADO_REPASSADO); testes_integrados/ confere que sao iguais.
+CABECALHO_CERTIFICADO = "X-Flow-Certificado-Cliente"
+CABECALHOS_DE_IDA = ("Authorization", "Content-Type", "Accept", "Last-Event-ID")
+CABECALHOS_DE_VOLTA = ("Content-Type", "WWW-Authenticate", "Cache-Control", "Retry-After")
+
+_lock_log = threading.Lock()
+_ultimo_log_falha: dict[str, float] = {}      # unico estado do modulo: so limita a repeticao de uma linha de log
 
 
-class Dispositivos:
-    """Sessoes ativas: device_id -> (Sessao, token local). Tudo em memoria."""
+def log(mensagem: str) -> None:
+    print(f"[bridge] {mensagem}", flush=True)
 
-    def __init__(self, cfg: Config, criar_sessao=Sessao):
-        self.cfg = cfg
-        self._criar = criar_sessao
-        self._lock = threading.Lock()
-        self._itens: dict[str, tuple[Sessao, str]] = {}
 
-    def cheio_para(self, device_id: str) -> bool:
-        with self._lock:
-            return device_id not in self._itens and len(self._itens) >= self.cfg.max_simulacoes
-
-    def nova(self, device_id: str) -> Sessao:
-        return self._criar(device_id, self.cfg)
-
-    def registrar(self, sessao: Sessao) -> str:
-        """Guarda a sessao ja logada (troca a anterior do mesmo dispositivo) e devolve o token local."""
-        token = secrets.token_urlsafe(32)
-        with self._lock:
-            antiga = self._itens.get(sessao.device_id)
-            self._itens[sessao.device_id] = (sessao, token)
-        if antiga is not None:
-            antiga[0].parar()
-        return token
-
-    def dono_do_token(self, token: str) -> str | None:
-        with self._lock:
-            for device_id, (_, t) in self._itens.items():
-                if hmac.compare_digest(t, token):
-                    return device_id
-        return None
-
-    def sessao(self, device_id: str) -> Sessao | None:
-        with self._lock:
-            item = self._itens.get(device_id)
-        return item[0] if item else None
-
-    def remover(self, device_id: str) -> None:
-        with self._lock:
-            item = self._itens.pop(device_id, None)
-        if item is not None:
-            item[0].parar()
+def _log_falha(categoria: str) -> None:
+    agora = time.monotonic()
+    with _lock_log:
+        if agora - _ultimo_log_falha.get(categoria, -INTERVALO_LOG_FALHA_S) < INTERVALO_LOG_FALHA_S:
+            return
+        _ultimo_log_falha[categoria] = agora
+    log(f"borda: {categoria} (repetido: no maximo uma linha a cada {INTERVALO_LOG_FALHA_S} s)")
 
 
 def _erro(status: int, mensagem: str, **extra):
     return jsonify({"status": "erro", "mensagem": mensagem, **extra}), status
 
 
-def _texto(corpo: dict, campo: str) -> str | None:
-    v = corpo.get(campo)
-    return v if isinstance(v, str) and v else None
+def cabecalho_do_certificado(environ) -> str | None:
+    """O certificado de cliente que o dispositivo apresentou no handshake, como o valor do cabecalho de repasse (base64 do DER, sem
+    quebras de linha), ou None se nao apresentou um certificado valido. Falha fechada: o que nao der para interpretar nao e repassado
+    (a borda, sem o cabecalho, responde certificado_ausente)."""
+    pem = environ.get("SSL_CLIENT_CERT")
+    if environ.get("SSL_CLIENT_VERIFY") != "SUCCESS" or not pem:
+        return None
+    try:
+        der = x509.load_pem_x509_certificate(pem.encode("ascii")).public_bytes(serialization.Encoding.DER)
+    except Exception:                       # noqa: BLE001  (ilegivel: mesma resposta)
+        return None
+    return base64.b64encode(der).decode("ascii")
 
 
-def criar_app(cfg: Config, criar_sessao=Sessao) -> Flask:
+def _repasse_de_resposta(resp, mapa_cabecalhos=CABECALHOS_DE_VOLTA) -> Response:
+    saida = Response(resp.content, status=resp.status_code)
+    for nome in mapa_cabecalhos:
+        if resp.headers.get(nome):
+            saida.headers[nome] = resp.headers[nome]
+    return saida
+
+
+def criar_app(cfg: Config, chamar=requests.request) -> Flask:
+    """`chamar` faz a chamada a borda (padrao: requests.request); so os testes unitarios o trocam."""
     app = Flask("bridge")
     app.config["MAX_CONTENT_LENGTH"] = CORPO_MAX_BYTES
-    reg = Dispositivos(cfg, criar_sessao)
-    app.extensions["dispositivos"] = reg
-
-    def autorizar(device_id: str):
-        """(sessao, None) se o token local pertence a este dispositivo; senao (None, resposta de erro)."""
-        cab = request.headers.get("Authorization", "")
-        token = cab[7:] if cab.startswith("Bearer ") else ""
-        dono = reg.dono_do_token(token) if token else None
-        if dono is None:
-            return None, _erro(401, "token de sessao ausente ou invalido")
-        if dono != device_id:
-            return None, _erro(403, "token de outro dispositivo")
-        return reg.sessao(device_id), None
+    app.url_map.merge_slashes = False                      # sem normalizar caminho: o que nao esta na tabela e 404
 
     @app.errorhandler(413)
     def _grande(_):
-        return _erro(400, "corpo grande demais")
+        return _erro(413, "corpo grande demais")
 
     @app.errorhandler(404)
     def _nao_achou(_):
         return _erro(404, "rota desconhecida")
 
-    @app.post("/v1/login")
-    def login():
-        corpo = request.get_json(silent=True)
-        if not isinstance(corpo, dict):
-            return _erro(400, "corpo precisa ser um objeto JSON")
-        ident, segredo, device_id = (_texto(corpo, "identificador"), _texto(corpo, "segredo"), _texto(corpo, "deviceId"))
-        if not (ident and segredo and device_id) or DEVICE_ID_RE.fullmatch(device_id) is None:
-            return _erro(400, "login precisa de identificador, segredo e deviceId validos")
-        if reg.cheio_para(device_id):
-            return _erro(429, "limite de dispositivos atingido")
-        sessao = reg.nova(device_id)
-        try:
-            sessao.login(ident, segredo)                  # repassa; o segredo nao e guardado em lugar nenhum
-        except ErroServidor as e:
-            return _erro(e.status if 400 <= e.status < 500 else 502, f"servidor recusou o login ({e.status})")
-        except ServidorIndisponivel:
-            return _erro(502, "servidor indisponivel")
-        token = reg.registrar(sessao)
-        sessao.iniciar_push()
-        log(f"[{device_id}] login aceito pelo servidor (user_id={sessao.user_id})")
-        return jsonify({"token": token, "deviceId": device_id, "userId": sessao.user_id})
+    @app.errorhandler(405)
+    def _metodo(_):
+        return _erro(404, "rota desconhecida")
 
-    @app.post("/v1/dispositivos/<device_id>/eventos")
-    def eventos(device_id):
-        sessao, erro = autorizar(device_id)
-        if erro:
-            return erro
-        evento = request.get_json(silent=True)
-        if not isinstance(evento, dict) or not isinstance(evento.get("eventType"), str):
-            return _erro(400, "evento precisa ser um objeto JSON com eventType")
-        # O bridge so carimba o que o dispositivo nao conhece. O deviceId e do dispositivo: quem o confere com o do token e o
-        # servidor (403 se diferir).
-        evento["user_id"] = sessao.user_id
-        evento["source"] = "wokwi"
-        rota = rota_do_evento(evento)
-        try:
-            sessao.enviar(rota, evento)
-        except Relogin:
-            return _erro(401, "sessao expirada: mande o login de novo", codigo="relogin")
-        except ErroServidor as e:
-            log(f"[{device_id}] servidor respondeu {e.status} em {rota}")
-            return _erro(e.status if 400 <= e.status < 500 else 502, f"servidor respondeu {e.status}")
-        except ServidorIndisponivel:
-            log(f"[{device_id}] servidor indisponivel em {rota}; evento descartado")
-            return _erro(502, "servidor indisponivel")
-        return jsonify({"status": "ok"})
+    def _falha_da_borda(erro: Exception):
+        if isinstance(erro, requests.Timeout):
+            _log_falha("prazo estourado")
+            return _erro(504, "borda lenta")
+        _log_falha("indisponivel")
+        return _erro(502, "borda indisponivel")
 
-    @app.get("/v1/dispositivos/<device_id>/comandos")
-    def comandos(device_id):
-        sessao, erro = autorizar(device_id)
-        if erro:
-            return erro
+    def _enviar_a_borda(metodo: str, caminho: str, corpo: bytes, stream: bool):
+        cabecalhos = {n: request.headers[n] for n in CABECALHOS_DE_IDA if n in request.headers}     # lista fechada: sem o de repasse
+        repasse = cabecalho_do_certificado(request.environ)
+        if repasse:
+            cabecalhos[CABECALHO_CERTIFICADO] = repasse
+        prazo = (TIMEOUT_S, LEITURA_SSE_S) if stream else (TIMEOUT_S, TIMEOUT_S)
+        return chamar(metodo, cfg.servidor + caminho, data=corpo or None, headers=cabecalhos, verify=cfg.ca,
+                      cert=(cfg.api_cert, cfg.api_chave),                  # o bridge se identifica na borda em TODA chamada (inclusive o SSE)
+                      allow_redirects=False, timeout=prazo, stream=stream)
+
+    def _fluxo(resp, inicio: float):
+        """Devolve ao dispositivo, na hora, o que a borda emite. Qualquer fim (fim do stream, queda, leitura parada, saida do
+        dispositivo) fecha a conexao com a borda."""
         try:
-            espera = min(max(float(request.args.get("espera", "0")), 0.0), ESPERA_MAX_S)
-        except ValueError:
-            return _erro(400, "espera precisa ser um numero")
-        lista: list[str] = []
-        try:
-            lista.append(sessao.comandos.get(timeout=espera) if espera else sessao.comandos.get_nowait())
-            while True:
-                lista.append(sessao.comandos.get_nowait())
-        except queue.Empty:
+            for bloco in resp.iter_content(chunk_size=None):
+                if bloco:
+                    yield bloco
+        except requests.RequestException:                  # queda ou leitura parada: o dispositivo reconecta com Last-Event-ID
             pass
-        return jsonify({"comandos": lista})
+        finally:
+            resp.close()
+            log(f"stream encerrado GET /push/wokwi apos {time.monotonic() - inicio:.1f} s")
 
-    @app.get("/v1/dispositivos/<device_id>/estado")
-    def estado(device_id):
-        sessao, erro = autorizar(device_id)
-        return erro if erro else jsonify(sessao.estado())
-
-    @app.delete("/v1/dispositivos/<device_id>")
-    def encerrar(device_id):
-        _, erro = autorizar(device_id)
-        if erro:
-            return erro
-        reg.remover(device_id)
-        return Response(status=204)
+    @app.route("/", defaults={"caminho": ""}, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    @app.route("/<path:caminho>", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    def repassar(caminho):
+        regra = ROTAS.get((request.method, request.path))
+        if regra is None:
+            return _erro(404, "rota desconhecida")                       # a borda nao e tocada
+        stream = regra
+        corpo = request.get_data()                                       # 413 acima do limite (manipulador acima); nunca lido nem alterado
+        inicio = time.monotonic()
+        try:
+            resp = _enviar_a_borda(request.method, request.path, corpo, stream)
+        except requests.RequestException as e:
+            return _falha_da_borda(e)
+        if not (200 <= resp.status_code < 300 or 400 <= resp.status_code < 500):      # 5xx (e 3xx, inesperado): so o bridge responde
+            resp.close()
+            _log_falha(f"respondeu {resp.status_code}")
+            return _erro(502, "borda com erro")
+        if stream and resp.status_code == 200:
+            log(f"stream aberto GET {request.path}")
+            saida = Response(_fluxo(resp, inicio), status=200, mimetype="text/event-stream")
+            saida.headers["Cache-Control"] = "no-cache"
+            return saida
+        try:
+            return _repasse_de_resposta(resp)
+        finally:
+            resp.close()
 
     return app
+
+
+def hora() -> str:
+    agora = datetime.now()
+    return f"{agora:%H:%M:%S}.{agora.microsecond // 1000:03d}"
