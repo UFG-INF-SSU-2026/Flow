@@ -198,7 +198,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (auth.sessao?.papel == "cuidador") {      // o cuidador so le: nada de sensores, localizacao nem servico
-            if (app.emissor.precisaEmitir()) app.emissor.renovarEmSegundoPlano(descartar = false)
+            if (app.emissor.precisaEmitir()) app.emissor.renovarEmSegundoPlano()
             abrirCuidador()
             return
         }
@@ -590,7 +590,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         atualizarIndicadorLocalizacao()
 
         // Falta certificado de cliente ou restam menos da metade da validade: emite em segundo plano (sem travar o envio)
-        if (app.emissor.precisaEmitir()) app.emissor.renovarEmSegundoPlano(descartar = false)
+        if (app.emissor.precisaEmitir()) app.emissor.renovarEmSegundoPlano()
 
         // Cifra o JSON inteiro (Marco 2) antes de enviar. O servidor decifra
         // o envelope e recupera o payload original (ver CryptoUtils.kt).

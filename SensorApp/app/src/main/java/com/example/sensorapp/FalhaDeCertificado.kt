@@ -1,7 +1,10 @@
 package com.example.sensorapp
 
+import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.security.cert.CertificateException
-import javax.net.ssl.SSLException
 import javax.net.ssl.SSLPeerUnverifiedException
 
 /*
@@ -19,12 +22,18 @@ fun erroDeCertificadoNoCorpo(codigoHttp: Int, corpo: String): String? = when {
 }
 
 /**
- * Handshake recusado pelo SERVIDOR por causa do nosso certificado (vencido, de outra CA, sem clientAuth): falha de TLS
- * que nao e a verificacao do certificado do servidor (cadeia ou nome). Esta, ao contrario, nunca e tratada como motivo
- * para pedir certificado novo: a confianca no servidor nao se negocia.
+ * Falha de conexao que pode ser o SERVIDOR recusando o nosso certificado de cliente (vencido, de outra CA, sem
+ * clientAuth). Com TLS 1.3 a recusa chega depois do handshake do lado do cliente e costuma aparecer como conexao
+ * fechada (`SocketException: Broken pipe`, `Connection reset`, fim de fluxo), nao so como SSLException; por isso vale
+ * qualquer [IOException], menos:
+ * - a verificacao do certificado do SERVIDOR (cadeia ou nome): a confianca no servidor nao se negocia, e pedir
+ *   certificado novo nao a resolveria;
+ * - as que acontecem antes de haver conexao (sem rede para o nome, conexao recusada) ou sem resposta (tempo esgotado):
+ *   o servidor nao chegou a olhar o certificado.
  */
-fun falhaTlsPorCertificadoDeCliente(e: Throwable): Boolean {
-    if (e !is SSLException) return false
+fun falhaDeConexaoComCertificado(e: Throwable): Boolean {
+    if (e !is IOException) return false
+    if (e is UnknownHostException || e is ConnectException || e is SocketTimeoutException) return false
     var causa: Throwable? = e
     var voltas = 0
     while (causa != null && voltas++ < 10) {

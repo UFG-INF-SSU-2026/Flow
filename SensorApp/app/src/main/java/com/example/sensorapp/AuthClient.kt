@@ -19,8 +19,9 @@ import org.json.JSONObject
  * - O papel e os user_ids vem do servidor. Este app aceita os papeis "idoso" e "cuidador".
  *
  * login() e renovar() sao BLOQUEANTES: chame fora da thread principal.
- * As chamadas saem pelo cliente unico [FlowHttp]; o interceptor e o autenticador abaixo ignoram rotas de autenticacao (/auth/...)
- * (que nao leva Authorization nem pode disparar renovacao dentro da propria renovacao).
+ * As rotas /auth/... saem por [FlowHttp.semCertificado]: nenhuma exige certificado de cliente, e um certificado guardado
+ * e recusado pelo servidor nao pode impedir o login nem a renovacao do token. O interceptor e o autenticador abaixo
+ * ignoram essas rotas (que nao levam Authorization nem podem disparar renovacao dentro da propria renovacao).
  */
 class AuthClient(
     private val prefs: SharedPreferences,
@@ -77,7 +78,7 @@ class AuthClient(
             .url(baseUrl() + path)
             .post(envelope.toString().toRequestBody(jsonType))
             .build()
-        FlowHttp.cliente.newCall(req).execute().use { resp ->
+        FlowHttp.semCertificado.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return Pair(resp.code, null)
             val e = JSONObject(resp.body?.string().orEmpty())
             val claro = CryptoUtils.decrypt(e.getString("nonce"), e.getString("ciphertext"))

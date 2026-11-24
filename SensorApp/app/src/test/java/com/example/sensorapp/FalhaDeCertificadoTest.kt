@@ -1,5 +1,10 @@
 package com.example.sensorapp
 
+import java.io.EOFException
+import java.net.ConnectException
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.security.cert.CertificateException
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLPeerUnverifiedException
@@ -26,14 +31,29 @@ class FalhaDeCertificadoTest {
     }
 
     @Test
-    fun handshakeRecusadoPeloServidorPedeCertificadoNovo() {
-        assertTrue(falhaTlsPorCertificadoDeCliente(SSLHandshakeException("Received fatal alert: bad_certificate")))
+    fun recusaDoCertificadoPeloServidorPedeCertificadoNovo() {
+        assertTrue(falhaDeConexaoComCertificado(SSLHandshakeException("Received fatal alert: bad_certificate")))
+        // TLS 1.3: a recusa chega depois do handshake, como conexao fechada
+        assertTrue(falhaDeConexaoComCertificado(SocketException("Broken pipe")))
+        assertTrue(falhaDeConexaoComCertificado(SocketException("Connection reset")))
+        assertTrue(falhaDeConexaoComCertificado(EOFException("fim do fluxo")))
     }
 
     @Test
     fun falhaNaVerificacaoDoServidorNuncaPedeCertificado() {
-        assertFalse(falhaTlsPorCertificadoDeCliente(SSLHandshakeException("x").apply { initCause(CertificateException("cadeia")) }))
-        assertFalse(falhaTlsPorCertificadoDeCliente(SSLPeerUnverifiedException("nome")))
-        assertFalse(falhaTlsPorCertificadoDeCliente(java.io.IOException("rede")))
+        assertFalse(falhaDeConexaoComCertificado(SSLHandshakeException("x").apply { initCause(CertificateException("cadeia")) }))
+        assertFalse(falhaDeConexaoComCertificado(SSLPeerUnverifiedException("nome")))
+    }
+
+    @Test
+    fun falhaSemConexaoOuSemRespostaNaoPedeCertificado() {
+        assertFalse(falhaDeConexaoComCertificado(UnknownHostException("sem rede")))
+        assertFalse(falhaDeConexaoComCertificado(ConnectException("recusada")))
+        assertFalse(falhaDeConexaoComCertificado(SocketTimeoutException("tempo")))
+    }
+
+    @Test
+    fun oQueNaoEFalhaDeConexaoNaoPedeCertificado() {
+        assertFalse(falhaDeConexaoComCertificado(IllegalStateException("bug")))
     }
 }

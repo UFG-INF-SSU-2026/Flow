@@ -88,20 +88,17 @@ class EmissorCertificado(
     }
 
     /**
-     * Recuperacao automatica (erro de TLS ou 401/403 de certificado): [descartar] apaga o certificado atual antes, pois
-     * um certificado recusado seria apresentado de novo ate no pedido do novo. Roda em outra thread, uma por vez, e
-     * respeita a espera entre tentativas.
+     * Recuperacao automatica (falha de conexao feita com certificado, ou 401/403 de certificado): pede um certificado
+     * novo sem descartar o atual, que so e trocado se a emissao der certo (o pedido sai por um cliente sem certificado,
+     * entao o recusado nao o atrapalha). Roda em outra thread, uma por vez, e respeita a espera entre tentativas.
      */
-    fun renovarEmSegundoPlano(descartar: Boolean) {
+    fun renovarEmSegundoPlano() {
         if (auth.sessao == null || emAndamento) return
         if (System.currentTimeMillis() < liberadoEmMs) return
         emAndamento = true
         Thread {
             val ok = try {
-                synchronized(this) {
-                    if (descartar) descartarCertificado()
-                    emitir()
-                }
+                synchronized(this) { emitir() }
             } catch (e: Exception) {
                 false
             } finally {
@@ -115,7 +112,7 @@ class EmissorCertificado(
     // ---------------------------------------------------------------- emissao
     private fun emitir(): Boolean {
         try {
-            if (incompativel()) descartarCertificado()      // o pedido do novo sai sem apresentar o que nao serve
+            if (incompativel()) descartarCertificado()      // vencido ou de outra conta/device_id: nao serve a ninguem
             val chave = chavePublica()
             val csr = csrEmPem(
                 Base64.encodeToString(
@@ -146,7 +143,7 @@ class EmissorCertificado(
         }
     }
 
-    /** POST /auth/certificado (envelope AES). Devolve o PEM do certificado ou null. Renova o token uma vez se vier 401. */
+    /** POST /auth/certificado (envelope AES), sem apresentar certificado de cliente. Devolve o PEM ou null. Renova o token uma vez se vier 401. */
     private fun pedir(csr: String, token: String): String? {
         var tokenAtual = token
         repeat(2) { tentativa ->
@@ -158,7 +155,7 @@ class EmissorCertificado(
                 .header("Authorization", "Bearer $tokenAtual")      // o interceptor nao injeta em /auth/...
                 .post(envelope.toString().toRequestBody(jsonType))
                 .build()
-            FlowHttp.cliente.newCall(req).execute().use { resp ->
+            FlowHttp.semCertificado.newCall(req).execute().use { resp ->
                 when {
                     resp.isSuccessful -> {
                         val e = JSONObject(resp.body?.string().orEmpty())
