@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -174,7 +175,10 @@ class MonitorService : Service() {
         enviandoResposta = true
         app.eventos.enviar("confirmacao.resposta", estado, ep.messageId) { ok ->
             enviandoResposta = false
-            if (ok && episodio?.messageId == ep.messageId) encerrarEpisodio()
+            if (ok && episodio?.messageId == ep.messageId) {
+                encerrarEpisodio()
+                Toast.makeText(this, "Resposta registrada", Toast.LENGTH_SHORT).show()   // so quando a pessoa respondeu e o servidor aceitou
+            }
         }
     }
 

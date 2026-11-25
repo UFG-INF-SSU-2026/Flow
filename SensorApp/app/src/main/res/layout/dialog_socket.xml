@@ -33,11 +33,11 @@
         android:inputType="number"
         android:layout_marginBottom="16dp" />
 
-    <!-- CA do servidor (ca.crt): cada instalacao do servidor tem a sua, entao o app a importa aqui -->
+    <!-- CA do servidor: o app a baixa sozinho ao salvar com usuario e senha; a importacao manual e so o plano B -->
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Certificado do servidor (CA)"
+        android:text="Certificado do servidor (CA, baixado automaticamente)"
         android:textSize="14sp" />
 
     <TextView
@@ -50,13 +50,13 @@
         android:id="@+id/btnImportarCa"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Importar ca.crt"
+        android:text="Importar CA manualmente (avançado)"
         android:layout_marginBottom="16dp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Login (deixe em branco para manter o atual)"
+        android:text="Login: o app busca o certificado do servidor sozinho (deixe a senha em branco para manter o login atual)"
         android:textSize="14sp" />
 
     <EditText

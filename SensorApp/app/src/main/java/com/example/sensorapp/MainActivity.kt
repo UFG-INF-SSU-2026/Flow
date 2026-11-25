@@ -38,6 +38,9 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.sqrt
 
+/** "ip:porta" do servidor para o qual a CA guardada ja funcionou (ver [precisaBaixarCa]). */
+private const val PREF_CA_DESTINO = "ca_destino"
+
 class MainActivity : AppCompatActivity(), SensorEventListener {
 
     // =========================================================================================
@@ -97,6 +100,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var alerta: AlertaController
 
     private var isRunning = false
+
+    // Instante (SystemClock.elapsedRealtime) do ultimo envio aceito pelo servidor; null = nenhum nesta execucao
+    private var ultimoSucessoMs: Long? = null
 
     // IP e porta atualmente configurados (carregados do SharedPreferences em onCreate)
     private var serverIp: String = DEFAULT_SERVER_IP
@@ -204,6 +210,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        binding.tvTitulo.text = textoDaVersao(nomeDaVersao(), SCHEMA_VERSION)
 
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         prefs = getSharedPreferences("sensor_app_prefs", Context.MODE_PRIVATE)
@@ -248,6 +255,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         binding.btnSocketRede.setOnClickListener {
             abrirDialogoSocket()
         }
+        binding.btnSair.setOnClickListener { sairDaConta() }
 
         // Aciona o aviso por 10 s sem servidor (painel vermelho, alarme, vibracao, lanterna e fala); ignorado se ha episodio real
         binding.btnTestarAlerta.setOnClickListener {
@@ -276,7 +284,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         dialogView.findViewById<Button>(R.id.btnImportarCa).setOnClickListener {
             importarCa.launch(arrayOf("*/*"))       // o ca.crt nao tem tipo MIME conhecido em todos os aparelhos
         }
-        // Usuario e senha ficam em branco: preencha so para (re)fazer o login. A senha nao e guardada.
+        // O usuario do ultimo login bem-sucedido vem preenchido; a senha fica sempre em branco e nao e guardada.
+        etUsuario.setText(prefs.getString(PREF_ULTIMO_USUARIO, "") ?: "")
 
         AlertDialog.Builder(this)
             .setTitle("Configurações")
@@ -304,13 +313,42 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 atualizarTextoServidor()
 
                 if (usuario.isNotEmpty() && senha.isNotEmpty()) {
-                    // login e uma chamada de rede bloqueante: fora da thread principal
+                    // CA, login e certificado de cliente sao chamadas de rede bloqueantes: fora da thread principal
                     Thread {
-                        val r = auth.login(usuario, senha)
-                        if (r.ok) app.emissor.garantir()      // certificado de cliente: emite se faltar ou for de outra conta
+                        val destino = destinoDoServidor(novoIp, novaPorta)
+                        // 1) CA do servidor (so se faltar ou for de outro servidor). Falhou: para aqui, sem tentar o login,
+                        //    para que uma senha errada gaste UMA tentativa no servidor e nao duas.
+                        val preparo = garantirCa(novoIp, novaPorta, usuario, senha, destino)
+                        if (preparo.erro != null) {
+                            runOnUiThread {
+                                atualizarTextoServidor()
+                                Toast.makeText(this, preparo.erro, Toast.LENGTH_LONG).show()
+                            }
+                            return@Thread
+                        }
+                        // 2) login e 3) certificado de cliente (emite se faltar ou for de outra conta)
+                        var r = auth.login(usuario, senha)
+                        // CA velha (servidor com CA nova): o login falha por TLS. Baixa a CA e repete o login UMA vez, e so se
+                        // a CA nao foi baixada agora (senao ja era a nova).
+                        if (!r.ok && repetirLoginComCaNova(r.falhaDeTls, preparo.baixou)) {
+                            val erroNova = baixarEInstalarCa(novoIp, novaPorta, usuario, senha, destino)
+                            if (erroNova != null) {
+                                runOnUiThread {
+                                    atualizarTextoServidor()
+                                    Toast.makeText(this, erroNova, Toast.LENGTH_LONG).show()
+                                }
+                                return@Thread
+                            }
+                            r = auth.login(usuario, senha)
+                        }
+                        if (r.ok) {
+                            prefs.edit().putString(PREF_CA_DESTINO, destino).apply()   // a CA guardada funcionou para este servidor
+                            usuarioParaGuardar(usuario)?.let { prefs.edit().putString(PREF_ULTIMO_USUARIO, it).apply() }
+                            app.emissor.garantir()
+                        }
                         runOnUiThread {
                             atualizarTextoServidor()
-                            Toast.makeText(this, r.mensagem, Toast.LENGTH_LONG).show()
+                            Toast.makeText(this, if (r.ok) "Conectado" else r.mensagem, Toast.LENGTH_LONG).show()
                             if (r.ok && auth.sessao?.papel == "cuidador") abrirCuidador()
                         }
                     }.start()
@@ -323,7 +361,56 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             .show()
     }
 
+    /**
+     * Encerra a sessao deste aparelho para outra conta poder entrar. O certificado de cliente fica: o proximo login o
+     * descarta sozinho se for de outra conta ([EmissorCertificado.precisaEmitir]).
+     */
+    private fun sairDaConta() {
+        if (isRunning) pararEnvio()
+        MonitorService.parar(this)
+        app.auth.sair()
+        prefs.edit().remove(PREF_ULTIMO_USUARIO).apply()
+        atualizarTextoServidor()
+        atualizarStatus("Faça login em Configurações", false)
+    }
+
+    /** versionName do APK instalado (null se o sistema nao o informa). */
+    private fun nomeDaVersao(): String? = try {
+        packageManager.getPackageInfo(packageName, 0).versionName
+    } catch (e: Exception) {
+        null
+    }
+
     private fun textoCa(): String = CaProjeto.descricao(CaProjeto.carregar(this))
+
+    /**
+     * Login em um passo so: se faltar a CA (ou ela for de outro servidor), baixa do servidor com o mesmo usuario e senha,
+     * grava e recarrega o TLS. BLOQUEANTE: so chamar fora da thread principal. Se o resultado traz [PreparoCa.erro], o
+     * login NAO deve ser tentado.
+     */
+    private fun garantirCa(ip: String, porta: String, usuario: String, senha: String, destino: String): PreparoCa {
+        val origem = CaProjeto.carregar(this).origem
+        if (!precisaBaixarCa(origem, destino, prefs.getString(PREF_CA_DESTINO, null))) return PreparoCa(null, false)
+        return PreparoCa(baixarEInstalarCa(ip, porta, usuario, senha, destino), true)
+    }
+
+    /** [erro]: mensagem se a CA nao ficou pronta (null = pronta). [baixou]: houve download nesta execucao. */
+    private class PreparoCa(val erro: String?, val baixou: Boolean)
+
+    /** Baixa a CA do servidor, valida, grava e recarrega o TLS. BLOQUEANTE. Devolve null se deu certo, ou a mensagem de erro. */
+    private fun baixarEInstalarCa(ip: String, porta: String, usuario: String, senha: String, destino: String): String? {
+        return when (val r = CaServidor.baixar(ip, porta, usuario, senha)) {
+            is CaServidor.Resultado.Erro -> r.motivo      // ja traz a mensagem pronta (ver CaServidor.erroDoCodigoHttp)
+            is CaServidor.Resultado.Ok -> when (val g = CaProjeto.importar(this, r.bytes)) {
+                is ResultadoCa.Erro -> "CA não importada: ${g.motivo}"
+                is ResultadoCa.Ok -> {
+                    FlowHttp.recarregarTls()      // o login seguinte ja confia na CA nova
+                    prefs.edit().putString(PREF_CA_DESTINO, destino).apply()
+                    null
+                }
+            }
+        }
+    }
 
     /** Confere o arquivo escolhido; so uma CA valida substitui a atual. A confianca nova vale para as proximas conexoes. */
     private fun importarCaDe(uri: android.net.Uri) {
@@ -341,6 +428,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             is ResultadoCa.Ok -> {
                 if (isRunning) pararEnvio()          // o canal de push em curso usa a confianca antiga
                 FlowHttp.recarregarTls()
+                prefs.edit().remove(PREF_CA_DESTINO).apply()    // CA escolhida a mao: o proximo Salvar tenta o login direto com ela
                 caNoDialogo?.text = textoCa()
                 atualizarTextoServidor()
                 Toast.makeText(this, "CA importada. Toque em Iniciar para reconectar", Toast.LENGTH_LONG).show()
@@ -364,6 +452,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
         try {
             registrarTodosSensores()
+            ultimoSucessoMs = null
             isRunning = true
             binding.btnStartStop.text = "Parar"
             atualizarStatus("Coletando...", true)
@@ -611,7 +700,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         FlowHttp.cliente.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 runOnUiThread {
-                    atualizarStatus("Servidor indisponivel (tentando novamente)", false)
+                    atualizarStatus(statusDeFalha("Servidor indisponivel (tentando novamente)"), false)
                 }
             }
 
@@ -620,12 +709,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 runOnUiThread {
                     if (response.isSuccessful) {
                         val hora = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                        ultimoSucessoMs = SystemClock.elapsedRealtime()
                         atualizarStatus("Conectado", true)
                         binding.tvUltimoEnvio.text = "Ultimo envio: $hora"
                     } else if (response.code == 401 || response.code == 403) {
-                        atualizarStatus("Sem autorização (${response.code}): faça login em Configurações", false)
+                        atualizarStatus(statusDeFalha("Sem autorização (${response.code}): faça login em Configurações"), false)
                     } else {
-                        atualizarStatus("Erro do servidor (codigo ${response.code})", false)
+                        atualizarStatus(statusDeFalha("Erro do servidor (codigo ${response.code})"), false)
                     }
                 }
             }
@@ -762,4 +852,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private fun atualizarStatus(texto: String, conectado: Boolean) {
         binding.tvStatus.text = texto
     }
+
+    /** Status de falha do envio, com a idade do ultimo envio que deu certo (se houve). O proprio ciclo de envio o renova. */
+    private fun statusDeFalha(base: String): String =
+        textoDeFalhaDeEnvio(base, ultimoSucessoMs?.let { SystemClock.elapsedRealtime() - it })
 }

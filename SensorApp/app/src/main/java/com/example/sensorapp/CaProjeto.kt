@@ -64,7 +64,7 @@ object CaProjeto {
     fun descricao(c: Carregada): String = when (c.origem) {
         Origem.IMPORTADA -> "CA importada (SHA-256 ${impressaoDigital(c.certificados.first())})"
         Origem.EMBUTIDA -> "CA embutida no app (SHA-256 ${impressaoDigital(c.certificados.first())})"
-        Origem.NENHUMA -> "Sem CA: importe o ca.crt do servidor"
+        Origem.NENHUMA -> "Sem CA: será baixada do servidor ao salvar com usuário e senha"
     }
 
     /**

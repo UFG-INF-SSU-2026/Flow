@@ -83,6 +83,7 @@ class CuidadorActivity : AppCompatActivity() {
         }
         binding.btnSair.setOnClickListener {
             app.auth.sair()
+            app.prefs.edit().remove(PREF_ULTIMO_USUARIO).apply()
             voltarAoLogin()
         }
         app.aoSessaoExpirada = aoExpirarSessao

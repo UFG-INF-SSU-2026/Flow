@@ -32,7 +32,8 @@ class AuthClient(
     data class Sessao(val accessToken: String, val refreshToken: String, val papel: String, val userIds: List<Int>) {
         val userId: Int get() = userIds.first()
     }
-    class LoginResult(val ok: Boolean, val mensagem: String)
+    /** [falhaDeTls]: o login nem chegou ao servidor porque a CA guardada nao o valida (ver [falhaDeTlsNoServidor]). */
+    class LoginResult(val ok: Boolean, val mensagem: String, val falhaDeTls: Boolean = false)
 
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
@@ -114,7 +115,7 @@ class AuthClient(
             )
             return LoginResult(true, "Login realizado.")
         } catch (e: Exception) {
-            return LoginResult(false, "Falha de rede ou resposta inesperada: ${e.message}")
+            return LoginResult(false, "Falha de rede ou resposta inesperada: ${e.message}", falhaDeTls = falhaDeTlsNoServidor(e))
         }
     }
 

@@ -5,6 +5,7 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.cert.CertificateException
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLPeerUnverifiedException
 
 /*
@@ -41,4 +42,20 @@ fun falhaDeConexaoComCertificado(e: Throwable): Boolean {
         causa = causa.cause
     }
     return true
+}
+
+/**
+ * Falha de TLS na conexao com o servidor (handshake, cadeia ou nome nao confiaveis): [SSLException] em [e] ou em qualquer
+ * causa. Usada so no LOGIN, que sai sem certificado de cliente: la, um erro de TLS significa que a CA guardada nao
+ * valida mais o servidor (CA trocada, vencida ou de outro servidor). Tempo esgotado, rede fora e conexao recusada nao
+ * contam: nao e problema de confianca.
+ */
+fun falhaDeTlsNoServidor(e: Throwable): Boolean {
+    var causa: Throwable? = e
+    var voltas = 0
+    while (causa != null && voltas++ < 10) {
+        if (causa is SSLException) return true
+        causa = causa.cause
+    }
+    return false
 }

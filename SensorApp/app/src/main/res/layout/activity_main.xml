@@ -62,6 +62,13 @@
         android:text="Configurações"
         android:layout_marginBottom="8dp" />
 
+    <Button
+        android:id="@+id/btnSair"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Sair"
+        android:layout_marginBottom="8dp" />
+
     <!-- Aciona o aviso por 10 s sem servidor: mostra o painel vermelho, o alarme, a vibracao, a lanterna e a fala -->
     <Button
         android:id="@+id/btnTestarAlerta"

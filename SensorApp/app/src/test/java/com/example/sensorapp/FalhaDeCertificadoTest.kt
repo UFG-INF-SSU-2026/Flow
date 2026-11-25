@@ -56,4 +56,26 @@ class FalhaDeCertificadoTest {
     fun oQueNaoEFalhaDeConexaoNaoPedeCertificado() {
         assertFalse(falhaDeConexaoComCertificado(IllegalStateException("bug")))
     }
+
+    // ---- login: CA guardada nao valida mais o servidor ----
+
+    @Test
+    fun falhaDeTlsNoServidorReconheceSslException() {
+        assertTrue(falhaDeTlsNoServidor(SSLHandshakeException("handshake")))
+        assertTrue(falhaDeTlsNoServidor(SSLPeerUnverifiedException("nome")))
+        assertTrue(falhaDeTlsNoServidor(SSLHandshakeException("cadeia").initCause(CertificateException("nao confiavel"))))
+    }
+
+    @Test
+    fun falhaDeTlsNoServidorAchaASslExceptionNaCausa() {
+        assertTrue(falhaDeTlsNoServidor(java.io.IOException("envolvida", SSLHandshakeException("handshake"))))
+    }
+
+    @Test
+    fun redeForaOuTempoEsgotadoNaoEFalhaDeTls() {
+        assertFalse(falhaDeTlsNoServidor(UnknownHostException("sem rede")))
+        assertFalse(falhaDeTlsNoServidor(ConnectException("recusada")))
+        assertFalse(falhaDeTlsNoServidor(SocketTimeoutException("tempo")))
+        assertFalse(falhaDeTlsNoServidor(IllegalStateException("bug")))
+    }
 }
