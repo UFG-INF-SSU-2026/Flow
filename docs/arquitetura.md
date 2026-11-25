@@ -1,7 +1,7 @@
 # Arquitetura Geral — Flow
 
 **Disciplina:** Software para Sistemas Ubíquos
-**Cenário do projeto:** Monitoramento e assistência a uma pessoa idosa (ver `README.md` para a análise inicial completa)
+**Cenário do projeto:** Monitoramento e assistência a uma pessoa idosa (análise inicial em `docs/analise-inicial.md`)
 
 Este documento é o registro **único e versionável** das decisões de arquitetura do projeto Flow: os componentes envolvidos, o fluxo de comunicação entre eles, a responsabilidade de cada parte, o mecanismo de comunicação escolhido (e por que outros foram descartados) e as condições de falha já consideradas. Ele cobre tanto a visão **geral** (o que vale independentemente de qual protótipo está em campo) quanto o **estado atual do protótipo** (o que já está de fato implementado no código deste repositório).
 
@@ -10,13 +10,13 @@ Este documento é o registro **único e versionável** das decisões de arquitet
 ## 1. Cenário e atores
 
 - **Usuário primário:** a pessoa idosa monitorada. Uso passivo: o sistema só pede interação quando suspeita de uma queda.
-- **Usuário secundário *(abstrato)*:** cuidadores e familiares, que receberão informações e alertas (papel `cuidador`, reservado no modelo de contas).
+- **Usuário secundário:** cuidadores e familiares, que acompanham pelo app o estado e o histórico das pessoas vinculadas (papel `cuidador`).
 - **Situação de uso:** ambiente residencial, com um ou mais dispositivos junto ao idoso coletando dados continuamente.
 
 O sistema é **IoT** (dispositivos conectados enviando dados continuamente a um servidor) e **ubíquo** (sensoriamento contínuo, sem interação explícita do idoso no uso normal).
 
-- **Concreto:** o laço **percepção → decisão → atuação** está fechado. O servidor analisa o movimento, decide que uma queda é provável, aciona um alerta sonoro no próprio idoso (celular e buzzer), que responde por um botão, e registra um aviso ao cuidador (alerta no banco).
-- **Abstrato:** o aviso ao cuidador chegando a ele por um canal real, novos sensores (localização, sinais vitais) e outras ações de atuação.
+- **Concreto:** o laço **percepção → decisão → atuação** está fechado. O servidor analisa o movimento, decide que uma queda é provável, aciona avisos no próprio idoso (alarme, vibração, lanterna, voz e notificação no celular; buzzer e LEDs no ESP32), que responde por um botão, e registra o alerta, que o cuidador vê no app.
+- **Abstrato:** o aviso **ativo** ao cuidador (notificação no momento do episódio), novos sensores (sinais vitais) e outras ações de atuação.
 
 Pelo laço concreto o sistema se aproxima de um **sistema ciber-físico**; o efeito completo sobre o cuidador depende da parte abstrata.
 
@@ -28,10 +28,10 @@ Pelo laço concreto o sistema se aproxima de um **sistema ciber-físico**; o efe
 
 | Elemento | Papel | Concreto (existe) | Abstrato (visão) |
 | --- | --- | --- | --- |
-| **Sensores** | Percebem o ambiente e o comportamento do idoso | Luz/CCT, acelerômetro, orientação, magnetômetro (celular); acelerômetro MPU6050 (ESP32 simulado) | Localização, sinais vitais (pulseira, dados mockados), microfone para sons de queda |
+| **Sensores** | Percebem o ambiente e o comportamento do idoso | Luz/CCT, acelerômetro, localização (celular); acelerômetro MPU6050 (ESP32 simulado) | Sinais vitais (pulseira, dados mockados), microfone para sons de queda |
 | **Produtor / gateway** | Concentra um ou mais sensores, monta o evento, cifra e envia ao servidor. Também é **consumidor**: recebe do servidor os pedidos de confirmação | App Android; dispositivos simples (Wokwi, ESP32, Arduino) por meio do `Bridge`, cada um com a sua conta | Dispositivo dedicado por sensor não coberto pelo celular (ex.: localização) |
 | **Servidor central** | Autentica, autoriza, valida, agrega, decide e envia mensagens de volta | `SensorServer`: um único ponto lógico de consumo, com visão consolidada por pessoa | Atender mais de uma residência (servidor assíncrono, estado externo), **mantendo a topologia em estrela** |
-| **Atuadores** | Produzem efeito observável a partir de uma decisão | Alerta sonoro e botão "Estou bem" (app); buzzer e botão (Wokwi); aviso ao cuidador registrado em `alertas` | Notificação real ao cuidador; histórico consultável; outras ações |
+| **Atuadores** | Produzem efeito observável a partir de uma decisão | Alarme, vibração, lanterna, voz, notificação e botão "Estou bem" (app); buzzer, LEDs e botão (Wokwi); alerta registrado e visível ao cuidador no app | Notificação ativa ao cuidador; outras ações |
 
 Cada pessoa monitorada pode ter **mais de um produtor simultâneo** (por exemplo, o celular para luz/movimento e um dispositivo dedicado para localização), todos ligados à mesma pessoa pelo `user_id` da conta com a qual autenticaram.
 
@@ -41,7 +41,7 @@ Há dois tipos de cliente do servidor, cada dispositivo com a sua conta: o **app
 
 | Pasta | Componente | Responsabilidade |
 | --- | --- | --- |
-| `SensorApp/` | App Android (Kotlin) | Produtor real: sensores do celular. Faz login, envia telemetria, mantém o canal de push aberto e exibe o pedido de confirmação. |
+| `SensorApp/` | App Android (Kotlin) | Um só APK para dois papéis. **Idoso:** produtor real (sensores do celular), envia telemetria, mantém o canal de push num serviço em primeiro plano e exibe o pedido de confirmação. **Cuidador:** consulta o estado e o histórico das pessoas vinculadas. Nos dois, obtém a CA do servidor no login, faz login e pede o próprio certificado de cliente. |
 | `sketch/` | Dispositivo Wokwi: firmware ESP32 (`sketch.ino` e `transporte_wifi.h`, simulado no Wokwi para VS Code) | Acelerômetro MPU6050, máquina de imobilidade local, buzzer e botões. Fala **só HTTPS**, direto com a API do bridge, pelo WiFi simulado; não há serial para a rede. |
 | `Bridge/` | Repassador HTTPS fino (`bridge.py`, `api.py`) | Expõe uma API HTTPS com seis rotas fixas, exige o certificado de cliente do dispositivo nas protegidas e repassa tudo à borda sem ler, cifrar, traduzir nem guardar nada (sem conta, sem token, sem sessão). O firmware do Wokwi a usa direto; não há adaptador em software nem serial. |
 | `SensorServer/` | Servidor (Flask) | Módulos abaixo. |
@@ -53,10 +53,10 @@ Módulos do servidor (pacotes em `SensorServer/`):
 | Arquivo | Responsabilidade |
 | --- | --- |
 | **`borda/`** | Servidor 1: único com porta de rede, banco, segredos de transporte e contas. |
-| `borda/server.py` | Rotas; ingestão (aceita e põe a leitura numa fila limitada); thread de descarga (grava `leituras` em lote, manda o lote à análise e aplica as decisões); thread do vigia; thread da retenção (apaga o histórico antigo das tabelas comuns, de hora em hora); `/estado`, `/dados` (debug) e `/health`. Executa com `python -m borda`. |
+| `borda/server.py` | Rotas; ingestão (aceita e põe a leitura numa fila limitada); thread de descarga (grava `leituras` em lote, manda o lote à análise e aplica as decisões); thread do vigia; thread da retenção (apaga o histórico antigo das tabelas comuns, de hora em hora); rotas do cuidador; entrega da CA (`/auth/ca`); `/estado`, `/dados` (debug) e `/health`. Executa com `python -m borda`. |
 | `borda/cliente_analise.py` | Cliente da API da análise (`/analisar`, `/vigiar`, `/restaurar`), por HTTPS e confiando só na CA do projeto: prazo curto, detecta análise fora do ar e `boot_id` novo (análise reiniciada) e manda o estado de volta antes de seguir. |
 | `borda/efeitos.py` | Aplicar as decisões: grava confirmações, alertas, estado e, por fim, episódio + comando numa transação; só depois do commit entrega o push (SSE, app e wokwi). Se o banco falha, guarda as decisões e tenta de novo. |
-| `borda/servico.py` | Ponto de entrada da borda (`python -m borda`): serve só HTTPS em `FLOW_BORDA_HOST:FLOW_BORDA_PORT` (padrão `127.0.0.1:5000`; sem certificado não sobe), subida e desligamento ordenado. |
+| `borda/servico.py` | Ponto de entrada da borda (`python -m borda`): serve só HTTPS em `FLOW_BORDA_HOST:FLOW_BORDA_PORT` (padrão `0.0.0.0:5000`, todas as interfaces; sem certificado ou sem a CA de dispositivos não sobe), mostra na subida o IP para usar no app (os IPs de rede do certificado da borda), subida e desligamento ordenado. |
 | `borda/const.py` | Constantes da borda (porta, tokens, bloqueio de login, limite de corpo, SSE, filas, chamada à análise). Ver 14. |
 | `borda/auth.py` | **Autenticação:** contas, senhas, login, refresh, emissão e verificação de tokens (contas e sessões nas tabelas `contas` e `sessoes` do banco, pelo repositório recebido por parâmetro). Não conhece Flask. CLI: `python -m borda.auth criar-conta` (exige o banco no ar). |
 | `borda/authz.py` | **Autorização:** papel → permissões e escopo por pessoa; a negação vai para o log (rota, motivo, conta, IP; nunca o conteúdo). |
@@ -66,7 +66,7 @@ Módulos do servidor (pacotes em `SensorServer/`):
 | `borda/canal_wokwi.py` | **Servidor → Wokwi.** Rota `GET /push/wokwi` e envio ao alvo `wokwi`. |
 | `borda/tempo.py` | Único ponto de leitura do relógio na borda (`tempo.agora_utc()`): o instante da ingestão e o relógio do vigia. Os testes o congelam (fixture `relogio`). |
 | `borda/crypto_utils.py` | Envelope AES-256-GCM. |
-| `borda/emissao.py` | **Certificado de dispositivo.** Valida o CSR (EC P-256, ECDSA-SHA256, assinatura própria conferida) e emite o certificado de cliente (`clientAuth`, 7 dias, `CN` = `device_id` e `OU` = conta do token) com a CA de dispositivos. Rota `POST /auth/certificado`, só para o papel `dispositivo`. Sem a CA, `503` e o resto da borda segue. |
+| `borda/emissao.py` | **Certificado de dispositivo.** Valida o CSR (EC P-256, ECDSA-SHA256, assinatura própria conferida) e emite o certificado de cliente (`clientAuth`, 7 dias, `CN` = `device_id` e `OU` = conta do token) com a CA de dispositivos. Rota `POST /auth/certificado`, para os papéis com fonte (`idoso`, `dispositivo`, `cuidador`). Também confere o certificado de cliente de cada conexão: direto (app) ou repassado pelo bridge (ESP32). Sem a chave da CA, `503` e o resto da borda segue. |
 | **`analise/`** | Servidor 2: decide. Sem banco, sem segredo de transporte; não importa a borda nem `flow_db`. |
 | `analise/api.py` | A API HTTP e o estado em memória: `POST /analisar`, `POST /vigiar`, `POST /restaurar`, `GET /saude`, todas com o cabeçalho `X-Flow-Analise-Token`. Cada resposta traz o `boot_id` da subida. Item mais velho que `IDADE_MAX_ACAO_S` só reconstrói estado, sem push. |
 | `analise/servico.py` | Ponto de entrada da análise (`python -m analise`), servindo HTTPS em `127.0.0.1:FLOW_ANALISE_PORT` (5100). |
@@ -76,8 +76,8 @@ Módulos do servidor (pacotes em `SensorServer/`):
 | `analise/const.py` | Constantes da análise (limiares, janelas, cooldown, retenções, idade máxima para agir). Ver 14. |
 | **`comum/`** | O que os dois lados partilham: constantes comuns e carregador do `.env` (`const.py`), contratos (`schemas.py`, `contratos.py`), mensagem de push (`mensagens.py`) o **contrato da análise** (`contrato_analise.py`: `Leitura`, `Resposta`, `Decisoes` e o seu JSON, com ida e volta) e o **TLS** (`tls.py`: caminhos da CA, do certificado e da chave, contexto HTTPS do servidor, recusa de URL que não seja `https://`). |
 | **`flow_db/`** | Só a borda a usa (conexão sempre com TLS, `verify-full`): `Repo` (interface única), `Pg` (PostgreSQL; `leituras` é hypertable do TimescaleDB), `BancoFalso` (memória, para testes e `FLOW_DB_FAKE=1`), uma migração (`0001_base.sql`), CLI `python -m flow_db migrar|status`. |
-| `scripts/gerar_certificado.py` | Cria a CA do projeto (`ca.crt`, `ca.key`) e emite os certificados da borda, da análise e do banco (e `--nome <x>` para outros, como `bridge`) em `certs/` (fora do Git); copia o `ca.crt` para o app. Idempotente; `--forcar` reemite os certificados de serviço sem trocar a CA, `--forcar-ca` recria a CA, `--ip` acrescenta um endereço. |
-| `simular_queda.py` | Utilitário (exige borda e análise rodando): simula um wokwi que sofre impacto e fica imóvel. |
+| `scripts/gerar_certificado.py` | Cria a CA do projeto (`ca.crt`, `ca.key`) e a CA de dispositivos (`ca-dispositivos.*`, nunca recriada pelo script) e emite os certificados da borda, da análise e do banco (e `--nome <x>` para outros; o `bridge` sai também com `clientAuth`) em `certs/` (fora do Git); copia o `ca.crt` para o app e gera `sketch/ca_flow.h`. Idempotente; reemite só o certificado da borda quando o IP de rede muda; `--forcar` reemite os certificados de serviço sem trocar a CA, `--forcar-ca` recria a CA, `--ip` acrescenta um endereço. Detalhes em `docs/operacao.md`. |
+| `simular_queda.py` | Utilitário (exige borda e análise rodando): faz login, pede o certificado de cliente e simula um wokwi que sofre impacto e fica imóvel. |
 | `tests/` | Suíte pytest (`unit/`, `integration/` e `banco/`); ver 14.1. |
 
 Dependências: a **borda** não importa a análise (fala com ela por HTTPS) e a **análise** não importa a borda nem `flow_db`; `comum/` e `flow_db/` não importam nenhum dos dois (conferido por `tests/unit/test_fronteiras.py`). `canal_*` não conhecem `regra_queda`; `regra_queda` não conhece os canais, `regra_imobilidade` nem `mensagens` (devolve um `PedidoConfirmacao`; o `nucleo.py` monta a mensagem e a `borda/efeitos.py` entrega). `nucleo.py` importa as regras, `comum.mensagens` e `comum.contratos`; nenhuma regra importa o núcleo; `auth` não conhece Flask. Os três `const` (`comum`, `borda`, `analise`) são módulos folha (só o comum lê o `.env`), e os demais fazem `from <pacote> import const as const_<pacote>` e leem `const_<pacote>.X` na hora do uso, de modo que um único ajuste vale para todos os pontos de uso.
@@ -88,11 +88,9 @@ Ainda sem implementação. Cada um é descrito pelo papel e pelo ponto em que se
 
 | Elemento *(abstrato)* | Papel previsto | Ponto de encaixe |
 | --- | --- | --- |
-| App ou painel do cuidador | Receber alertas e consultar o histórico das pessoas vinculadas | Conta de papel `cuidador` (`user_ids` como lista, leitura escopada pelas claims); recebe push por um canal próprio. |
-| Canal de notificação ao cuidador | Entregar o aviso ao cuidador (hoje só registrado em `alertas`) | Novo módulo `canal_*.py` com a mesma interface `enviar(user_id, mensagem)`. |
+| Aviso ativo ao cuidador | Avisar o cuidador no momento do episódio (hoje ele consulta pelo app) | Serviço cliente da borda que lê o histórico do cuidador; receita em `docs/notificacao-cuidador.md`. |
 | Dispositivo de localização | Produtor dedicado, para sensor que o celular não cobre | Novo `source`; segue o contrato mínimo de qualquer produtor (6.1). |
 | Pulseira de sinais vitais | Frequência cardíaca e oximetria (dados mockados) | Idem. |
-| Push em segundo plano | Alertar o idoso com a tela bloqueada | Foreground Service e/ou FCM no `canal_app.py`, sem mudar o contrato da mensagem. |
 
 ---
 
@@ -102,6 +100,7 @@ Ainda sem implementação. Cada um é descrito pelo papel e pelo ponto em que se
 flowchart LR
     subgraph Disp["Dispositivos da mesma pessoa (user_id)"]
         APP["App Android<br/>(conta: papel idoso)"]
+        CUID["App Android<br/>(conta: papel cuidador)"]
         subgraph WK["Dispositivo Wokwi<br/>(conta: papel dispositivo)"]
             ESP["Firmware ESP32<br/>+ buzzer"]
             BR["Bridge<br/>(API HTTPS)"]
@@ -123,8 +122,9 @@ flowchart LR
         CW --> HUB
     end
 
-    APP -->|"HTTPS: POST /auth/login, /dados, /eventos"| AUTH
-    BR  -->|"HTTPS: POST /auth/login, /dados, /eventos"| AUTH
+    APP -->|"HTTPS + certificado de cliente:<br/>/auth/*, /dados, /eventos"| AUTH
+    CUID -->|"HTTPS + certificado de cliente:<br/>GET /cuidador/..."| AUTH
+    BR  -->|"HTTPS + certificado do bridge<br/>e repasse do certificado do ESP32"| AUTH
     AUTH --> AUTHZ --> SRVP
     SRVP -->|"HTTPS (127.0.0.1)"| RQ["Servidor 2 (análise): nucleo + regras"]
     RQ -->|"decisões"| EF
@@ -138,9 +138,9 @@ flowchart LR
 ```
 
 - **Ida (dispositivo → servidor):** `POST` HTTPS. Telemetria em `/dados`; eventos discretos (ack e resposta do idoso) em `/eventos`.
-- **Volta (servidor → dispositivo):** push por **SSE** (por que não WebSocket: seção 10.5). O **dispositivo abre** a conexão (`GET`) e o servidor empurra mensagens por ela. Nenhum dispositivo expõe porta; o servidor nunca precisa conhecer o endereço de um dispositivo.
+- **Volta (servidor → dispositivo):** push por **SSE** (por que SSE, e não WebSocket nem MQTT: seção 10.5). O **dispositivo abre** a conexão (`GET`) e o servidor empurra mensagens por ela. Nenhum dispositivo expõe porta; o servidor nunca precisa conhecer o endereço de um dispositivo.
 - **Borda e análise:** o Servidor 1 chama o Servidor 2 por HTTPS local (`/analisar`, `/vigiar`, `/restaurar`); o Servidor 2 nunca chama ninguém e nunca vê o banco. O banco é só do Servidor 1, e a conexão com ele é TLS.
-- **Estrela:** cada dispositivo fala diretamente com o servidor (a borda); não há nível intermediário entre dispositivos e servidor. Os dispositivos simples chegam ao servidor pelo Bridge, que mantém uma sessão (e um canal de push) por dispositivo; ele existe porque o ESP32 simulado não deve guardar nem repassar a lógica de segurança do servidor (cifra do envelope, tokens, renovação), e a conversa com ele é, ela também, só HTTPS.
+- **Estrela:** cada dispositivo fala com o servidor (a borda); não há nível de decisão entre dispositivos e servidor. Os dispositivos simples chegam ao servidor pelo Bridge, um repassador **sem estado**: sessão, tokens, envelope e certificado são do próprio firmware. Ele existe porque a borda fecha a conexão a cada resposta e um handshake TLS no ESP32 simulado custa cerca de 3,2 s: o bridge mantém aberta a conexão TLS do dispositivo e serve vários dispositivos por uma porta só. O app fala direto com a borda.
 
 ### 3.1 Sistema completo (concreto e abstrato)
 
@@ -155,14 +155,15 @@ flowchart LR
 
     LOC["Dispositivo de localização"] -->|"POST /dados"| SRV
     VIT["Pulseira de sinais vitais"] -->|"POST /dados"| SRV
-    SRV -->|"aviso"| NOT["Canal de notificação"]
-    NOT --> CUID["App do cuidador"]
+    CUID["App do cuidador"] -->|"GET estado e histórico"| SRV
+    SRV -.->|"aviso ativo"| NOT["Canal de notificação"]
+    NOT --> CUID
 
     classDef abstrato stroke-dasharray: 5 5,fill:#f4f4f4,color:#444
-    class LOC,VIT,NOT,CUID abstrato
+    class LOC,VIT,NOT abstrato
 ```
 
-As setas tracejadas entre `SensorServer` e os dispositivos concretos são o push SSE (conexão aberta pelo dispositivo); só os quatro blocos de contorno tracejado e suas setas são abstratos.
+As setas tracejadas entre `SensorServer` e os dispositivos concretos são o push SSE (conexão aberta pelo dispositivo); só os três blocos de contorno tracejado e suas setas são abstratos.
 
 ---
 
@@ -175,16 +176,16 @@ Tudo que se conecta ao servidor é uma **conta** com `papel`, `user_ids` (pessoa
 | Papel | Quem usa | Fonte | Observação |
 | --- | --- | --- | --- |
 | `idoso` | App do idoso | `app` | Exatamente um `user_id`. O `device_id` é **obrigatório** no login, mas livre (sem lista): o app o envia sempre. |
-| `dispositivo` | Dispositivo Wokwi (a conta é usada pela ponte, em nome do conjunto firmware + ponte) | `wokwi` | Exatamente um `user_id` e **ao menos um `device_id` permitido** (`--device-id`, repetível, só neste papel). |
+| `dispositivo` | Firmware do ESP32 (faz o próprio login; a ponte só repassa) | `wokwi` | Exatamente um `user_id` e **ao menos um `device_id` permitido** (`--device-id`, repetível, só neste papel). |
 | `admin` | Operação/depuração | — | Lê `GET /dados` e `GET /estado/<id>`. |
-| `cuidador` *(abstrato)* | App do cuidador | — | Reservado; `user_ids` é lista para vincular várias pessoas. A política vigente concede **conjunto vazio** de permissões (negar por padrão); a coluna `cuidador` da tabela 4.3 é o desenho futuro, sem implementação. |
+| `cuidador` | App do cuidador (mesmo APK) | `app` | Um ou mais `user_ids` (as pessoas que acompanha). `device_id` **obrigatório** no login, como o do idoso, porque vai no certificado de cliente. Só lê estado e histórico dessas pessoas. |
 
 O `user_id` é uma consequência da conta: não é digitado no app nem no bridge. Dois produtores da mesma pessoa têm contas apontando para o mesmo `user_id`, e é isso que faz o servidor agregá-los (4.4).
 
 ### 4.2 Login e tokens
 
 - **Senhas:** `scrypt` com sal por conta, comparação em tempo constante. Contas criadas por CLI (`python -m borda.auth criar-conta ...`, com `--device-id` para o papel `dispositivo`); não há auto-cadastro. Gravadas na tabela `contas` do banco; nenhum arquivo de dados fica em disco.
-- **`POST /auth/login`** (corpo em envelope cifrado): `identificador`, `segredo`, `fonte`, `device_id`. Resposta (também cifrada): `access_token`, `refresh_token`, `expires_in`, `papel`, `user_ids`. A senha nunca trafega em claro. **Quem julga o login é sempre o servidor**: a ponte só repassa o que o firmware forneceu (a linha do firmware usa `deviceId`; a ponte a traduz para `device_id`, o nome do contrato `auth-login`) e não guarda conta nem decide nada. O servidor confere o hash do segredo, a fonte da conta, o papel e, só então, o `device_id`: para `idoso` e `dispositivo` ele é **obrigatório** (ausente: `400`, `device_id_obrigatorio`); para `dispositivo` precisa ainda estar na lista da conta (senão `403`, `device_nao_permitido`). Os dois só são avaliados com a senha certa e **não contam como falha de senha**; só o `admin` pode omitir `fonte` e `device_id`. O token carrega o `device_id` aceito.
+- **`POST /auth/login`** (corpo em envelope cifrado): `identificador`, `segredo`, `fonte`, `device_id`. Resposta (também cifrada): `access_token`, `refresh_token`, `expires_in`, `papel`, `user_ids`. A senha nunca trafega em claro. **Quem julga o login é sempre o servidor**: a ponte só repassa o login que o firmware montou e não guarda conta nem decide nada. O servidor confere o hash do segredo, a fonte da conta, o papel e, só então, o `device_id`: para `idoso`, `dispositivo` e `cuidador` ele é **obrigatório** (ausente: `400`, `device_id_obrigatorio`); para `dispositivo` precisa ainda estar na lista da conta (senão `403`, `device_nao_permitido`). Os dois só são avaliados com a senha certa e **não contam como falha de senha**; só o `admin` pode omitir `fonte` e `device_id`. O token carrega o `device_id` aceito.
 - **Access token:** JWT HS256, validade padrão 1 h; claims `sub`, `papel`, `user_ids`, `fonte`, `device_id`, `iat`, `exp`, `jti`. Enviado em `Authorization: Bearer`.
 - **Refresh token:** opaco, validade padrão 7 dias, **uso único** (rotativo). O servidor guarda só o hash, na tabela `sessoes` do banco, de modo que reiniciar o servidor não derruba as sessões. O consumo é atômico (`DELETE ... RETURNING`) e, no refresh, acontece na mesma transação que grava o par novo: se o banco falhar no meio, a sessão não se perde.
 - **Bloqueio:** 5 falhas em 15 minutos para o mesmo identificador bloqueiam novas tentativas por 15 minutos (`429`). A resposta é idêntica para conta inexistente e senha errada. O contador é **por conta**, nunca por IP (todos os dispositivos de uma ponte chegam do mesmo IP). Risco registrado: quem erra a senha de uma conta várias vezes bloqueia aquele dispositivo por um tempo; o dano fica limitado a ele.
@@ -194,16 +195,18 @@ O `user_id` é uma consequência da conta: não é digitado no app nem no bridge
 
 RBAC com escopo por pessoa, **negando por padrão**.
 
-| Permissão | `idoso` | `dispositivo` | `admin` | `cuidador` *(abstrato)* |
+| Permissão | `idoso` | `dispositivo` | `admin` | `cuidador` |
 | --- | --- | --- | --- | --- |
 | `dados:enviar` (`POST /dados`) | sim, fonte `app` | sim, fonte `wokwi` | não | não |
 | `eventos:enviar` (`POST /eventos`) | sim | sim | não | não |
-| `push:receber` (`GET /push/...`) | sim, canal `app` | sim, canal `wokwi` | não | canal próprio |
-| `dados:ler`, `estado:ler` (`GET`) | não | não | sim | só pessoas vinculadas |
+| `push:receber` (`GET /push/...`) | sim, canal `app` | sim, canal `wokwi` | não | não |
+| `dados:ler`, `estado:ler` (`GET`) | não | não | sim | não |
+| `certificado:emitir` (`POST /auth/certificado`) | sim | sim | não | sim |
+| `cuidador:ler` (`GET /cuidador/...`) | não | não | não | só pessoas vinculadas |
 
 Dois estágios de verificação:
 
-1. **Papel e permissão**, antes de decifrar o corpo (decorador `exige(permissao, fonte=...)`): token válido, papel com a permissão, fonte do token igual à exigida. Falha → `401` ou `403`.
+1. **Papel e permissão**, antes de decifrar o corpo (decorador `exige(permissao, fonte=...)`): token válido, papel com a permissão, fonte do token igual à exigida e, para todo token com fonte, **certificado de cliente** cuja conta e `device_id` sejam os do token (seção 5). Falha → `401` ou `403` (`certificado_ausente`, `certificado_incompativel`).
 2. **Escopo**, depois de decifrar: `user_id` do payload deve estar em `token.user_ids`, `source` deve ser a `fonte` do token e o `device_id`/`deviceId` do payload, se declarado, deve ser o `device_id` do token (o do login; o bridge usa o `deviceId` do firmware). Falha → `403`. O `device_id` **gravado** em `/dados` e `/eventos` é sempre o do token: um payload sem `deviceId` é aceito e recebe o do token (não existe mais o `device_id` inventado a partir do `user_id`). Falha → `403`. Payload **sem** `source` válido (ausente ou fora de `app`/`wokwi`) é recusado com `400` antes da checagem de escopo, em `/dados` e em `/eventos`: nenhum caminho aceita dado ou evento sem `source`. `source` presente e diferente da fonte do token é `403`. O `user_id` precisa ser um número inteiro JSON; string (mesmo só de dígitos), booleano, decimal, `null` ou ausente é `400`. Esse estágio existe porque o `user_id` está dentro do envelope cifrado.
 
 Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do token; o cliente não escolhe de quem recebe.
@@ -214,9 +217,12 @@ Nos canais SSE o escopo é implícito: a conexão é registrada no `user_id` do 
 | --- | --- | --- |
 | `POST /auth/login` | Anônimo, com credencial no corpo cifrado | Bloqueio por conta (`429`); banco fora: `503` |
 | `POST /auth/refresh` | Quem tem refresh token válido | Uso único; banco fora: `503` |
+| `POST /auth/certificado` | Token de `idoso`, `dispositivo` ou `cuidador` (sem certificado) | Identidade do certificado vem do token |
+| `POST /auth/ca` | Anônimo, com credencial no corpo cifrado | Devolve a CA pública; mesmo bloqueio do login |
 | `POST /dados`, `POST /eventos` | `idoso` (fonte `app`) e `dispositivo` (fonte `wokwi`) | `user_id` e `source` conferidos com o token; `device_id` gravado é o do token (corpo divergente: `403`) |
 | `GET /push/app` | `idoso` | Só o `user_id` do token |
 | `GET /push/wokwi` | `dispositivo` | Só o `user_id` do token |
+| `GET /cuidador/<user_id>/estado`, `/historico` | `cuidador` | Só os `user_ids` do token (`403 fora_de_escopo`); sem localização |
 | `GET /dados` | **Só `admin`** | Depuração; inclui localização, quando houver (13.3) |
 | `GET /estado/<device_id>` | **Só `admin`** | Procura em todos os usuários |
 | `GET /health`, `GET /` | Anônimo | Sem dado pessoal (as únicas rotas abertas, além do login) |
@@ -243,11 +249,11 @@ O hub SSE entrega por `(user_id, canal)`. Duas contas `dispositivo` com `user_id
 
 - **HTTPS (TLS 1.2 ou superior) em todas as pontas:** dispositivos ↔ Servidor 1, Servidor 1 ↔ Servidor 2 e Servidor 1 ↔ Banco. Nenhuma ponta de dados fala em texto claro, nem em `127.0.0.1`; há **duas exceções de rede**, descritas em «Exceções fora do HTTPS», ao fim desta lista.
 - **CA própria do projeto**, gerada por `python scripts/gerar_certificado.py` (`SensorServer/certs/`, fora do Git): `ca.crt` (pública) e `ca.key` (segredo; só o script a lê, nenhum serviço a usa nem a monta). A CA assina **um certificado por serviço**, cada um com a sua chave: `borda.crt`, `analise.crt` e `banco.crt` (e `<nome>.crt` com `--nome`, p. ex. `bridge`, para uma API HTTPS do bridge). Cada serviço apresenta só o seu; o container do banco monta apenas `banco.crt` e `banco.key`.
-- **Os clientes confiam só na CA** (`FLOW_TLS_CA`, padrão `certs/ca.crt`): a borda (para a análise e para o banco, `sslmode=verify-full`, ou `verify-ca` em `FLOW_DB_SSLMODE`), a ponte e o app (cópia do `ca.crt` embutida como única âncora de confiança, `res/raw/flow_cert.pem`, com HTTP em texto claro proibido pela configuração de segurança de rede). Os clientes **não** confiam nas autoridades do sistema, e a verificação do certificado e do nome nunca é desligada.
-- Cada certificado vale para os nomes e IPs listados nele: o da borda, `localhost`, `127.0.0.1`, `::1`, o IP do computador na rede (detectado) e os de `--ip`/`--dns`; os da análise e do banco, `localhost` e `127.0.0.1`. Cliente que acessa por outro endereço recusa a conexão; a correção é reemitir com `--forcar` e o endereço novo. **Reemitir um certificado de serviço não troca a CA**: o app e a ponte continuam confiando, sem recompilar. Trocar a CA (`--forcar-ca`) exige recompilar o app e reemitir os certificados `--nome`.
-- **Onde a borda escuta:** só em HTTPS, em `FLOW_BORDA_HOST` (padrão `127.0.0.1`, isto é, só no próprio computador) e `FLOW_BORDA_PORT` (padrão 5000). Para o app e a ponte em outra máquina, `FLOW_BORDA_HOST` recebe o IP do computador na rede, o mesmo que consta no certificado da borda. A análise e o banco escutam sempre só em `127.0.0.1`. Não existe listener HTTP em porta nenhuma.
+- **Os clientes confiam só na CA** (`FLOW_TLS_CA`, padrão `certs/ca.crt`): a borda (para a análise e para o banco, `sslmode=verify-full`, ou `verify-ca` em `FLOW_DB_SSLMODE`), a ponte, o firmware (`sketch/ca_flow.h`) e o app (a CA obtida do servidor no login, importada por arquivo ou, se houver, a cópia embutida `res/raw/flow_cert.pem`; uma só âncora de confiança por vez, com HTTP em texto claro proibido pela configuração de segurança de rede). Os clientes **não** confiam nas autoridades do sistema, e a verificação do certificado e do nome nunca é desligada.
+- Cada certificado vale para os nomes e IPs listados nele: o da borda, `localhost`, `127.0.0.1`, `::1`, o IP do computador na rede (detectado) e os de `--ip`/`--dns`; os da análise e do banco, `localhost` e `127.0.0.1`. Cliente que acessa por outro endereço recusa a conexão; a correção é reemitir com `--forcar` e o endereço novo. **Reemitir um certificado de serviço não troca a CA**: o app e a ponte continuam confiando, sem recompilar. O script reemite sozinho o certificado da borda quando o IP de rede muda. Trocar a CA (`--forcar-ca`) exige recompilar o firmware e reemitir os certificados `--nome`; o app busca a CA nova no login.
+- **Onde a borda escuta:** só em HTTPS, em `FLOW_BORDA_HOST` (padrão `0.0.0.0`, todas as interfaces, para o app alcançá-la em qualquer rede; `127.0.0.1` restringe ao próprio computador) e `FLOW_BORDA_PORT` (padrão 5000). Na subida, a borda mostra o IP a usar no app. A análise e o banco escutam sempre só em `127.0.0.1`. Não existe listener HTTP em porta nenhuma.
 - **Sem proxy reverso, de propósito:** nada fica entre os dispositivos e a borda. A própria borda termina o TLS com o certificado dela e autentica e autoriza cada chamada; um proxy criaria um segundo ponto de terminação, de configuração e de confiança sem ganho para este escopo.
-- Escopo mínimo, de projeto acadêmico: sem rotação automática, sem revogação e sem mTLS (o servidor não pede certificado ao cliente; quem se autentica é a conta, por token).
+- **Certificado de cliente (mTLS) dos dispositivos:** uma segunda CA, a **CA de dispositivos** (`certs/ca-dispositivos.*`, independente da raiz; só a borda lê a chave), assina um certificado de cliente de 7 dias por dispositivo. O dispositivo começa sem certificado, gera a chave EC P-256 no próprio aparelho e envia só o CSR a `POST /auth/certificado`; a identidade do certificado (conta e `device_id`) vem do token. O **app** apresenta o certificado direto à borda. O **ESP32** o apresenta ao bridge, que termina o TLS dele e, ao chamar a borda, se identifica com o próprio `bridge.crt` (CA raiz, `clientAuth`, `CN=bridge`) e repassa o certificado do dispositivo no cabeçalho `X-Flow-Certificado-Cliente`; a borda só aceita esse cabeçalho de uma conexão do bridge e confere o certificado de novo. Em toda chamada protegida, a borda compara conta e `device_id` do certificado com os do token. Sem rotação automática e sem revogação: a validade curta é a proteção.
 - **Envelope AES-256-GCM** em todo corpo, por cima do TLS: `{"nonce": "<base64>", "ciphertext": "<base64>"}` (nonce de 12 bytes aleatório por mensagem, tag de 128 bits ao final do ciphertext).
 - O mesmo envelope cifra o **push**: o `data:` de cada evento SSE é um envelope.
 - Implementações equivalentes em Python (`borda/crypto_utils.py`, no servidor), Kotlin (`CryptoUtils.kt`, `javax.crypto`) e C++ (`sketch/envelope.h`, mbedTLS do ESP32). O **bridge não cifra nem decifra**: o envelope vai do firmware à borda sem ser aberto. Conferido: `sketch/host_test/verificar_contra_python.py` mostra que, com o mesmo nonce, o firmware produz exatamente o mesmo ciphertext e tag que o Python, e que cada lado decifra o do outro.
@@ -281,7 +287,7 @@ Fora disso **não há schema de aplicação unificado**: cada produtor define se
 | Push | Servidor | SSE | `queda.confirmacao_solicitada` (`timeoutMs`, `motivo`) e `queda.confirmacao_encerrada` (`resultado`). |
 | Push do servidor | Servidor → firmware (pelo bridge) | `GET /push/wokwi`, SSE, cada `data:` um envelope AES com a mensagem da seção 6 do `schemas.md` | O firmware abre o stream com o certificado de cliente, decifra, valida (`schemaVersion` 3, `userId`, `messageId`, tipo, `timeoutMs` inteiro, `resultado`) e atua. Não há mais linhas `CMD;...` nem login por iniciativa de ninguém além do firmware. |
 | Diagnóstico do firmware | Firmware via bridge | `POST /dados` | `sistema.erro`, com o código da falha (hoje `MPU_NAO_ENCONTRADO`, quando o MPU6050 não é detectado). Fica fora do vocabulário que o servidor processa: é descartado e logado, sem alerta e sem resposta de erro (`200`). |
-| Autenticação | App e bridge | `POST /auth/*` | Seção 4.2. |
+| Autenticação | App e firmware (pelo bridge) | `POST /auth/*` | Seção 4.2; certificado em `docs/schemas.md`, seção 11. |
 
 Detalhe campo a campo em `docs/schemas.md`.
 
@@ -299,6 +305,9 @@ Detalhe campo a campo em `docs/schemas.md`.
 | Rota | Método | Autorização | Papel |
 | --- | --- | --- | --- |
 | `/auth/login`, `/auth/refresh` | POST | pública | Autenticação (corpo cifrado). |
+| `/auth/certificado` | POST | `certificado:emitir` | Troca o CSR do dispositivo por um certificado de cliente (`docs/schemas.md`, seção 11). |
+| `/auth/ca` | POST | pública, com credencial no corpo cifrado | Entrega a CA do projeto (só o certificado público) para o app confiar no servidor. |
+| `/cuidador/<user_id>/estado`, `/cuidador/<user_id>/historico` | GET | `cuidador:ler` | Estado atual (última comunicação de cada dispositivo, episódio aberto, últimos alertas) e histórico de 90 dias (alertas, confirmações, episódios), cifrados; sem localização nem leituras brutas. |
 | `/dados` | POST | `dados:enviar` | Ingestão de telemetria. |
 | `/eventos` | POST | `eventos:enviar` | Eventos de retorno; vão à análise pela mesma fila das leituras. |
 | `/push/app` | GET (SSE) | `push:receber`, fonte `app` | Canal servidor → app. |
@@ -307,7 +316,7 @@ Detalhe campo a campo em `docs/schemas.md`.
 | `/estado/<device_id>` | GET | `estado:ler` (admin) | Resumo do estado da imobilidade por dispositivo, **lido de `estado_dispositivo`** (gravado pela borda a partir das decisões da análise); reflete a última decisão, não a leitura que acabou de chegar. |
 | `/`, `/health` | GET | pública | Disponibilidade da borda e saúde da análise: `analise.estado` é `ok` ou `degradado` (a última chamada a ela falhou), `analise.fila` é o que espera por ela e `analise.ultima_resposta_ha_s` são os segundos desde a última resposta boa (`null` se nunca respondeu); `borda` traz as filas (a de leituras inclui o lote que está sendo gravado), os descartes e `localizacao_rejeitadas` (13.3). Sempre `200`. |
 
-O servidor escuta só em HTTPS, em `FLOW_BORDA_HOST:FLOW_BORDA_PORT` (padrão `127.0.0.1:5000`; seção 5), e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`. **Corpo acima de `MAX_CONTENT_LENGTH` (64 KiB) é `413`** em qualquer rota com corpo (`/dados`, `/eventos`, `/auth/*`): o servidor não processa o conteúdo e a negação vai para o log sem ele. O maior corpo legítimo é um envelope de telemetria, de poucos KB. Sem token, a resposta continua `401`, antes de o corpo ser lido. conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
+O servidor escuta só em HTTPS, em `FLOW_BORDA_HOST:FLOW_BORDA_PORT` (padrão `0.0.0.0:5000`; seção 5), e roda com `threaded=True` (uma thread por stream SSE). Falhas de autenticação/autorização são `4xx`. **Corpo acima de `MAX_CONTENT_LENGTH` (64 KiB) é `413`** em qualquer rota com corpo (`/dados`, `/eventos`, `/auth/*`): o servidor não processa o conteúdo e a negação vai para o log sem ele. O maior corpo legítimo é um envelope de telemetria, de poucos KB. Sem token, a resposta continua `401`, antes de o corpo ser lido. conteúdo inválido de um evento já autenticado é descartado internamente e responde `200`.
 
 Entrada malformada **antes** de haver conteúdo interpretável é `400`: corpo decifrado que não é um objeto JSON, `source` ausente ou inválido, `user_id` inválido, `device_id` inválido no login (não string ou acima de 64 caracteres). `Last-Event-ID` inválido nunca é erro: vale `0`. `schemaVersion` não suportado em `/dados` e `/eventos` responde `200` com `descartado: true` e `motivo: "schemaVersion_nao_suportado"`, e o conteúdo não é gravado nem chega às regras; em `/auth/login` e `/auth/refresh`, a versão maior que a atual ou inválida é `400` (a ausência é aceita).
 
@@ -468,8 +477,8 @@ sequenceDiagram
 | `LIMIAR_IMPACTO` | wokwi 20, app 15 (m/s²) | Valores iniciais, a calibrar. |
 | `LIMIAR_REPOUSO` | wokwi 2, app 1,5 (m/s²) | |
 | `T_POS_IMPACTO_S` | 3 | Imobilidade exigida após o impacto. |
-| `COOLDOWN_S` | 60 | Entre episódios do mesmo usuário. |
-| `JANELA_FUSAO_S` | 2 | Idade máxima de uma leitura para participar da fusão (9.2.1). |
+| `COOLDOWN_S` | 10 | Entre episódios do mesmo usuário, contado do encerramento do anterior. |
+| `JANELA_FUSAO_S` | 0,5 | Idade máxima de uma leitura para participar da fusão (9.2.1). |
 | `INTERVALO_MAX_ENTRE_LEITURAS_S` | 2 | Sem leitura usada por mais que isso, o impacto é descartado. A calibrar. |
 | `LOG_DESATUALIZADA_INTERVALO_S` | 60 | Frequência máxima do log de leitura desatualizada. |
 | `TOLERANCIA_RELOGIO_S` | 60 | Regressão de `timestamp_envio` acima da qual a deduplicação do app assume reajuste de relógio. |
@@ -525,31 +534,65 @@ No Wokwi, `ENTREGUE_AO_CANAL` significa apenas que o **bridge** está conectado;
 3. O cliente renova o token e reconecta com `Last-Event-ID`.
 4. Qualquer queda de conexão: reconexão com recuo exponencial (1 s até 30 s). `401` → renovar o token; `403` → parar.
 
-### 10.5 Por que SSE e não WebSocket
+### 10.5 Por que SSE (e não WebSocket nem MQTT)
 
-A escolha vem de uma pergunta: **o que o servidor precisa dizer ao dispositivo, e o que o dispositivo precisa dizer de volta?** O servidor precisa apenas *empurrar* mensagens pontuais e de baixa frequência (um pedido de confirmação de queda e o seu encerramento). Tudo que o dispositivo diz ao servidor (telemetria, `push.ack`, `confirmacao.resposta`) já tem um caminho próprio: `POST` autenticado, que existe independentemente do canal de push. Com a volta *unidirecional* resolvida, a bidirecionalidade do WebSocket não é necessária.
+A pergunta que decide é: **o que o servidor precisa dizer ao dispositivo, e por onde o dispositivo responde?** O servidor
+só precisa *empurrar* mensagens pontuais e raras (o pedido de confirmação e o seu encerramento). Tudo o que o dispositivo
+diz ao servidor (telemetria, `push.ack`, `confirmacao.resposta`) já tem um caminho próprio, o `POST` autenticado. Com o
+retorno resolvido, o canal de volta precisa ser **unidirecional**, e é isso que o SSE é.
 
-| Critério neste projeto | SSE (escolhido) | WebSocket |
-| --- | --- | --- |
-| **Direção** | Servidor → cliente, o que o caso exige. O retorno vai por `POST`. | Bidirecional, mas o sentido extra duplicaria o `POST` que já existe. |
-| **Protocolo** | HTTP comum (`GET` com resposta em fluxo). Passa por onde HTTP passa; sem *handshake* de *upgrade*. | HTTP seguido de *upgrade* para outro protocolo. |
-| **Autenticação e autorização** | O estágio 1 de autorização (`exige(...)`, `Authorization: Bearer`) roda no próprio `GET`, igual a toda rota. Cada evento de retorno é autenticado na sua própria requisição. | A autenticação acontece uma vez, no *handshake*; mensagens no socket aberto exigiriam um desenho próprio de autorização por mensagem. |
-| **Dependências no servidor** | Nenhuma: um gerador do Flask com `Response(mimetype="text/event-stream")` e `threaded=True`. | Biblioteca adicional (por exemplo `flask-sock` ou `Flask-SocketIO`) e atenção ao servidor WSGI usado. |
-| **Dependências nos clientes** | App: `okhttp-sse` (mesma versão do OkHttp já usado). Bridge: `requests` em modo *stream*, que já era dependência. | App: o OkHttp já suporta WebSocket. Bridge: biblioteca nova (`websocket-client` ou equivalente). |
-| **Reconexão e retomada** | O protocolo define `id:` por evento e o cabeçalho `Last-Event-ID`, que o servidor usa para reenviar só o que ainda não expirou (10.2). A lógica de reconectar é do cliente (recuo exponencial). | Sem convenção equivalente: a retomada de mensagens perdidas seria inteiramente projeto próprio. |
-| **Depuração** | Texto puro: `curl -N -H "Authorization: Bearer ..." .../push/app` mostra o fluxo. | Exige cliente WebSocket para observar. |
-| **Criptografia do conteúdo** | O `data:` de cada evento é o mesmo envelope AES-GCM usado em todo o sistema (texto/base64). | Aceitaria binário, vantagem que aqui não se usa: o envelope já é texto. |
-| **Detecção de conexão morta** | Não há *ping/pong* nativo: o servidor envia comentário `: keepalive` a cada 15 s e o cliente usa *read timeout* maior que isso (40 s). | *Ping/pong* nativo: ponto a favor do WebSocket. |
-| **Expiração do token com o canal aberto** | Tratada com um evento explícito (`reautenticar`) e fechamento; o cliente renova e reconecta com `Last-Event-ID`. | Teria de ser desenhada à parte (mensagem de controle, fechamento com código). |
+**Os argumentos que valem para este sistema** (e que pesariam mesmo que WebSocket fosse tão simples quanto SSE):
 
-**O que se aceita ao escolher SSE** (e por que não pesa aqui):
+1. **Mantém o bridge fino.** O SSE é uma resposta HTTP em fluxo. O bridge, que não guarda estado nem entende o protocolo
+   (11.3), o repassa como qualquer outra resposta. Com WebSocket, o bridge teria de virar um proxy do protocolo: terminar
+   um WebSocket com certificado de cliente do lado do ESP32 e abrir outro, com o próprio certificado e o cabeçalho de
+   repasse, do lado da borda. Seria devolver ao bridge a responsabilidade que ele deixou de ter.
+2. **Reusa a pilha do ESP32.** O firmware já fala HTTPS com certificado de cliente para todas as rotas; o push é mais um
+   `GET` pela mesma pilha, com um leitor de linhas de texto (`push.h`). WebSocket exigiria outra biblioteca no ESP32, com
+   suporte a certificado de cliente a verificar.
+3. **Autoriza tudo como rota comum.** A abertura do canal passa pela mesma autorização de qualquer rota (token,
+   permissão, fonte e certificado de cliente), e cada resposta do dispositivo é uma requisição autenticada e autorizada
+   por si. Num WebSocket, a autorização aconteceria só na abertura; cada mensagem dentro dele precisaria de um desenho
+   próprio de autorização.
+4. **Retoma o que se perdeu sem protocolo próprio.** Cada evento tem `id:`; ao reconectar, o cliente manda o
+   `Last-Event-ID` e a borda reenvia só o que ainda não expirou, com `timeoutMs` recalculado (10.2). Em WebSocket, a
+   retomada seria inteiramente projeto nosso.
 
-- **Só um sentido.** Não pesa porque o retorno é pontual e já passa por `POST`; o desenho até se beneficia de um retorno que não depende de a conexão de push estar viva no instante da resposta.
-- **Uma conexão HTTP aberta por cliente**, e no Flask de desenvolvimento uma thread por stream. Não pesa na escala de uma residência.
-- **Keepalive e reconexão manuais.** São poucas linhas em cada cliente e ficam documentadas e testadas.
-- **Sem binário.** O sistema trafega JSON cifrado em base64, que é texto.
+| Critério | SSE (escolhido) | WebSocket | MQTT (broker) |
+| --- | --- | --- | --- |
+| Direção | Servidor → dispositivo, o que o caso exige; o retorno vai por `POST` | Bidirecional; o sentido extra duplicaria o `POST` | Publicação e assinatura nos dois sentidos |
+| Papel do bridge | Repassa uma resposta HTTP, sem entender o protocolo | Proxy do protocolo, com dois handshakes e certificado em cada lado | Cliente ou ponte do broker |
+| Autorização | A de qualquer rota, na abertura e em cada resposta | Só na abertura; por mensagem, desenho próprio | Usuários e ACLs do broker: um segundo sistema de identidade, paralelo ao da borda |
+| Retomada | `Last-Event-ID`, padrão do protocolo | Projeto próprio | Sessão persistente e QoS do broker |
+| Infraestrutura | Nenhuma além da borda | Biblioteca no servidor, no app e no ESP32 | Mais um serviço para operar, proteger com TLS e certificados, e manter no ar |
+| Conexão morta | Keepalive do servidor (15 s) e prazo de leitura do cliente (40 s) | Ping/pong nativo (ponto a favor) | Keepalive do protocolo |
 
-**Quando reavaliar WebSocket:** se o mesmo canal precisar carregar tráfego de **alta frequência nos dois sentidos** (por exemplo, telemetria contínua e comandos de latência crítica no mesmo socket), se surgirem **payloads binários**, ou se o número de clientes simultâneos exigir um servidor assíncrono em que o WebSocket seja o modelo natural. Como `sse_hub.py` isola o mecanismo de entrega e os canais (`canal_app.py`, `canal_wokwi.py`) expõem só `enviar(user_id, mensagem)`, trocar o transporte de um alvo não altera as regras nem o contrato da mensagem.
+Para o MQTT pesa ainda a premissa da seção 5: um único consumidor lógico (a borda), mensagens pequenas e raras e nenhum
+fan-out. Um broker acrescentaria um ponto de falha e de configuração de segurança sem nada a ganhar nessa escala.
+
+**O que se aceita ao escolher SSE:**
+
+- **Só um sentido.** Não pesa: o retorno é pontual e já passa por `POST`, e o desenho se beneficia de a resposta não
+  depender de o canal de push estar vivo naquele instante.
+- **Uma conexão aberta por cliente** e, no servidor do Werkzeug, uma thread por stream. Seria igual com WebSocket no
+  Flask; não pesa na escala de uma residência.
+- **Keepalive e reconexão escritos à mão**, com recuo exponencial. São poucas linhas em cada cliente, testadas.
+- **Conexão que morre em silêncio** (sem fechar). O app e o bridge só a percebem quando estoura o prazo de leitura
+  (40 s); no firmware, quando o transporte acusa o erro. Já o pedido de confirmação vale cerca de 7 s
+  (`TIMEOUT_CONFIRMACAO_S` mais `MARGEM_SERVIDOR_S`). Se a conexão morrer assim logo antes de um pedido, ele não chega a
+  tempo e o episódio fecha como `EXPIRADO`, o que fica registrado. Não é uma propriedade do SSE (um ping lento no
+  WebSocket teria o mesmo efeito), e sim do ajuste: o caminho é encurtar o keepalive e o prazo de leitura, ao custo de mais
+  tráfego. Registrado em 13.2.
+
+**Evidência.** `tests/integration/test_push_sse.py` e `test_push_resiliencia.py` (entrega, reconexão com
+`Last-Event-ID`, expiração, fila cheia), `Bridge/tests/integration/test_sse.py` (repasse em fluxo, sem acumular),
+`testes_integrados/` (push pelo bridge com certificado) e `sketch/host_test` (leitura do SSE em pedaços no firmware). As
+medições de latência e de reconexão estão no roteiro de `docs/testes.md` (V10 e V11).
+
+**Quando reavaliar:** se o mesmo canal precisar carregar tráfego de **alta frequência nos dois sentidos**, se surgirem
+**payloads binários**, ou se o número de clientes exigir um servidor assíncrono em que o WebSocket seja o modelo natural.
+Como `sse_hub.py` isola o mecanismo de entrega e os canais (`canal_app.py`, `canal_wokwi.py`) expõem só
+`enviar(user_id, mensagem)`, trocar o transporte de um alvo não altera as regras nem o contrato da mensagem.
 
 ---
 
@@ -559,11 +602,30 @@ Os dois dispositivos concretos são o **app Android** (11.1) e o **dispositivo W
 
 ### 11.1 App Android
 
-- **Ciclo de vida:** o canal de push e o envio de telemetria existem enquanto o monitoramento está ativo e o app em primeiro plano (`Iniciar` abre ambos; `Parar` e `onPause` fecham). A tela fica acesa enquanto monitora.
-- **Componentes:** `AuthClient` (login, renovação, interceptor e authenticator do OkHttp), `PushClient` (SSE com reconexão; confere a **forma** da mensagem antes de entregá-la, e mensagem fora do formato é descartada em silêncio), `MensagemPush` (validação pura da mensagem de push, testável na JVM), `AlertaController` (alarme, botão e contagem regressiva; o encerramento só vale para o episódio em curso), `MainActivity` (sensores, montagem do payload na versão atual do schema, orquestração).
-- **Acelerômetro:** registrado a ~50 Hz; a cada envio informa a magnitude da última amostra e o **máximo** desde o envio anterior.
-- **Alerta:** toca no stream de alarme do sistema (volume elevado e restaurado ao fim), mostra o botão "Estou bem" com contagem regressiva de `timeoutMs`, envia `push.ack` ao apresentar e `confirmacao.resposta` ao tocar ou ao esgotar o tempo.
-- **Credenciais:** usuário e senha só no login; o aparelho guarda os tokens. Aceita apenas o papel `idoso`; outros papéis recebem "tipo de conta ainda não suportado", que é o ponto de entrada do login único por tipo de conta.
+Um só APK; depois do login, a tela depende do papel da conta (`idoso` ou `cuidador`; outros recebem "tipo de conta ainda
+não suportado").
+
+- **Login e confiança:** em Configurações, IP, porta, usuário e senha. O app obtém a CA do servidor quando ainda não tem
+  uma ou quando o servidor mudou (`DecisaoCa`, `CaServidor`), ou usa uma importada por arquivo (`CaProjeto`). Depois do
+  login, gera a chave no Android Keystore e pede o certificado de cliente (`CsrDispositivo`, `EmissorCertificado`), que
+  renova na metade da validade; o pedido sai por um cliente sem certificado e o certificado guardado só é trocado se a
+  emissão der certo. A verificação do servidor nunca é desligada.
+- **Idoso, ciclo de vida:** **Iniciar** liga o monitoramento. O canal de push fica num serviço em primeiro plano
+  (`MonitorService`), então o pedido chega com a tela apagada ou o app em segundo plano; fechar o app encerra o
+  monitoramento. Sem FCM: o próprio app abre a conexão.
+- **Idoso, sensores:** acelerômetro (~50 Hz; a cada envio, a magnitude da última amostra e o máximo desde o envio
+  anterior), luz e temperatura de cor, e localização (opcional, "Enviar localização"; seção 13.3).
+- **Idoso, alerta:** `AlertaController` e `Atuadores` ligam juntos alarme, vibração, lanterna, voz e o aviso visual, com
+  o botão "Estou bem" e a contagem regressiva de `timeoutMs`; sem a tela, vira notificação com a ação "Estou bem". Envia
+  `push.ack` ao apresentar e `confirmacao.resposta` ao tocar ou ao esgotar o tempo. Um atuador indisponível não impede os
+  outros. **Testar alerta** aciona os avisos sem o servidor.
+- **Cuidador:** `CuidadorActivity` mostra, da pessoa escolhida, a última comunicação de cada dispositivo, o episódio em
+  aberto e o histórico, por polling a cada poucos segundos, só com a tela visível. Sem conexão, mantém o último dado e
+  mostra há quanto tempo foi atualizado. Não liga sensores nem o serviço.
+- **Componentes de rede:** `AuthClient` (login, renovação, interceptor e authenticator do OkHttp; refresh recusado pelo
+  banco fora mantém a sessão), `FlowHttp` (TLS com a CA do projeto e o certificado de cliente), `PushClient` (SSE com
+  reconexão; confere a forma da mensagem antes de entregá-la).
+- **Credenciais:** usuário e senha só no login; o aparelho guarda os tokens.
 
 ### 11.2 Dispositivo Wokwi: firmware (`sketch.ino`)
 
@@ -591,7 +653,7 @@ firmware --HTTPS (TLS 1.2+, mTLS nas rotas protegidas)--> bridge --HTTPS--> bord
 - **Chaves e confiança:** o bridge tem a chave privada e o certificado da sua API (`certs/bridge.crt`/`bridge.key`, emitidos pela CA do projeto); o firmware leva só a chave **pública** da CA (`sketch/ca_flow.h`). Para falar com a borda, o bridge confia só na CA do projeto.
 - **O que o bridge vê:** o envelope AES é opaco para ele (não tem a chave), mas as rotas, os tamanhos e os tempos são visíveis, e o `Authorization` passa por ele. O log de acesso tem só hora, método, caminho sem query string e status, sem corpo, sem cabeçalhos e sem certificado; falhas repetidas da borda geram no máximo uma linha por 10 s.
 - **Firmware → bridge (único caminho do Wokwi):** `sketch/transporte_wifi.h`. O ESP32 simulado entra no WiFi `Wokwi-GUEST`, acerta o relógio por NTP (sem o horário certo o certificado não valida e nada é enviado) e abre até três conexões TLS, cada uma com o seu cliente: sem certificado (login e emissão), com certificado (chamadas) e com certificado (o SSE do push). O certificado só vale em conexão **nova**: ao recebê-lo, as conexões são fechadas e reabertas. `host.wokwi.internal` é o PC visto de dentro da simulação, pelo **gateway de rede do Wokwi** (`wokwigw`, aberto, configurado em `[net] gateway` no `wokwi.toml`); o gateway só transporta os bytes TLS. O certificado do bridge precisa listar esse nome (`gerar_certificado.py --nome bridge --dns host.wokwi.internal`).
-- **Estado de verificação:** verificados automaticamente: o bridge (unitário e com TLS real em loopback contra uma borda falsa), o servidor, o conjunto cliente-de-teste → bridge → borda reais (`testes_integrados/`) e a lógica do firmware no PC (`sketch/host_test`, com o envelope e o CSR conferidos contra o código do servidor). **Não verificado:** o `transporte_wifi.h` e o `certificado.h` no ESP32/Wokwi (handshake com certificado de cliente, `HTTPClient` com três clientes, leitura do SSE em chunks, uso de `lastError`, memória, tempos e a API do mbedTLS do core); a compilação para o ESP32; o comportamento do `wokwigw` com conexões longas. Roteiro manual em `INSTRUCOES.md`.
+- **Estado de verificação:** verificados automaticamente: o bridge (unitário e com TLS real em loopback contra uma borda falsa), o servidor, o conjunto cliente-de-teste → bridge → borda reais (`testes_integrados/`) e a lógica do firmware no PC (`sketch/host_test`, com o envelope e o CSR conferidos contra o código do servidor). **Não verificado:** o `transporte_wifi.h` e o `certificado.h` no ESP32/Wokwi (handshake com certificado de cliente, `HTTPClient` com três clientes, leitura do SSE em chunks, uso de `lastError`, memória, tempos e a API do mbedTLS do core); a compilação para o ESP32; o comportamento do `wokwigw` com conexões longas. Roteiro manual em `docs/testes.md`.
 
 ---
 
@@ -601,7 +663,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 
 | Situação | Comportamento |
 | --- | --- |
-| Falha de rede no envio (app ou bridge) | Evento descartado; o ciclo seguinte envia dados frescos. Sem fila. |
+| Falha de rede no envio (app ou firmware) | Evento descartado; o ciclo seguinte envia dados frescos. Sem fila. |
 | Bridge indisponível para o firmware | O firmware descarta o evento, silencia a rede por 3 s e, sem sessão, tenta o login de novo a cada 5 s (sem fila; a leitura seguinte prevalece). Bridge reiniciado: invisível ao firmware (sessão e certificado são dele). |
 | Certificado de cliente recusado ou vencido | `401 certificado_ausente` ou `403 certificado_incompativel` da borda (repassados pelo bridge): o firmware descarta o certificado e pede outro com o mesmo token, com espera crescente (5 a 60 s); nada protegido sai nesse intervalo. Conexão derrubada pelo bridge no handshake (certificado vencido, de outra CA ou só `serverAuth`): depois de 3 falhas seguidas, o mesmo. Sem a chave da CA de dispositivos na borda, a emissão dá `503` (o bridge a mostra como `502`) e o firmware repete com espera crescente; a borda não sobe sem o certificado da CA de dispositivos. |
 | Nenhum canal ativo no pedido | O resultado (`SEM_CANAL_ATIVO`) vai para o log; o episódio segue até o prazo e fecha `EXPIRADO`. Não há retransmissão pela borda: o anel guarda a mensagem só até expirar, e um dispositivo que conecte antes do `expiresAt` a recebe com `timeoutMs` reduzido. Depois de expirar, o pedido não vale. |
@@ -612,7 +674,7 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 | Análise parada | A borda segue aceitando e gravando leituras; o que espera a análise fica numa fila limitada e `/health` mostra `analise.estado = degradado` e `analise.ultima_resposta_ha_s` crescendo (quanto tempo faz que ela respondeu pela última vez). Na volta (ou reinício, com `boot_id` novo e restauração), a análise recebe a fila; item mais velho que `IDADE_MAX_ACAO_S` só reconstrói estado e não age. |
 | Borda parada | A análise fica ociosa (só a borda a chama); nada é aceito nem entregue. Ao voltar, a borda reinicia limpa e restaura a análise a partir do banco; o que não expirou volta a valer. |
 | Token expira com o stream aberto | `event: reautenticar`, fechamento, renovação e reconexão. |
-| Refresh recusado | O bridge responde `401` com `relogin` (não tem o segredo) e o firmware refaz o login; o app pede nova autenticação. |
+| Refresh recusado | O firmware refaz o login sozinho; o app pede nova autenticação. Com o banco fora (`503`), o app mantém a sessão e tenta depois. |
 | Reinício | Borda: sessões persistem (estão no banco), os streams reconectam e a análise recebe o estado de volta do banco. Análise: ao voltar, o `boot_id` novo faz a borda mandar `/restaurar` (leituras recentes, episódios abertos e `messageId`s, do banco) antes da próxima chamada; os novos `id` de push são maiores que os da execução anterior. |
 | `messageId` repetido | Ignorado pelo dispositivo. |
 | Resposta duplicada ou tardia | Armazenada com `tardia: true` e o `episodeId` da sua mensagem; não reabre nem altera episódio encerrado. `messageId` desconhecida: `mensagem_desconhecida: true`. |
@@ -634,19 +696,19 @@ A telemetria é leitura de estado, não comando irreversível; por isso a resili
 ### 13.1 Mecanismos
 
 - **Confidencialidade e integridade** no transporte: TLS em todas as pontas (seção 5) e, por cima, AES-256-GCM em todo corpo e no push.
-- **Autenticação** por conta (senha com scrypt, tokens de curta duração, refresh rotativo, bloqueio por tentativas).
+- **Autenticação** por conta (senha com scrypt, tokens de curta duração, refresh rotativo, bloqueio por tentativas) e, para os dispositivos, **certificado de cliente** emitido pelo servidor e ligado à conta e ao `device_id` do token (seção 5).
 - **Autorização** negando por padrão, em dois estágios, com a identidade vinda do token e nunca do que o cliente declara.
 - **Auditoria** de negações.
 - **Banco com privilégio mínimo:** a borda entra como `flow_borda` (só `SELECT`/`INSERT`/`UPDATE`/`DELETE`, sem DDL); a credencial administrativa fica fora dos serviços (só `docker compose`, `python -m flow_db` e backup).
-- **Segredos fora do repositório:** `FLOW_JWT_SECRET` em `SensorServer/.env` (fora do Git) ou variável de ambiente; a pasta `certs/` (a CA e as chaves privadas do TLS) ignorada pelo Git (contas e sessões ficam no banco, não em arquivo); sem o segredo, ou sem o certificado, o servidor não sobe; a chave da CA (`ca.key`) só o script de geração lê.
+- **Segredos fora do repositório:** `FLOW_JWT_SECRET` em `SensorServer/.env` (fora do Git) ou variável de ambiente; a pasta `certs/` (a CA e as chaves privadas do TLS) ignorada pelo Git (contas e sessões ficam no banco, não em arquivo); sem o segredo, ou sem o certificado, o servidor não sobe; a chave da CA (`ca.key`) só o script de geração lê, e a da CA de dispositivos só a borda; `sketch/segredos.h` (conta do firmware) e `local.properties` também ficam fora do Git.
 
 ### 13.2 Limitações assumidas (projeto acadêmico)
 
 São escolhas de escopo; cada uma traz o caminho para produção.
 
 - **Chave AES fixa e compartilhada**, embutida no código dos dois lados. Produção: chave por dispositivo, negociada no pareamento (ECDH) ou guardada no Android Keystore.
-- **CA própria, sem rotação nem revogação:** quem tem a chave de um serviço (`certs/borda.key`, ...) se passa por ele, e quem tem a da CA (`certs/ca.key`) emite certificados que todos aceitam; os certificados de serviço valem 730 dias e a CA, dez anos. O app embute o certificado da CA, então trocar a CA exige recompilar (renovar um certificado de serviço, não). Produção: autoridade gerenciada, rotação e revogação automáticas e, se for o caso, mTLS.
-- **Criptografia do dispositivo simples:** firmware ↔ bridge e bridge ↔ servidor são HTTPS; o envelope AES por cima do TLS começa no bridge (o firmware não o faz). Não há trecho em texto claro, nem serial, salvo as duas exceções da seção 5.
+- **CA própria, sem rotação nem revogação:** quem tem a chave de um serviço (`certs/borda.key`, ...) se passa por ele, e quem tem a da CA (`certs/ca.key`) emite certificados que todos aceitam; os certificados de serviço valem 730 dias e a CA, dez anos. Trocar a CA exige recompilar o firmware (o app a busca no login). Produção: autoridade gerenciada, rotação e revogação automáticas.
+- **Criptografia do dispositivo simples:** firmware ↔ bridge e bridge ↔ servidor são HTTPS, e o envelope AES vai do firmware à borda sem ser aberto. Não há trecho em texto claro, nem serial, salvo as duas exceções da seção 5.
 - **Banco sem recusa forçada de conexão sem TLS:** o compose liga `ssl=on` e a borda exige `verify-full`, mas o projeto não configura o PostgreSQL para recusar clientes sem TLS; a porta só é publicada em `127.0.0.1`. **Comportamento não verificado** (o container não foi executado para isto). Produção: exigir `hostssl` no controle de acesso do PostgreSQL.
 - **A varredura de `http://` é textual:** não detecta endereço montado por concatenação nem confere o comportamento do firmware ou do app em execução; o `static_assert` do firmware e o `cleartextTrafficPermitted="false"` do app são configuração, **não verificada** aqui em compilação, aparelho ou Wokwi.
 - **Testes que sobem processos:** o comportamento deles no Windows **não foi verificado**.
@@ -655,9 +717,11 @@ São escolhas de escopo; cada uma traz o caminho para produção.
 - **Certificado de dispositivo sem revogação e sem rotação:** validade de 7 dias, um por partida; a chave AES do envelope é fixa e compartilhada. A borda confia no bridge para provar que o dispositivo tem a chave: quem tiver `bridge.key` e o certificado público de um dispositivo se passa por ele na borda (ainda precisa do token dele); `bridge.key` é segredo como as demais chaves. O bridge ainda vê o `Authorization` em trânsito (não o guarda). Aceitável só para este protótipo.
 - **Servidor do bridge no Python 3.14 e no Windows:** **não verificado** (nem os testes que sobem o bridge).
 - **Log de acesso mínimo no bridge:** hora, método, caminho sem query string e status, sem corpo e sem cabeçalhos. Não é trilha de auditoria.
-- **App só em primeiro plano:** o pedido de confirmação não chega com a tela bloqueada ou o app em segundo plano. Produção: Foreground Service e/ou FCM no `canal_app.py`, sem mudar o contrato.
+- **Push no celular sem FCM:** o pedido de confirmação depende do serviço em primeiro plano do app; com o app fechado, ou se o sistema encerrar o serviço, ele não chega. Produção: FCM no `canal_app.py`, sem mudar o contrato.
 - **Tokens no aparelho** em `SharedPreferences` privado; produção: Android Keystore.
 - **Detecção de queda** por limiares iniciais, sem validação com dados reais.
+- **Conexão de push que morre em silêncio** leva até 40 s para ser percebida pelo app e pelo bridge, mais que a validade de um pedido de confirmação (cerca de 7 s); um pedido nesse intervalo fecha como `EXPIRADO` (10.5). Produção: keepalive e prazo de leitura mais curtos.
+- **Cuidador por consulta:** o cuidador vê estado e histórico quando abre o app (polling); não é avisado no momento do episódio.
 
 ### 13.3 Localização (dado sensível)
 
@@ -678,7 +742,8 @@ A telemetria do app pode trazer o bloco opcional `localizacao` (contrato em `doc
 | `FLOW_JWT_SECRET` | `SensorServer/.env` ou ambiente | Obrigatório; ≥ 32 bytes. |
 | `FLOW_ANALISE_TOKEN`, `FLOW_ANALISE_PORT`, `FLOW_ANALISE_URL` | `SensorServer/.env` ou ambiente | Token compartilhado entre borda e análise (obrigatório, ≥ 16 caracteres); porta da análise (padrão 5100, só em `127.0.0.1`); endereço que a borda usa (padrão `https://127.0.0.1:5100`; precisa ser `https://`). Um só `.env`: a análise lê dele apenas o que começa com `FLOW_ANALISE_` ou `FLOW_TLS_`. |
 | `FLOW_TLS_CA`, `FLOW_TLS_CERT`, `FLOW_TLS_KEY` | `SensorServer/.env` ou ambiente | Opcionais (caminho relativo vale a partir de `SensorServer/`). `FLOW_TLS_CA` é a confiança dos clientes (padrão `certs/ca.crt`); `FLOW_TLS_CERT` e `FLOW_TLS_KEY` são o par de quem serve (padrão `certs/borda.*` na borda e `certs/analise.*` na análise). Tudo gerado por `scripts/gerar_certificado.py`. A borda e a análise não sobem sem o par; a borda usa a CA para conferir a análise e o banco. Como há um só `.env`, definir o par ali valeria para os dois serviços: deixe os padrões. |
-| `FLOW_BORDA_HOST`, `FLOW_BORDA_PORT` | `SensorServer/.env` ou ambiente | Onde a borda escuta, só em HTTPS (padrão `127.0.0.1` e `5000`). Para app e ponte em outra máquina, o IP do computador na rede (o do certificado da borda). |
+| `FLOW_BORDA_HOST`, `FLOW_BORDA_PORT` | `SensorServer/.env` ou ambiente | Onde a borda escuta, só em HTTPS (padrão `0.0.0.0`, todas as interfaces, e `5000`). `127.0.0.1` restringe ao próprio computador. |
+| `FLOW_CA_DISPOSITIVOS_CERT`, `FLOW_CA_DISPOSITIVOS_KEY` | `SensorServer/.env` ou ambiente | Opcionais (padrão `certs/ca-dispositivos.*`). A borda não sobe sem o certificado; sem a chave, só a emissão dá `503`. |
 | `FLOW_DB_SSLMODE` | `SensorServer/.env` ou ambiente | `verify-full` (padrão) ou `verify-ca`; não há modo sem TLS. |
 | `FLOW_DB_PASSWORD`, `FLOW_DB_USER`, `FLOW_DB_NAME`, `FLOW_DB_HOST`, `FLOW_DB_PORT` | `SensorServer/.env` ou ambiente | O papel da **borda** no banco (`flow_borda` por padrão, sem DDL); só a senha é obrigatória. |
 | `FLOW_DB_ADMIN_USER`, `FLOW_DB_ADMIN_PASSWORD` | `SensorServer/.env` | O papel **administrativo** (o que o `docker-compose.yml` cria): lido só pelo `docker compose`, por `python -m flow_db` e pelo backup. O carregador do `.env` **não** o põe no ambiente da borda, do modo de desenvolvimento, da CLI de contas nem da análise. |
@@ -686,30 +751,31 @@ A telemetria do app pode trazer o bloco opcional `localizacao` (contrato em `doc
 | `FLOW_SEM_THREADS` | ambiente do servidor (testes) | `1` desliga as threads de fundo da borda (descarga e vigia) e a exigência do segredo e da análise na subida; usado pela suíte de testes. |
 | `FLOW_SENHA` | ambiente da CLI `borda/auth.py` | Opcional; senha sem prompt ao criar contas. |
 | `FLOW_SEM_DOTENV` | ambiente (testes) | `1` impede a leitura dos `.env` reais; a suíte do servidor e a do bridge o definem. Variável de ambiente já definida sempre vence o `.env`. |
-| `FLOW_SERVIDOR`, `FLOW_TLS_CA`, `FLOW_BRIDGE_HOST`, `FLOW_BRIDGE_PORT`, `FLOW_BRIDGE_API_CERT`, `FLOW_BRIDGE_API_KEY`, `FLOW_BRIDGE_MAX_SIMULACOES` | `Bridge/.env` ou ambiente | Todas têm padrão. `FLOW_SERVIDOR` precisa ser `https://` (padrão `https://127.0.0.1:5000`); `FLOW_TLS_CA` é a CA do projeto (`ca.crt`), a única confiança do bridge; a API escuta em `127.0.0.1:5443` com o par `bridge.crt`/`bridge.key`. O bridge não tem conta: a conta de cada dispositivo (identificador e segredo) está no firmware (`sketch/segredos.h`) e o `deviceId` é o do firmware. |
-| Usuário e senha, IP e porta | tela "Configurações" do app | O app usa sempre `https://`; o IP precisa estar no certificado. |
+| `FLOW_SERVIDOR`, `FLOW_TLS_CA`, `FLOW_BRIDGE_HOST`, `FLOW_BRIDGE_PORT`, `FLOW_BRIDGE_API_CERT`, `FLOW_BRIDGE_API_KEY`, `FLOW_BRIDGE_MAX_SIMULACOES` | `Bridge/.env` ou ambiente | Todas têm padrão. `FLOW_SERVIDOR` precisa ser `https://` (padrão `https://127.0.0.1:5000`); `FLOW_TLS_CA` é a CA do projeto (`ca.crt`), a única confiança do bridge; `FLOW_CA_DISPOSITIVOS_CERT` (padrão `../SensorServer/certs/ca-dispositivos.crt`) confere o certificado do firmware; a API escuta em `127.0.0.1:5443` com o par `bridge.crt`/`bridge.key`, que também identifica o bridge na borda. O bridge não tem conta: a conta de cada dispositivo (identificador e segredo) está no firmware (`sketch/segredos.h`) e o `deviceId` é o do firmware. |
+| Usuário e senha, IP e porta | tela "Configurações" do app | O app usa sempre `https://`; o IP precisa estar no certificado (a borda o mostra ao subir). |
 | Timeout do botão | `SensorServer/comum/const.py` | Sem recompilar app nem firmware. |
 | Limiares, cooldown, fusão de fontes, retenções | `SensorServer/analise/const.py` | Idem. |
 | Limite de corpo (`MAX_CONTENT_LENGTH`), validade dos tokens, bloqueio de login, fila do SSE, filas e prazos da chamada à análise | `SensorServer/borda/const.py` | Idem. |
 | Versão atual de cada contrato | `SensorServer/comum/const.py` | Cada constante tem comentário com unidade e efeito. |
 | Versão do core ESP32 | `arduino-cli core list` | 3.x (usa `tone`/`noTone`). |
 
-Ordem de subida: CA e certificados TLS e banco (`scripts/preparar.*` fazem os dois) → contas criadas → borda e análise (a ordem entre as duas é indiferente) → bridge → `wokwigw` → simulação Wokwi (aba visível) → app. O firmware refaz o login sozinho a cada 5 s, então a ordem entre bridge e simulação é indiferente; o `wokwigw` precisa estar de pé antes da simulação. Compilar o app exige a CA já gerada (`res/raw/flow_cert.pem`). Com `FLOW_BORDA_HOST` no IP da rede, o firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
+Ordem de subida: CA e certificados TLS e banco (`scripts/preparar.*` fazem os dois) → contas criadas → borda e análise (a ordem entre as duas é indiferente) → bridge → `wokwigw` → simulação Wokwi (aba visível) → app. O firmware refaz o login sozinho a cada 5 s, então a ordem entre bridge e simulação é indiferente; o `wokwigw` precisa estar de pé antes da simulação. O firewall do computador libera a **entrada** na porta 5000 (celular e bridge conectam *no servidor*; nada conecta no celular).
 
 
 
 ### 14.1 Testes
 
-| Alvo | Como | Observação |
-| --- | --- | --- |
-| Servidor | `cd SensorServer && python -m pytest` (`pytest.ini`) | `tests/unit/` (módulos isolados: auth, authz, mensagens, hub SSE, regra de queda por entrada, estado e retorno, regras legadas, núcleo das regras, contrato e API da análise, contrato do repositório no banco falso, fronteiras entre os pacotes, constantes) e `tests/integration/` (rotas HTTP, autenticação e autorização, push SSE e sua resiliência, falha de canal, isolamento entre dispositivos, `user_id`, limite de corpo, inicialização, banco e análise fora do ar, e queda ponta a ponta). O TLS tem um teste de configuração (`tests/unit/test_tls.py`: o certificado serve a análise, o cliente da borda o confere e recusa uma URL `http://`, e o banco recebe `verify-full`). Os de integração seguem sem TLS, com uma exceção: `tests/integration/test_texto_claro_recusado.py` sobe os processos reais (`python -m borda`, `python -m borda.server` e `python -m analise`) em loopback, com certificado de teste, e confere que só respondem por HTTPS e recusam texto claro. `tests/unit/test_sem_texto_claro.py` varre o repositório atrás de `http://` e `ws://` fora de uma lista de exceções. Nos testes de integração a análise roda em memória, no lugar do processo, chamada pelo mesmo cliente da produção (`tests/_pipeline.py`; a descarga, a análise e a entrega rodam de forma síncrona depois de cada POST), sobre o banco falso. `pytest -m banco` roda o mesmo contrato do repositório no PostgreSQL real (banco descartável `flow_teste`). Usa segredo próprio, sem threads de fundo, e usa o banco falso em memória, que também guarda contas e sessões: não toca nos dados reais. |
-| Bridge | `cd Bridge && python -m pytest` (`pytest.ini`) | `tests/unit/` (lista de rotas, repasse, cabeçalhos, `502`/`504`/`413`, repasse do certificado no cabeçalho e identidade própria do bridge, configuração, recusa de `http://`, ausência de estado) e `tests/integration/` (o bridge real em TLS, loopback e porta livre, contra uma borda falsa que pede o certificado do bridge, com PKI de teste: certificado do dispositivo repassado no cabeçalho, cabeçalho forjado apagado, de outra CA, da raiz, vencido, só `serverAuth` e sem `ExtendedKeyUsage`; SSE em fluxo; falhas da borda; reinício; conexão persistente; texto claro recusado). Sem rede externa. |
-| Servidor + bridge | `cd testes_integrados && python -m pytest` | Cliente com o papel do firmware → bridge real → borda real (banco falso), tudo em TLS e com o certificado exigido pela borda: login, emissão, telemetria, push, `401`/`403` de certificado e cabeçalho forjado. |
-| Firmware | `sketch/host_test/` | Lógica do firmware no PC (Arduino falso e servidor falso): envelope, login e tokens, CSR real, boot, reemissão, leitura do push, buzzer e LEDs; `verificar_contra_python.py` confere envelope e CSR contra o servidor. Opcional; não cobre o `transporte_wifi.h` real. |
-| App | `SensorApp/app/src/test/` | Testes de unidade na JVM da validação das mensagens de push (`validarPush`). O restante do app (sensores, som, rede) não tem teste automatizado. |
-| Fim a fim sem hardware | `SensorServer/simular_queda.py` | Dispara o ciclo completo contra borda e análise reais (os dois processos no ar; confere as tabelas no banco). |
+Comandos, módulos cobertos, resultados, relação com os requisitos e o roteiro das verificações manuais:
+`docs/testes.md`. Em resumo:
 
-O cooldown de 60 s entre episódios vale para os testes manuais: para repetir `simular_queda.py`, reinicie o servidor ou aguarde.
+| Alvo | Como |
+| --- | --- |
+| Servidor | `cd SensorServer && python -m pytest` (unitários e integração; os de certificado de cliente, push e queda ponta a ponta com TLS real em loopback) e `python -m pytest -m banco` (contrato do repositório no PostgreSQL real) |
+| Bridge | `cd Bridge && python -m pytest` (bridge real em TLS contra uma borda falsa) |
+| Servidor + bridge | `cd testes_integrados && python -m pytest` (cliente no papel do firmware → bridge real → borda real) |
+| Firmware | `sketch/host_test/` (lógica do firmware no PC; envelope e CSR conferidos contra o servidor) |
+| App | `cd SensorApp && ./gradlew test` (lógica pura na JVM) |
+| Fim a fim sem hardware | `SensorServer/simular_queda.py` contra borda e análise reais |
 
 ---
 
@@ -717,17 +783,16 @@ O cooldown de 60 s entre episódios vale para os testes manuais: para repetir `s
 
 Itens abstratos que **não** são elementos novos do sistema (esses estão em 2.3), e sim decisões ou rotinas em aberto sobre o que já existe:
 
-- **Login único com tipos de conta:** o modelo já separa papéis e escopos; falta o papel `cuidador` na política e o app correspondente (2.3).
+- **Aviso ativo ao cuidador:** hoje o cuidador consulta; avisá-lo no momento do episódio é um serviço à parte (2.3).
 - **Destino da confirmação:** definir o que fazer com a resposta do idoso (escalar ao cuidador, silenciar regras). Hoje o servidor só armazena.
 - **Dispositivo silencioso:** rotina que dispare o alerta de "sem comunicação"; os dados para calculá-la já existem.
-- **Segurança de transporte:** chave AES por dispositivo, e rotação automática e revogação dos certificados e, se for o caso, mTLS (13.2).
+- **Segurança de transporte:** chave AES por dispositivo, e rotação automática e revogação dos certificados (13.2).
 - **Calibração da detecção de queda** com dados reais (9.4).
 
 ### 15.1 Pendências registradas
 
-- **Serviço de notificação aos cuidadores:** seria um terceiro serviço, **cliente da borda** (conta com papel `cuidador`, HTTPS e token), nunca do banco nem da análise; precisaria de uma rota de leitura de `alertas` e `confirmacoes` na borda, restrita aos `user_id` do token. Receita em `docs/notificacao-cuidador.md`; o serviço e a rota não existem.
+- **Serviço de notificação aos cuidadores:** seria um terceiro serviço, **cliente da borda** (conta com papel `cuidador`, HTTPS, token e certificado), nunca do banco nem da análise; leria a rota de histórico do cuidador, que já existe. Receita em `docs/notificacao-cuidador.md`; o serviço não existe.
 - **Chave AES por dispositivo:** hoje fixa e compartilhada (13.2).
 - **Compressão e resumos contínuos** (hora/dia): não feitos, de propósito, porque nenhuma regra os usa. A retenção existe (`leituras` 14 dias pela política do TimescaleDB; `alertas`, `confirmacoes`, `episodios` encerrados e `comandos_push`, 90 dias, por um passo horário da borda). Ver `docs/banco.md`.
-- **Refresh com o banco fora, no app:** a borda responde `503` ao refresh quando o banco está indisponível (a sessão não é consumida), mas `AuthClient.renovar` do app trata qualquer resposta sem corpo como refresh recusado e apaga a sessão local, deslogando o idoso. Correção prevista: em `renovar`, com código HTTP 500 ou mais, devolver `false` sem chamar `sair()`. O bridge não sofre disso: refaz o login e tenta de novo.
 - **Auditoria de negações em banco:** hoje a negação vai só para o log; guardar em tabela fica para quando for necessária.
 - **Fila de espera durável:** as filas de leituras e de itens à espera da análise são em memória; se a borda cair com a fila cheia, o que não foi gravado se perde (a análise se refaz do banco).

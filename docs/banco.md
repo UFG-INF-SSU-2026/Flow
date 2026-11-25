@@ -121,5 +121,5 @@ SELECT id, instante_ingestao, user_id, fonte FROM leituras ORDER BY id DESC LIMI
 
 ## Pendências
 
-- **Compressão e agregados contínuos:** não estão configurados, de propósito (o volume não pede). Se o professor quiser um uso mais forte de série temporal, um agregado horário em `leituras` é o primeiro candidato.
+- **Compressão e agregados contínuos:** não estão configurados, de propósito (o volume não pede). Se for preciso um uso mais forte de série temporal, um agregado horário em `leituras` é o primeiro candidato.
 - **Backup automático:** não existe; `scripts/backup.sh` é manual.

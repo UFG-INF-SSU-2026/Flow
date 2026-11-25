@@ -8,6 +8,6 @@ elf = 'build/sketch.ino.elf'
 #
 # Gateway de rede do Wokwi: e ele que deixa o ESP32 simulado alcancar o seu PC, como host.wokwi.internal (o nome que consta
 # no certificado do bridge). Rode o wokwigw (https://github.com/wokwi/wokwigw, releases) ANTES de iniciar a simulacao;
-# ele escuta em localhost:9011. Ver INSTRUCOES.md, secao 2.
+# ele escuta em localhost:9011. Ver docs/wokwi.md.
 [net]
 gateway = "ws://localhost:9011"

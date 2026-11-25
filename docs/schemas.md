@@ -5,7 +5,7 @@ Documento único dos contratos que passam pelo servidor. Cada seção traz o sch
 
 Cada schema evolui de forma independente: a versão atual de cada um fica na tabela abaixo e no cabeçalho da sua seção, e as regras gerais se referem sempre à "versão atual do schema", nunca a um número fixo.
 
-> **Fonte única dos contratos:** os schemas legíveis por máquina ficam em `SensorServer/schemas/` (um arquivo por contrato, com `x-versao`; política de versão em `schemas/LEIAME.md`). A borda confere a **estrutura** contra eles (`validacao.py`); a **semântica** (faixas, sentinelas) é regra da análise. Este documento é a descrição humana e é conferido contra os arquivos e contra `const.py` por `tests/unit/test_contratos.py`. A seção 3 (comando do bridge ao firmware) não é JSON e não tem arquivo de schema.
+> **Fonte única dos contratos:** os schemas legíveis por máquina ficam em `SensorServer/schemas/` (um arquivo por contrato, com `x-versao`; política de versão em `SensorServer/schemas/README.md`). A borda confere a **estrutura** contra eles (`validacao.py`); a **semântica** (faixas, sentinelas) é regra da análise. Este documento é a descrição humana e é conferido contra os arquivos e contra `const.py` por `tests/unit/test_contratos.py`. A seção 3 (comando do bridge ao firmware) não é JSON e não tem arquivo de schema.
 
 ## Versões atuais
 
@@ -379,7 +379,7 @@ Campos comuns: `timestamp` (ISO 8601 UTC) e `tipo`: `episodio.aberto`, `push.ent
 
 `POST /auth/certificado` (corpo e resposta em envelope) · **Versão atual: 1**
 
-Troca o pedido de certificado (CSR) que o cliente gerou por um certificado de cliente de validade curta, assinado pela CA de dispositivos (independente da CA raiz). A chave privada é gerada no próprio cliente e nunca chega ao servidor. Exige `Authorization: Bearer` de um token com a permissão `certificado:emitir`, que têm os papéis `idoso` (fonte `app`) e `dispositivo` (fonte `wokwi`); `admin` e `cuidador` recebem `403`.
+Troca o pedido de certificado (CSR) que o cliente gerou por um certificado de cliente de validade curta, assinado pela CA de dispositivos (independente da CA raiz). A chave privada é gerada no próprio cliente e nunca chega ao servidor. Exige `Authorization: Bearer` de um token com a permissão `certificado:emitir`, que têm os papéis `idoso` e `cuidador` (fonte `app`) e `dispositivo` (fonte `wokwi`); `admin` recebe `403`.
 
 Requisição:
 
@@ -408,7 +408,7 @@ Certificado emitido:
 
 Falhas: `400` com `codigo: csr_invalido` (CSR recusado: texto que não é um único PEM de pedido, chave que não é EC P-256, assinatura que não é ECDSA com SHA-256 ou que não confere) ou corpo fora do contrato ou `schemaVersion` inválido ou maior que a atual; `401` sem token ou token inválido; `403` papel sem a permissão (`sem_permissao`); `503` com `codigo: emissao_indisponivel` (CA de dispositivos ausente, ilegível, vencida ou com chave que não corresponde ao certificado; as demais rotas seguem funcionando). Nenhuma resposta nem mensagem de erro traz o conteúdo do CSR.
 
-**Uso do certificado pelo app (a borda confere).** O app fala direto com a borda, sem bridge. Se a borda subiu com a CA de dispositivos (`certs/ca-dispositivos.crt`), o TLS passa a pedir certificado de cliente de forma opcional e a confiar só nessa CA: certificado de outra CA, vencido ou sem `clientAuth` tem o handshake recusado. Para um token com fonte `app`, toda rota protegida, exceto esta, exige que a conexão traga um certificado cujo `OU` e `CN` sejam a conta e o `device_id` do token: sem certificado, `401` com `codigo: certificado_ausente` (o app emite o seu e repete); certificado de outra conta ou de outro `device_id`, `403` com `codigo: certificado_incompativel`. Login, refresh e esta rota passam sem certificado, porque quem as chama ainda não tem um. Sem a CA na subida, nada é exigido e a borda avisa no console. O certificado vale por conexão: o app precisa abrir uma conexão nova depois de receber o certificado. O Wokwi (fonte `wokwi`) passa pelo bridge, e a borda **também** exige dele o certificado: o bridge termina o TLS do dispositivo, o confere no handshake e, na conexão com a borda, se identifica com o próprio certificado (`certs/bridge.crt`, CA raiz, `clientAuth`, `CN=bridge`) e repassa o do dispositivo no cabeçalho `X-Flow-Certificado-Cliente` (DER em base64, sem quebras de linha). A borda só lê esse cabeçalho numa conexão do bridge, confere o certificado repassado de novo (CA de dispositivos, validade, `clientAuth`) e compara conta e `device_id` com o token, com os mesmos `401 certificado_ausente` e `403 certificado_incompativel`. Um token `wokwi` que fale direto com a borda, sem certificado, leva `401`.
+**Uso do certificado (a borda confere).** A borda não sobe sem a CA de dispositivos (`certs/ca-dispositivos.crt`). O TLS dela pede certificado de cliente de forma opcional e confia nessa CA (e na raiz, só para o certificado do bridge): certificado de outra CA, vencido ou sem `clientAuth` tem o handshake recusado ou é ignorado. O app (e o cuidador) fala direto com a borda, sem bridge. Para todo token com fonte, toda rota protegida, exceto esta, exige que a conexão traga um certificado cujo `OU` e `CN` sejam a conta e o `device_id` do token: sem certificado, `401` com `codigo: certificado_ausente` (o app emite o seu e repete); certificado de outra conta ou de outro `device_id`, `403` com `codigo: certificado_incompativel`. Login, refresh e esta rota passam sem certificado, porque quem as chama ainda não tem um. O certificado vale por conexão: o app precisa abrir uma conexão nova depois de receber o certificado. O Wokwi (fonte `wokwi`) passa pelo bridge, e a borda **também** exige dele o certificado: o bridge termina o TLS do dispositivo, o confere no handshake e, na conexão com a borda, se identifica com o próprio certificado (`certs/bridge.crt`, CA raiz, `clientAuth`, `CN=bridge`) e repassa o do dispositivo no cabeçalho `X-Flow-Certificado-Cliente` (DER em base64, sem quebras de linha). A borda só lê esse cabeçalho numa conexão do bridge, confere o certificado repassado de novo (CA de dispositivos, validade, `clientAuth`) e compara conta e `device_id` com o token, com os mesmos `401 certificado_ausente` e `403 certificado_incompativel`. Um token `wokwi` que fale direto com a borda, sem certificado, leva `401`.
 
 A emissão é registrada no log da borda (serial, conta, `device_id` e fim da validade), nunca o CSR, o certificado, o token nem chave. Não há tabela, consulta nem revogação: a validade curta é a única proteção. A resposta não tem schema próprio, como nas demais rotas de `/auth`.
 
@@ -417,3 +417,25 @@ A emissão é registrada no log da borda (serial, conta, `device_id` e fim da va
 | Versão | Mudança |
 | --- | --- |
 | v1 (criação) | Contrato de emissão de certificado criado. |
+
+---
+
+## 12. Cuidador: estado e histórico (saída do servidor)
+
+`GET /cuidador/<user_id>/estado` e `GET /cuidador/<user_id>/historico` · resposta em envelope · sem schema de pedido (não há corpo)
+
+Exigem token de `cuidador` (permissão `cuidador:ler`) com certificado de cliente, e o `user_id` precisa estar nos
+`user_ids` do token (senão `403` com `codigo: fora_de_escopo`). Banco fora: `503`. Datas em ISO 8601 com fuso.
+
+| Campo | Rota | Conteúdo |
+| --- | --- | --- |
+| `schemaVersion`, `userId`, `geradoEm` | as duas | versão (1), a pessoa e o instante da resposta no servidor |
+| `comunicacoes` | estado | `[{deviceId, fonte, instante}]`: a última leitura de cada dispositivo |
+| `episodioAberto` | estado | episódio em aberto ou `null` |
+| `alertas` | as duas | `[{instante, deviceId, tipo, mensagem, episodioId}]`; no estado, os mais recentes |
+| `confirmacoes` | histórico | `[{instante, tipo, episodioId, resultado?, estado?, motivo?}]` |
+| `episodios` | histórico | `[{episodioId, deviceId, tipo, estado, abertoEm, atualizadoEm, encerradoEm, resultado}]` |
+
+O histórico alcança `RETENCAO_HISTORICO_DIAS` (90) e traz até `HISTORICO_CUIDADOR_MAX` itens de cada lista, mais
+recentes primeiro. Localização e leituras brutas nunca saem nestas rotas.
+
