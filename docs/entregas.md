@@ -1,35 +1,35 @@
 # Entregas da disciplina
 
-Onde está cada item exigido no Marco 4 e na entrega final, o registro de atendimento ao feedback, as declarações, as
-contribuições individuais e o uso de IA.
+Índice dos itens exigidos no Marco 4 e na entrega final, e o que não está no relatório técnico: o registro de
+atendimento ao feedback e a declaração sobre dados pessoais.
 
-> Os campos marcados com *(a preencher)* são completados pelo grupo antes de cada entrega.
+O **relatório técnico** ([`relatorio.pdf`](relatorio.pdf)) traz os
+resultados dos testes e das verificações, com as evidências, as limitações, as contribuições individuais e a declaração
+de uso de IA. Esses itens não se repetem aqui.
 
 ## Marco 4
 
 | Item | Onde |
 | --- | --- |
 | Aplicativo móvel (APK) | [Releases](https://github.com/UFG-INF-SSU-2026/Flow/releases/latest); código em `SensorApp/`; usa acelerômetro, luz e localização do celular |
-| Persistência | PostgreSQL com TimescaleDB ([`banco.md`](banco.md)); verificação V3 em [`testes.md`](testes.md) |
-| Testes automatizados | [`testes.md`](testes.md): comandos, módulos cobertos, resultados e relação com os requisitos |
+| Persistência | PostgreSQL com TimescaleDB ([`banco.md`](banco.md)); roteiro V3 em [`testes.md`](testes.md), resultado no relatório |
+| Testes automatizados | Comandos, módulos cobertos e relação com os requisitos em [`testes.md`](testes.md); resultados e evidências no relatório |
 | Documentação de implantação | [`INSTRUCOES.md`](../INSTRUCOES.md) e [`operacao.md`](operacao.md) |
-| Relatório técnico (artigo) | *(a preencher: caminho do PDF)* |
+| Relatório técnico (artigo) | [`relatorio.pdf`](relatorio.pdf) |
 | Diagrama e distribuição | [`arquitetura.md`](arquitetura.md), seções 2 e 3 |
 | Contratos e validação | [`schemas.md`](schemas.md) e `SensorServer/schemas/` |
 | Regras com estado e tempo | [`arquitetura.md`](arquitetura.md), seções 8 e 9 |
 | Autenticação, autorização e canal protegido | [`arquitetura.md`](arquitetura.md), seções 4, 5 e 13 |
-| Falha e recuperação | [`arquitetura.md`](arquitetura.md), seção 12; verificações V7 a V9 em [`testes.md`](testes.md) |
+| Falha e recuperação | [`arquitetura.md`](arquitetura.md), seção 12; roteiro V7 a V9 em [`testes.md`](testes.md), resultado no relatório |
 | Vídeo (até 15 min) | *(a preencher: link acessível ao professor)* |
+| Limitações, contribuições individuais e uso de IA | Relatório técnico |
 
 ## Declarações
 
-### Simulações
+### Simulações e limitações
 
-- O **ESP32** é simulado no Wokwi (placa, acelerômetro MPU6050, buzzer, LEDs e botões) e chega à rede pelo gateway do
-  Wokwi (`wokwigw`). Não há hardware físico.
-- A queda no Wokwi é provocada pelos controles do acelerômetro simulado. `SensorServer/simular_queda.py` reproduz uma
-  queda sem celular nem Wokwi, falando com o servidor como o firmware.
-- Os limiares de queda são valores iniciais, sem calibração com quedas reais.
+No relatório técnico ([`relatorio.pdf`](relatorio.pdf)). A lista
+técnica completa está em [`arquitetura.md`](arquitetura.md), seção 13.2.
 
 ### Dados pessoais
 
@@ -37,15 +37,6 @@ O sistema lida com dados de rotina e saúde da pessoa idosa (movimento, imobilid
 **localização** do celular. Tratamento: [`arquitetura.md`](arquitetura.md), seção 13.3 (validação, quem lê, sem valor em
 log) e retenção em [`banco.md`](banco.md) (leituras 14 dias, histórico 90 dias). Os dados de teste são de contas
 fictícias.
-
-### Limitações
-
-| Tipo | Limitação |
-| --- | --- |
-| Segurança | Lista completa em [`arquitetura.md`](arquitetura.md), seção 13.2 |
-| Conectividade | Servidor local: celular, bridge e servidor precisam estar na mesma rede, e o IP digitado no app muda quando a rede muda. Sem acesso pela internet. Uma falha de rede descarta a leitura daquele ciclo (sem fila no dispositivo) |
-| Desempenho | Um servidor só, para uma residência. No ESP32 simulado, cada handshake TLS leva cerca de 3,2 s (medido); o envio é a cada 1 s |
-| Energia | O app envia a cada 1 s e mantém um serviço em primeiro plano com localização, o que consome bateria. **Consumo não medido** |
 
 ## Registro de atendimento ao feedback
 
@@ -71,15 +62,8 @@ Formato pedido: apontamento → alteração → evidência → situação.
 
 ## Contribuições individuais
 
-| Integrante | Contribuição |
-| --- | --- |
-| *(a preencher)* | |
+No relatório técnico ([`relatorio.pdf`](relatorio.pdf)).
 
 ## Uso de IA
 
-Registro pedido pela disciplina: ferramenta, finalidade, síntese das orientações, sugestões aproveitadas ou modificadas
-e forma de validação.
-
-| Ferramenta | Finalidade | Síntese das orientações | Aproveitado ou modificado | Validação |
-| --- | --- | --- | --- | --- |
-| *(a preencher)* | | | | |
+No relatório técnico ([`relatorio.pdf`](relatorio.pdf)).

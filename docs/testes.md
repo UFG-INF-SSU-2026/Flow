@@ -1,6 +1,8 @@
 # Testes e verificações
 
-Testes automatizados de cada componente, o que cobrem, os resultados e o roteiro das verificações manuais.
+Como rodar os testes automatizados de cada componente, o que cobrem, a relação com os requisitos e o roteiro das
+verificações manuais. Os **resultados** (dos testes e das verificações) e as **evidências** estão no relatório técnico
+([`relatorio.pdf`](relatorio.pdf)).
 
 ## Como rodar
 
@@ -18,16 +20,7 @@ temporária. As suítes Python não usam rede externa.
 
 ## Resultados
 
-Versão de 25/11/2026, em Linux com Python 3.12.
-
-| Suíte | Resultado |
-| --- | --- |
-| Servidor | 1194 passaram |
-| Servidor no banco real (`-m banco`) | passou (execução do grupo) |
-| Bridge | 118 passaram |
-| Ponta a ponta | 11 passaram |
-| App (JVM) | passou (execução do grupo) |
-| Firmware no PC | 128 verificações `PASS`, `FIRMWARE OK 0`; `verificar_contra_python.py`: o CSR do firmware é aceito pela borda |
+No relatório técnico ([`relatorio.pdf`](relatorio.pdf)).
 
 ## O que cada suíte cobre
 
@@ -60,19 +53,19 @@ real do ESP32 (`transporte_wifi.h`) no Wokwi. Esses pontos são cobertos pelas v
 
 ## Verificações manuais
 
-Roteiro com o sistema completo no ar ([`INSTRUCOES.md`](../INSTRUCOES.md)). As colunas **Observado** e **Evidência**
-são preenchidas na execução (resultado visto e print, vídeo ou trecho de log).
+Roteiro para repetir as verificações com o sistema completo no ar ([`INSTRUCOES.md`](../INSTRUCOES.md)). O resultado
+observado de cada uma e as evidências estão no relatório.
 
-| # | Verificação | Passos e entradas | Esperado | Observado | Evidência |
-| --- | --- | --- | --- | --- | --- |
-| V1 | Fluxo e contexto | Celular (`idoso1`) e Wokwi (`bridge1`) ligados à mesma pessoa. Movimento brusco no celular e repouso | Alarme no celular **e** buzzer no Wokwi; o primeiro "Estou bem" encerra os dois; o cuidador vê o episódio | | |
-| V2 | Mudança de contexto | Celular sob luz fria (CCT alto) antes e depois das 18 h (ou ajustando `HORA_INICIO_NOITE`) | De dia, nada; à noite, alerta de luz gravado e visível no histórico do cuidador | | |
-| V3 | Persistência | Gerar leituras e um episódio; parar borda, análise e banco (`docker compose stop db`); subir de novo | Leituras, episódio, contas e sessões continuam no banco; o app segue logado | | |
-| V4 | Identidade inválida | `curl` sem token em `/dados`; login com senha errada; chamada com token válido e sem certificado de cliente | `401`; `401` (e `429` depois de 5 tentativas); `401 certificado_ausente` | | |
-| V5 | Fora da permissão | Cuidador do `user_id` 1 pedindo `/cuidador/2/historico`; conta `idoso` pedindo `GET /dados` | `403 fora_de_escopo`; `403` | | |
-| V6 | Canal criptografado | `curl http://<IP>:5000/health` (texto claro); captura do tráfego com Wireshark | Conexão recusada; só TLS na captura | | |
-| V7 | Falha e recuperação: análise | Parar a análise com o app enviando; esperar; subir de novo | `/health` mostra `degradado` e as leituras seguem gravadas; ao voltar, `ok` e a fila é processada | | |
-| V8 | Falha e recuperação: rede do celular | Desligar o Wi-Fi do celular por 30 s e religar | O app mostra a falha, reconecta sozinho e volta a receber pedidos | | |
-| V9 | Falha e recuperação: sem resposta | Abrir um episódio e não tocar em "Estou bem" | No fim do prazo o episódio fecha como `EXPIRADO`, gravado e visível no histórico do cuidador | | |
-| V10 | Latência do push | Com o celular em **Iniciar**, provocar uma queda (ou `simular_queda.py`) e gravar em vídeo, juntos, o terminal da borda e o celular. Medir pelo vídeo o tempo entre a linha `[push] queda.confirmacao_solicitada ... canal=app` e o alarme tocar. Repetir 5 vezes | Alarme em menos de 1 s depois da decisão; registrar média e máximo | | |
-| V11 | Reconexão do push | Com o celular em **Iniciar**, desligar o Wi-Fi do celular por 10 s e religar; logo depois, provocar uma queda | O app reconecta sozinho (estado "conectado") e o pedido chega; registrar o tempo até reconectar | | |
+| # | Verificação | Passos e entradas | Esperado |
+| --- | --- | --- | --- |
+| V1 | Fluxo e contexto | Celular (`idoso1`) e Wokwi (`bridge1`) ligados à mesma pessoa. Movimento brusco no celular e repouso | Alarme no celular **e** buzzer no Wokwi; o primeiro "Estou bem" encerra os dois; o cuidador vê o episódio |
+| V2 | Mudança de contexto | Celular sob luz fria (CCT alto) antes e depois das 18 h (ou ajustando `HORA_INICIO_NOITE`) | De dia, nada; à noite, alerta de luz gravado e visível no histórico do cuidador |
+| V3 | Persistência | Gerar leituras e um episódio; parar borda, análise e banco (`docker compose stop db`); subir de novo | Leituras, episódio, contas e sessões continuam no banco; o app segue logado |
+| V4 | Identidade inválida | `curl` sem token em `/dados`; login com senha errada; chamada com token válido e sem certificado de cliente | `401`; `401` (e `429` depois de 5 tentativas); `401 certificado_ausente` |
+| V5 | Fora da permissão | Cuidador do `user_id` 1 pedindo `/cuidador/2/historico`; conta `idoso` pedindo `GET /dados` | `403 fora_de_escopo`; `403` |
+| V6 | Canal criptografado | `curl http://<IP>:5000/health` (texto claro); captura do tráfego com Wireshark | Conexão recusada; só TLS na captura |
+| V7 | Falha e recuperação: análise | Parar a análise com o app enviando; esperar; subir de novo | `/health` mostra `degradado` e as leituras seguem gravadas; ao voltar, `ok` e a fila é processada |
+| V8 | Falha e recuperação: rede do celular | Desligar o Wi-Fi do celular por 30 s e religar | O app mostra a falha, reconecta sozinho e volta a receber pedidos |
+| V9 | Falha e recuperação: sem resposta | Abrir um episódio e não tocar em "Estou bem" | No fim do prazo o episódio fecha como `EXPIRADO`, gravado e visível no histórico do cuidador |
+| V10 | Latência do push | Com o celular em **Iniciar**, provocar uma queda (ou `simular_queda.py`) e gravar em vídeo, juntos, o terminal da borda e o celular. Medir pelo vídeo o tempo entre a linha `[push] queda.confirmacao_solicitada ... canal=app` e o alarme tocar. Repetir 5 vezes | Alarme em menos de 1 s depois da decisão; registrar média e máximo |
+| V11 | Reconexão do push | Com o celular em **Iniciar**, desligar o Wi-Fi do celular por 10 s e religar; logo depois, provocar uma queda | O app reconecta sozinho (estado "conectado") e o pedido chega; registrar o tempo até reconectar |

@@ -62,7 +62,7 @@ Passo a passo de instalação, configuração e execução de todos os component
 | App (JVM) | `cd SensorApp && ./gradlew test` |
 | Firmware no PC | ver `sketch/host_test/README.md` |
 
-Módulos cobertos, resultados e as verificações manuais: [`docs/testes.md`](docs/testes.md).
+Módulos cobertos e verificações manuais: [`docs/testes.md`](docs/testes.md). Resultados: relatório técnico.
 
 ## Documentação
 
@@ -73,8 +73,8 @@ Módulos cobertos, resultados e as verificações manuais: [`docs/testes.md`](do
 | [`docs/banco.md`](docs/banco.md) | Banco: tabelas, retenção, backup e consultas |
 | [`docs/operacao.md`](docs/operacao.md) | Detalhes de operação: certificados, configuração, ajustes e problemas comuns |
 | [`docs/wokwi.md`](docs/wokwi.md) | Simulação do ESP32: dependências, compilação local, `wokwigw` e execução |
-| [`docs/testes.md`](docs/testes.md) | Testes automatizados e verificações manuais |
-| [`docs/entregas.md`](docs/entregas.md) | Entregas da disciplina, registro de feedback, contribuições e uso de IA |
+| [`docs/testes.md`](docs/testes.md) | Como rodar os testes, o que cobrem e o roteiro das verificações manuais |
+| [`docs/entregas.md`](docs/entregas.md) | Índice das entregas da disciplina e registro de atendimento ao feedback |
 | [`docs/analise-inicial.md`](docs/analise-inicial.md) | Análise inicial do problema (início da disciplina) |
 | [`docs/notificacao-cuidador.md`](docs/notificacao-cuidador.md) | Como seria o aviso ativo ao cuidador (não implementado) |
 
@@ -84,6 +84,7 @@ Módulos cobertos, resultados e as verificações manuais: [`docs/testes.md`](do
 | --- | --- |
 | Atividades 1 e 2 | [`atividades/`](atividades/) |
 | Marcos 1 a 3 | [`docs/analise-inicial.md`](docs/analise-inicial.md) e [`docs/arquitetura.md`](docs/arquitetura.md) |
-| Marco 4 e entrega final (vídeo, artigo, registro de feedback, contribuições, uso de IA) | [`docs/entregas.md`](docs/entregas.md) |
+| Relatório técnico (artigo, com resultados, limitações, contribuições e uso de IA) | [`docs/relatorio.pdf`](docs/relatorio.pdf) |
+| Marco 4 e entrega final (índice dos itens, vídeo e registro de feedback) | [`docs/entregas.md`](docs/entregas.md) |
 
 As limitações assumidas estão em [`docs/arquitetura.md`](docs/arquitetura.md), seção 13.2.
