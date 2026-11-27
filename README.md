@@ -84,7 +84,8 @@ Módulos cobertos e verificações manuais: [`docs/testes.md`](docs/testes.md). 
 | --- | --- |
 | Atividades 1 e 2 | [`atividades/`](atividades/) |
 | Marcos 1 a 3 | [`docs/analise-inicial.md`](docs/analise-inicial.md) e [`docs/arquitetura.md`](docs/arquitetura.md) |
-| Relatório técnico (artigo, com resultados, limitações, contribuições e uso de IA) | [`docs/relatorio.pdf`](docs/relatorio.pdf) |
-| Marco 4 e entrega final (índice dos itens, vídeo e registro de feedback) | [`docs/entregas.md`](docs/entregas.md) |
+| Relatório técnico (artigo, com resultados, limitações, contribuições e uso de IA) | [`relatorio.pdf`](relatorio.pdf) |
+| Vídeo do Marco 4 | *(a preencher: link)* |
+| Marco 4 e entrega final (índice dos itens e registro de feedback) | [`docs/entregas.md`](docs/entregas.md) |
 
 As limitações assumidas estão em [`docs/arquitetura.md`](docs/arquitetura.md), seção 13.2.

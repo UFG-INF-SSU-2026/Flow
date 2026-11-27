@@ -2,7 +2,7 @@
 
 Como rodar os testes automatizados de cada componente, o que cobrem, a relação com os requisitos e o roteiro das
 verificações manuais. Os **resultados** (dos testes e das verificações) e as **evidências** estão no relatório técnico
-([`relatorio.pdf`](relatorio.pdf)).
+([`relatorio.pdf`](../relatorio.pdf)).
 
 ## Como rodar
 
@@ -20,7 +20,7 @@ temporária. As suítes Python não usam rede externa.
 
 ## Resultados
 
-No relatório técnico ([`relatorio.pdf`](relatorio.pdf)).
+No relatório técnico ([`relatorio.pdf`](../relatorio.pdf)).
 
 ## O que cada suíte cobre
 
@@ -69,3 +69,19 @@ observado de cada uma e as evidências estão no relatório.
 | V9 | Falha e recuperação: sem resposta | Abrir um episódio e não tocar em "Estou bem" | No fim do prazo o episódio fecha como `EXPIRADO`, gravado e visível no histórico do cuidador |
 | V10 | Latência do push | Com o celular em **Iniciar**, provocar uma queda (ou `simular_queda.py`) e gravar em vídeo, juntos, o terminal da borda e o celular. Medir pelo vídeo o tempo entre a linha `[push] queda.confirmacao_solicitada ... canal=app` e o alarme tocar. Repetir 5 vezes | Alarme em menos de 1 s depois da decisão; registrar média e máximo |
 | V11 | Reconexão do push | Com o celular em **Iniciar**, desligar o Wi-Fi do celular por 10 s e religar; logo depois, provocar uma queda | O app reconecta sozinho (estado "conectado") e o pedido chega; registrar o tempo até reconectar |
+
+### Scripts das verificações
+
+Em `SensorServer/`, com o servidor no ar, estes scripts executam as verificações e conferem o resultado sozinhos
+(`v_comum.py` reúne as partes comuns). As senhas podem vir das variáveis abaixo; sem elas, o script as pede no terminal.
+V1, V8, V10 e V11 dependem do celular e do Wokwi e seguem o roteiro manual da tabela.
+
+| Script | Verificação | Como rodar |
+| --- | --- | --- |
+| `teste_v2.py` | V2: luz fria de dia e à noite (usa o horário da própria leitura, sem esperar anoitecer) | `FLOW_IDOSO_SECRET=<senha> FLOW_CUIDADOR_SECRET=<senha> python teste_v2.py` |
+| `teste_v3.py` | V3: persistência (compara o banco antes e depois de parar e subir tudo) | `python teste_v3.py antes`; parar borda, análise e banco; subir de novo; `python teste_v3.py depois` |
+| `teste_v4.py` | V4: identidade inválida | `python teste_v4.py sem-token`, `python teste_v4.py senha-errada` e `python teste_v4.py sem-certificado` |
+| `teste_v5.py` | V5: operação fora da permissão | `FLOW_CUIDADOR_SECRET=<senha> FLOW_IDOSO_SECRET=<senha> python teste_v5.py` |
+| `teste_v6.py` | V6: canal (captura os bytes da conexão e confere que só passa TLS, sem Wireshark) | `python teste_v6.py` (borda local) ou `python teste_v6.py <IP>:5000` |
+| `teste_v7.py` | V7: falha e recuperação da análise | `FLOW_BRIDGE_SECRET=<senha> FLOW_ADMIN_SECRET=<senha> python teste_v7.py` |
+| `teste_v9.py` | V9: sem resposta (episódio expira e aparece ao cuidador) | `FLOW_BRIDGE_SECRET=<senha> FLOW_CUIDADOR_SECRET=<senha> python teste_v9.py` |
