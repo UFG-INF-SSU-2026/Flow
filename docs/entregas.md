@@ -21,7 +21,7 @@ de uso de IA. Esses itens não se repetem aqui.
 | Regras com estado e tempo | [`arquitetura.md`](arquitetura.md), seções 8 e 9 |
 | Autenticação, autorização e canal protegido | [`arquitetura.md`](arquitetura.md), seções 4, 5 e 13 |
 | Falha e recuperação | [`arquitetura.md`](arquitetura.md), seção 12; roteiro V7 a V9 em [`testes.md`](testes.md), resultado no relatório |
-| Vídeo (até 15 min) | *(a preencher: link acessível ao professor)* |
+| Vídeo (até 15 min) | https://www.youtube.com/watch?v=hzzMxxI1THw |
 | Limitações, contribuições individuais e uso de IA | Relatório técnico |
 
 ## Declarações
